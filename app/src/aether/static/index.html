@@ -29,7 +29,6 @@
         #status.active { color: #4ecdc4; }
         #status.error { color: #ff6b6b; }
 
-        /* Live transcript — shows what user is saying in real-time */
         #live-transcript {
             font-size: 0.85rem;
             color: #4ecdc4;
@@ -80,10 +79,25 @@
             box-shadow: 0 0 60px rgba(245, 158, 11, 0.2);
             animation: pulse 0.8s ease-in-out infinite;
         }
+        #orb.connecting {
+            border-color: #666;
+            box-shadow: 0 0 30px rgba(100, 100, 100, 0.1);
+            animation: breathe 3s ease-in-out infinite;
+        }
+        #orb.muted {
+            border-color: #333;
+            box-shadow: none;
+            opacity: 0.4;
+            animation: none;
+        }
 
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.03); }
+        }
+        @keyframes breathe {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
         }
 
         #orb-label {
@@ -165,11 +179,11 @@
     </style>
 </head>
 <body>
-    <div id="status">tap the orb to speak</div>
+    <div id="status">connecting...</div>
     <div id="live-transcript"></div>
 
     <div id="orb-container" onclick="toggleStreaming()">
-        <div id="orb">
+        <div id="orb" class="connecting">
             <span id="orb-label">aether</span>
         </div>
     </div>
@@ -182,6 +196,7 @@
     </div>
 
     <div id="controls">
+        <button class="ctrl-btn" id="mute-btn" onclick="toggleMute()" style="display:none">mute</button>
         <button class="ctrl-btn" onclick="toggleTextMode()">text</button>
         <button class="ctrl-btn" onclick="captureImage()">camera</button>
     </div>
@@ -194,14 +209,25 @@
 
         // --- Streaming STT state ---
         let isStreaming = false;
-        let audioStream = null;       // MediaStream from getUserMedia
-        let audioProcessor = null;    // ScriptProcessorNode or AudioWorklet
-        let streamSource = null;      // MediaStreamAudioSourceNode
+        let audioStream = null;
+        let audioProcessor = null;
+        let streamSource = null;
         let streamingMessageEl = null;
 
         // --- Audio playback queue ---
         const audioQueue = [];
         let isPlaying = false;
+
+        // --- Mute state ---
+        let isMuted = false;
+        const muteBtn = document.getElementById('mute-btn');
+
+        // --- Reconnect state ---
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 10;
+        const BASE_RECONNECT_DELAY = 1000;
+        let wasStreaming = false;
+        let isReconnect = false;
 
         // --- Elements ---
         const orb = document.getElementById('orb');
@@ -217,9 +243,25 @@
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
+            setOrbState('connecting');
+            setStatus('connecting...');
+
             ws.onopen = () => {
-                setStatus('ready');
-                orbLabel.textContent = 'aether';
+                console.log(`WebSocket connected (reconnect: ${isReconnect})`);
+                reconnectAttempts = 0;
+
+                if (isReconnect && wasStreaming) {
+                    setStatus('reconnected — resuming...', true);
+                    resumeStreaming();
+                } else if (!isReconnect) {
+                    setStatus('tap the orb to speak');
+                    setOrbState('idle');
+                } else {
+                    setStatus('reconnected');
+                    setOrbState('idle');
+                }
+
+                isReconnect = true;
             };
 
             ws.onmessage = (event) => {
@@ -244,77 +286,105 @@
                 }
             };
 
-            ws.onclose = () => {
-                setStatus('disconnected — reconnecting...');
-                setTimeout(connect, 2000);
-            };
-
-            ws.onerror = () => setStatus('connection error', false, true);
+            ws.onclose = () => handleDisconnect();
+            ws.onerror = (err) => console.error('WebSocket error:', err);
         }
 
-        // --- Streaming STT (v0.02) ---
-        async function toggleStreaming() {
-            if (isTextMode) return;
+        function handleDisconnect() {
+            wasStreaming = isStreaming;
 
-            if (isStreaming) {
-                stopStreaming();
+            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
+            if (streamSource) { streamSource.disconnect(); streamSource = null; }
+            isStreaming = false;
+
+            audioQueue.length = 0;
+            isPlaying = false;
+
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), 30000);
+                setOrbState('connecting');
+                setStatus(`reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                setTimeout(connect, delay);
             } else {
-                await startStreaming();
+                setStatus('connection lost — refresh to retry', false, true);
+                setOrbState('idle');
             }
         }
 
-        async function startStreaming() {
+        async function resumeStreaming() {
             try {
-                // Get microphone
-                audioStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        channelCount: 1,
-                        sampleRate: 16000,
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                    }
-                });
-
-                // Tell server to open Deepgram connection
-                ws.send(JSON.stringify({ type: 'stream_start' }));
-
-                // Set up audio processing to send chunks
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                        sampleRate: 16000,
+                if (!audioStream || audioStream.getTracks().every(t => t.readyState === 'ended')) {
+                    audioStream = await navigator.mediaDevices.getUserMedia({
+                        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
                     });
                 }
 
+                ws.send(JSON.stringify({ type: 'stream_start', reconnect: true }));
+
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                }
+                if (audioContext.state === 'suspended') await audioContext.resume();
+
                 streamSource = audioContext.createMediaStreamSource(audioStream);
-
-                // Use ScriptProcessor to capture raw PCM and send as chunks
-                // (AudioWorklet is better but ScriptProcessor works everywhere)
                 audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+                audioProcessor.onaudioprocess = sendAudioChunk;
+                streamSource.connect(audioProcessor);
+                audioProcessor.connect(audioContext.destination);
 
-                audioProcessor.onaudioprocess = (e) => {
-                    if (!isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+                isStreaming = true;
+                setOrbState('listening');
+                setStatus('listening...', true);
+            } catch (err) {
+                console.error('Resume error:', err);
+                setOrbState('idle');
+                wasStreaming = false;
+            }
+        }
 
-                    const inputData = e.inputBuffer.getChannelData(0);
+        function sendAudioChunk(e) {
+            if (!isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const inputData = e.inputBuffer.getChannelData(0);
+            const pcm16 = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            const bytes = new Uint8Array(pcm16.buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            ws.send(JSON.stringify({ type: 'audio_chunk', data: btoa(binary) }));
+        }
 
-                    // Convert float32 to int16 PCM
-                    const pcm16 = new Int16Array(inputData.length);
-                    for (let i = 0; i < inputData.length; i++) {
-                        const s = Math.max(-1, Math.min(1, inputData[i]));
-                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                    }
+        // --- Streaming STT ---
+        async function toggleStreaming() {
+            if (isTextMode) return;
+            if (isStreaming) stopStreaming();
+            else await startStreaming();
+        }
 
-                    // Send as base64
-                    const bytes = new Uint8Array(pcm16.buffer);
-                    let binary = '';
-                    for (let i = 0; i < bytes.length; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    ws.send(JSON.stringify({
-                        type: 'audio_chunk',
-                        data: btoa(binary),
-                    }));
-                };
+        async function startStreaming() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                setStatus('not connected', false, true);
+                return;
+            }
 
+            try {
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+                });
+
+                ws.send(JSON.stringify({ type: 'stream_start' }));
+
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                }
+                if (audioContext.state === 'suspended') await audioContext.resume();
+
+                streamSource = audioContext.createMediaStreamSource(audioStream);
+                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+                audioProcessor.onaudioprocess = sendAudioChunk;
                 streamSource.connect(audioProcessor);
                 audioProcessor.connect(audioContext.destination);
 
@@ -322,7 +392,6 @@
                 setOrbState('listening');
                 setStatus('listening...', true);
                 liveTranscript.textContent = '';
-
             } catch (err) {
                 console.error('Streaming start error:', err);
                 setStatus('microphone access denied', false, true);
@@ -331,22 +400,12 @@
 
         function stopStreaming() {
             isStreaming = false;
+            wasStreaming = false;
 
-            // Disconnect audio processing
-            if (audioProcessor) {
-                audioProcessor.disconnect();
-                audioProcessor = null;
-            }
-            if (streamSource) {
-                streamSource.disconnect();
-                streamSource = null;
-            }
-            if (audioStream) {
-                audioStream.getTracks().forEach(t => t.stop());
-                audioStream = null;
-            }
+            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
+            if (streamSource) { streamSource.disconnect(); streamSource = null; }
+            if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
 
-            // Tell server to close Deepgram connection
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'stream_stop' }));
             }
@@ -358,11 +417,9 @@
         // --- Handle live transcription ---
         function handleTranscript(text, interim) {
             if (interim) {
-                // Show interim (partial) transcript — updates in real-time
                 liveTranscript.textContent = text;
                 liveTranscript.className = 'active';
             } else {
-                // Final transcript — add as user message, clear live display
                 liveTranscript.textContent = '';
                 liveTranscript.className = '';
                 addMessage(text, 'user');
@@ -394,9 +451,7 @@
             while (conversation.children.length > 10) {
                 conversation.removeChild(conversation.firstChild);
             }
-            // If still streaming mic, go back to listening
             if (isStreaming) {
-                // Small delay before going back to listening state
                 setTimeout(() => {
                     if (isStreaming && !isPlaying) {
                         setOrbState('listening');
@@ -431,16 +486,12 @@
 
             const base64Data = audioQueue.shift();
             try {
-                // Use a separate context for playback (may have different sample rate)
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
+                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioContext.state === 'suspended') await audioContext.resume();
 
                 const binaryStr = atob(base64Data);
                 const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
+                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
                 const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
                 const source = audioContext.createBufferSource();
@@ -467,7 +518,6 @@
         function sendText() {
             const text = textInput.value.trim();
             if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-
             addMessage(text, 'user');
             ws.send(JSON.stringify({ type: 'text', data: text }));
             textInput.value = '';
@@ -478,40 +528,31 @@
         // --- Camera ---
         async function captureImage() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' }
-                });
-
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 const video = document.createElement('video');
                 video.srcObject = stream;
                 video.play();
-
                 await new Promise(resolve => video.onloadedmetadata = resolve);
                 await new Promise(resolve => setTimeout(resolve, 500));
-
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 canvas.getContext('2d').drawImage(video, 0, 0);
                 stream.getTracks().forEach(t => t.stop());
-
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                const base64 = dataUrl.split(',')[1];
-
+                const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
                     setStatus('image sent — now speak your question', true);
                 }
             } catch (err) {
                 setStatus('camera access denied', false, true);
-                console.error('Camera error:', err);
             }
         }
 
         // --- UI Helpers ---
         function setOrbState(state) {
             orb.className = state === 'idle' ? '' : state;
-            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '♪' };
+            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '\u266A', connecting: '\u00B7\u00B7\u00B7' };
             orbLabel.textContent = labels[state] || 'aether';
             if (state === 'idle') setStatus('tap the orb to speak');
         }
@@ -527,9 +568,7 @@
             div.textContent = text;
             conversation.appendChild(div);
             conversation.scrollTop = conversation.scrollHeight;
-            while (conversation.children.length > 10) {
-                conversation.removeChild(conversation.firstChild);
-            }
+            while (conversation.children.length > 10) conversation.removeChild(conversation.firstChild);
         }
 
         // --- Init ---

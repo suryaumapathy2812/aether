@@ -1,12 +1,9 @@
 """
-Aether v0.03 — Remember & Recover.
+Aether v0.04 — Alive.
 
-Changes from v0.02:
-- Provider abstraction (swap STT/LLM/TTS via config)
-- Deepgram auto-reconnect on WebSocket drop
-- Smarter memory with fact extraction
-- Centralized config system
-- Health endpoint
+Changes from v0.03:
+- Session greeting with memory (personalized hello on connect)
+- Client WebSocket reconnect with session continuity
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -37,6 +34,7 @@ from aether.processors.memory import MemoryRetrieverProcessor
 from aether.processors.stt import STTProcessor
 from aether.processors.tts import TTSProcessor
 from aether.processors.vision import VisionProcessor
+from aether.greeting import generate_greeting
 from aether.providers import get_stt_provider, get_llm_provider, get_tts_provider
 
 # --- Setup ---
@@ -48,7 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger("aether")
 
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.3")
+app = FastAPI(title="Aether", version="0.0.4")
 
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
@@ -198,6 +196,8 @@ async def websocket_endpoint(ws: WebSocket):
         {"type": "audio_chunk", "data": "<base64 chunk>"}       — streaming mode
         {"type": "stream_start"}                                  — open STT connection
         {"type": "stream_stop"}                                   — close STT connection
+        {"type": "mute"}                                          — pause mic (keep connection)
+        {"type": "unmute"}                                        — resume mic
         {"type": "text", "data": "message"}                      — text fallback
         {"type": "image", "data": "<base64>", "mime": "..."}    — vision input
 
@@ -226,6 +226,7 @@ async def websocket_endpoint(ws: WebSocket):
 
     # --- Turn state ---
     is_responding = False
+    is_muted = False
     debounce_task: asyncio.Task | None = None
     accumulated_transcript = ""
 
@@ -287,14 +288,14 @@ async def websocket_endpoint(ws: WebSocket):
     async def _handle_stt_events():
         """Background task: listen to streaming STT events.
 
-        Half-duplex: drops all STT events while assistant is responding.
+        Half-duplex: drops all STT events while assistant is responding or muted.
         """
         nonlocal accumulated_transcript, debounce_task
 
         try:
             async for event in stt_provider.stream_events():
-                # Drop everything while assistant is speaking
-                if is_responding:
+                # Drop everything while assistant is speaking or muted
+                if is_responding or is_muted:
                     continue
 
                 if event.type == FrameType.TEXT and event.metadata.get("interim"):
@@ -332,6 +333,45 @@ async def websocket_endpoint(ws: WebSocket):
         except Exception as e:
             logger.error(f"STT event handler error: {e}", exc_info=True)
 
+    async def _session_greeting(ws_conn: WebSocket, tts_proc: TTSProcessor, is_reconnect: bool = False):
+        """Generate and speak a personalized greeting."""
+        nonlocal is_responding
+        try:
+            if is_reconnect:
+                # Silent reconnect — don't greet again
+                logger.info("Silent reconnect — skipping greeting")
+                return
+
+            is_responding = True
+
+            # Generate personalized greeting text
+            greeting_text = await generate_greeting(memory_store, llm_provider)
+
+            # Send as text
+            await _send(ws_conn, "text_chunk", greeting_text, index=0)
+
+            # Speak it
+            greeting_frame = text_frame(greeting_text, role="assistant")
+            try:
+                async for tts_out in tts_proc.process(greeting_frame):
+                    if tts_out.type == FrameType.AUDIO:
+                        await _send(
+                            ws_conn,
+                            "audio_chunk",
+                            base64.b64encode(tts_out.data).decode("utf-8"),
+                            index=0,
+                        )
+            except Exception as e:
+                logger.error(f"Greeting TTS error: {e}")
+
+            await _send(ws_conn, "stream_end")
+
+        except Exception as e:
+            logger.error(f"Greeting error: {e}", exc_info=True)
+        finally:
+            is_responding = False
+            await _send(ws_conn, "status", "listening...")
+
     logger.info("Pipeline ready: StreamingSTT -> Memory -> LLM -> TTS")
 
     try:
@@ -345,6 +385,11 @@ async def websocket_endpoint(ws: WebSocket):
                 stt_event_task = asyncio.create_task(_handle_stt_events())
                 await _send(ws, "status", "listening...")
 
+                # Session greeting — Aether says hello when you "pick up"
+                asyncio.create_task(
+                    _session_greeting(ws, tts, is_reconnect=msg.get("reconnect", False))
+                )
+
             elif msg_type == "stream_stop":
                 if stt_event_task:
                     stt_event_task.cancel()
@@ -355,9 +400,24 @@ async def websocket_endpoint(ws: WebSocket):
                     stt_event_task = None
                 await stt_provider.disconnect_stream()
 
+            elif msg_type == "mute":
+                is_muted = True
+                # Cancel any pending debounce — don't trigger response from pre-mute speech
+                if debounce_task and not debounce_task.done():
+                    debounce_task.cancel()
+                accumulated_transcript = ""
+                await _send(ws, "status", "muted")
+                logger.info("Session muted")
+
+            elif msg_type == "unmute":
+                is_muted = False
+                await _send(ws, "status", "listening...")
+                logger.info("Session unmuted")
+
             elif msg_type == "audio_chunk":
-                audio_data = base64.b64decode(msg["data"])
-                await stt_provider.send_audio(audio_data)
+                if not is_muted:
+                    audio_data = base64.b64decode(msg["data"])
+                    await stt_provider.send_audio(audio_data)
 
             elif msg_type == "audio":
                 # Batch mode fallback
