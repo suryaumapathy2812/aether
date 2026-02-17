@@ -1,8 +1,8 @@
 """
 Memory Retriever Processor — searches memory and injects context.
 
-Takes a text frame (user message), searches for relevant memories,
-and yields a memory frame + the original text frame for the LLM.
+v0.03: Now includes both conversations and extracted facts.
+Facts are presented separately so the LLM can use them naturally.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncGenerator
 
+from aether.core.config import config
 from aether.core.frames import Frame, FrameType, memory_frame
 from aether.core.processor import Processor
 from aether.memory.store import MemoryStore
@@ -24,7 +25,6 @@ class MemoryRetrieverProcessor(Processor):
 
     async def process(self, frame: Frame) -> AsyncGenerator[Frame, None]:
         """Search memory for relevant context, then pass through the frame."""
-        # Only search memory for user text frames
         if frame.type != FrameType.TEXT or frame.metadata.get("role") != "user":
             yield frame
             return
@@ -32,16 +32,27 @@ class MemoryRetrieverProcessor(Processor):
         user_text = frame.data
 
         try:
-            results = await self.store.search(user_text, limit=5)
+            results = await self.store.search(
+                user_text, limit=config.memory.search_limit
+            )
 
             if results:
                 memories = []
                 for r in results:
-                    if r["similarity"] > 0.3:  # Only include reasonably relevant memories
+                    if r.get("type") == "fact":
+                        memories.append(f"[Known fact] {r['fact']}")
+                    elif r.get("type") == "conversation":
                         memories.append(
                             f"[Previous conversation] User said: {r['user_message']} — "
                             f"You replied: {r['assistant_message']}"
                         )
+                    else:
+                        # Backward compat
+                        if r.get("user_message"):
+                            memories.append(
+                                f"[Previous conversation] User said: {r['user_message']} — "
+                                f"You replied: {r['assistant_message']}"
+                            )
 
                 if memories:
                     logger.info(f"Found {len(memories)} relevant memories")
@@ -53,7 +64,5 @@ class MemoryRetrieverProcessor(Processor):
 
         except Exception as e:
             logger.error(f"Memory search error: {e}", exc_info=True)
-            # Don't block the pipeline if memory fails
 
-        # Always yield the original text frame
         yield frame

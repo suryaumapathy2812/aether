@@ -1,12 +1,12 @@
 """
-Aether v0.02 — Streaming Pipeline with Live STT.
+Aether v0.03 — Remember & Recover.
 
-Two modes of operation:
-1. Batch mode: Client records full audio → sends blob → STT → LLM → TTS (v0.01 compat)
-2. Stream mode: Client streams audio chunks → live transcription → on utterance end → LLM → TTS
-
-Stream mode is the primary path. Batch mode is fallback for browsers that
-don't support streaming audio capture.
+Changes from v0.02:
+- Provider abstraction (swap STT/LLM/TTS via config)
+- Deepgram auto-reconnect on WebSocket drop
+- Smarter memory with fact extraction
+- Centralized config system
+- Health endpoint
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -19,30 +19,27 @@ import json
 import logging
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from aether.core.config import config
 from aether.core.frames import (
     Frame,
     FrameType,
     audio_frame,
     text_frame,
     vision_frame,
-    memory_frame,
 )
-from aether.core.pipeline import Pipeline
 from aether.memory.store import MemoryStore
 from aether.processors.llm import LLMProcessor
 from aether.processors.memory import MemoryRetrieverProcessor
-from aether.processors.stt import STTProcessor, StreamingSTTProcessor
+from aether.processors.stt import STTProcessor
 from aether.processors.tts import TTSProcessor
 from aether.processors.vision import VisionProcessor
+from aether.providers import get_stt_provider, get_llm_provider, get_tts_provider
 
 # --- Setup ---
-load_dotenv()
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -51,7 +48,7 @@ logging.basicConfig(
 logger = logging.getLogger("aether")
 
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.2")
+app = FastAPI(title="Aether", version="0.0.3")
 
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
@@ -60,15 +57,31 @@ if STATIC_DIR.exists():
 # --- Shared state ---
 memory_store = MemoryStore()
 
+# Providers (created once, shared across connections)
+stt_provider = get_stt_provider()
+llm_provider = get_llm_provider()
+tts_provider = get_tts_provider()
+
 
 @app.on_event("startup")
 async def startup():
     await memory_store.start()
-    logger.info("Aether v0.02 ready (streaming STT + streaming LLM)")
+    await stt_provider.start()
+    await llm_provider.start()
+    await tts_provider.start()
+    logger.info(
+        "Aether v0.03 ready (providers: STT=%s, LLM=%s, TTS=%s)",
+        config.stt.provider,
+        config.llm.provider,
+        config.tts.provider,
+    )
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    await stt_provider.stop()
+    await llm_provider.stop()
+    await tts_provider.stop()
     await memory_store.stop()
 
 
@@ -77,7 +90,35 @@ async def root():
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return HTMLResponse(index_path.read_text())
-    return HTMLResponse("<h1>Aether v0.02</h1><p>Static files not found.</p>")
+    return HTMLResponse("<h1>Aether v0.03</h1><p>Static files not found.</p>")
+
+
+@app.get("/health")
+async def health():
+    """Health check — reports provider status and memory stats."""
+    stt_health = await stt_provider.health_check()
+    llm_health = await llm_provider.health_check()
+    tts_health = await tts_provider.health_check()
+
+    # Memory stats
+    facts = await memory_store.get_facts()
+    recent = await memory_store.get_recent(limit=1)
+
+    return JSONResponse(
+        {
+            "status": "ok",
+            "version": "0.0.3",
+            "providers": {
+                "stt": stt_health,
+                "llm": llm_health,
+                "tts": tts_health,
+            },
+            "memory": {
+                "facts_count": len(facts),
+                "has_conversations": len(recent) > 0,
+            },
+        }
+    )
 
 
 async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
@@ -85,7 +126,7 @@ async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
     try:
         await asyncio.wait_for(
             ws.send_text(json.dumps({"type": msg_type, "data": data, **extra})),
-            timeout=5.0,
+            timeout=config.server.ws_send_timeout,
         )
     except asyncio.TimeoutError:
         logger.warning(f"WebSocket send timeout ({msg_type})")
@@ -103,18 +144,15 @@ async def _run_llm_tts_streaming(
 ):
     """
     Run Memory → LLM → TTS streaming pipeline for a complete utterance.
-    Sends text_chunk and audio_chunk messages to client as they're produced.
     """
     # Phase 1: Memory retrieval
     pre_frames: list[Frame] = []
     user_frame = text_frame(user_text, role="user")
 
-    # Include vision if present
     if pending_vision:
         async for f in VisionProcessor().process(pending_vision):
             pre_frames.append(f)
 
-    # Search memory
     async for f in memory_retriever.process(user_frame):
         pre_frames.append(f)
 
@@ -128,11 +166,8 @@ async def _run_llm_tts_streaming(
                 and llm_frame.metadata.get("role") == "assistant"
             ):
                 sentence_text = llm_frame.data
-
-                # Text arrives immediately
                 await _send(ws, "text_chunk", sentence_text, index=sentence_index)
 
-                # TTS this sentence
                 try:
                     async for tts_frame in tts.process(llm_frame):
                         if tts_frame.type == FrameType.AUDIO:
@@ -159,31 +194,30 @@ async def websocket_endpoint(ws: WebSocket):
 
     Protocol:
       Client sends:
-        {"type": "audio", "data": "<base64 blob>"}              — batch mode (full recording)
-        {"type": "audio_chunk", "data": "<base64 chunk>"}       — streaming mode (live audio)
-        {"type": "stream_start"}                                  — open Deepgram live connection
-        {"type": "stream_stop"}                                   — close Deepgram live connection
+        {"type": "audio", "data": "<base64 blob>"}              — batch mode
+        {"type": "audio_chunk", "data": "<base64 chunk>"}       — streaming mode
+        {"type": "stream_start"}                                  — open STT connection
+        {"type": "stream_stop"}                                   — close STT connection
         {"type": "text", "data": "message"}                      — text fallback
         {"type": "image", "data": "<base64>", "mime": "..."}    — vision input
 
       Server sends:
         {"type": "transcript", "data": "text", "interim": true}  — live transcription
-        {"type": "text_chunk", "data": "sentence", "index": 0}   — LLM response sentence
-        {"type": "audio_chunk", "data": "<base64>", "index": 0}  — TTS audio for sentence
+        {"type": "text_chunk", "data": "sentence", "index": 0}   — LLM response
+        {"type": "audio_chunk", "data": "<base64>", "index": 0}  — TTS audio
         {"type": "stream_end"}                                     — response complete
+        {"type": "status", "data": "..."}                         — status updates
     """
     await ws.accept()
     logger.info("Client connected")
 
-    # Processors
-    batch_stt = STTProcessor()
-    streaming_stt = StreamingSTTProcessor()
+    # Create per-connection processor instances (they hold conversation state)
+    batch_stt = STTProcessor(stt_provider)
     memory_retriever = MemoryRetrieverProcessor(memory_store)
-    llm = LLMProcessor(memory_store)
-    tts = TTSProcessor()
+    llm = LLMProcessor(llm_provider, memory_store)
+    tts = TTSProcessor(tts_provider)
 
     await batch_stt.start()
-    await streaming_stt.start()
     await llm.start()
     await tts.start()
 
@@ -193,7 +227,7 @@ async def websocket_endpoint(ws: WebSocket):
     # --- Turn state ---
     is_responding = False
     debounce_task: asyncio.Task | None = None
-    accumulated_transcript = ""  # Accumulates across multiple utterance_end events
+    accumulated_transcript = ""
 
     async def _trigger_response(transcript: str):
         """Run the LLM/TTS pipeline for a complete utterance."""
@@ -229,52 +263,47 @@ async def websocket_endpoint(ws: WebSocket):
 
         try:
             logger.info(
-                f"⏱ Debounce started (accumulated: '{accumulated_transcript[:60]}')"
+                f"Debounce started (accumulated: '{accumulated_transcript[:60]}')"
             )
-            await asyncio.sleep(1.5)  # 1.5-second debounce window
+            await asyncio.sleep(config.server.debounce_delay)
 
-            # Timer expired — user is done speaking
             transcript = accumulated_transcript.strip()
             accumulated_transcript = ""
 
             if not transcript:
-                logger.info("⏱ Debounce fired but transcript empty, ignoring")
+                logger.info("Debounce fired but transcript empty, ignoring")
                 return
 
-            logger.info("⏱ Debounce fired → triggering response")
+            logger.info("Debounce fired -> triggering response")
             await _trigger_response(transcript)
 
         except asyncio.CancelledError:
-            logger.info("⏱ Debounce cancelled (user still speaking)")
+            logger.info("Debounce cancelled (user still speaking)")
         except Exception as e:
             logger.error(f"Debounce/trigger error: {e}", exc_info=True)
         finally:
             debounce_task = None
 
     async def _handle_stt_events():
-        """Background task: listen to streaming STT events and react.
+        """Background task: listen to streaming STT events.
 
-        Turn-taking model: strict half-duplex. While the assistant is
-        responding (is_responding=True), all STT events are dropped.
-        The user's turn starts only after the response cycle completes.
+        Half-duplex: drops all STT events while assistant is responding.
         """
         nonlocal accumulated_transcript, debounce_task
 
         try:
-            async for event in streaming_stt.events():
-                # --- Drop everything while assistant is speaking ---
+            async for event in stt_provider.stream_events():
+                # Drop everything while assistant is speaking
                 if is_responding:
                     continue
 
                 if event.type == FrameType.TEXT and event.metadata.get("interim"):
-                    # Send interim transcript to client for live display
                     await _send(ws, "transcript", event.data, interim=True)
 
                 elif event.type == FrameType.CONTROL:
                     action = event.data.get("action")
 
                     if action == "utterance_end":
-                        # User paused — accumulate transcript and start/reset debounce timer
                         transcript = event.data.get("transcript", "")
                         if transcript:
                             accumulated_transcript += (
@@ -283,20 +312,27 @@ async def websocket_endpoint(ws: WebSocket):
                                 else transcript
                             )
 
-                            # Cancel existing debounce timer and start a new one
                             if debounce_task and not debounce_task.done():
                                 logger.info(
-                                    "⏱ Cancelling previous debounce (new utterance)"
+                                    "Cancelling previous debounce (new utterance)"
                                 )
                                 debounce_task.cancel()
                             debounce_task = asyncio.create_task(_debounce_and_trigger())
+
+                    elif action == "reconnected":
+                        await _send(ws, "status", "listening...")
+                        logger.info("STT reconnected — resuming")
+
+                    elif action == "connection_lost":
+                        await _send(ws, "status", "Connection lost. Please refresh.")
+                        logger.error("STT connection permanently lost")
 
         except asyncio.CancelledError:
             logger.info("STT event handler cancelled")
         except Exception as e:
             logger.error(f"STT event handler error: {e}", exc_info=True)
 
-    logger.info("Pipeline ready: StreamingSTT → Memory → LLM ⇒ TTS")
+    logger.info("Pipeline ready: StreamingSTT -> Memory -> LLM -> TTS")
 
     try:
         while True:
@@ -305,13 +341,11 @@ async def websocket_endpoint(ws: WebSocket):
             msg_type = msg.get("type")
 
             if msg_type == "stream_start":
-                # Client wants to start streaming audio
-                await streaming_stt.connect()
+                await stt_provider.connect_stream()
                 stt_event_task = asyncio.create_task(_handle_stt_events())
                 await _send(ws, "status", "listening...")
 
             elif msg_type == "stream_stop":
-                # Client stopped streaming
                 if stt_event_task:
                     stt_event_task.cancel()
                     try:
@@ -319,23 +353,16 @@ async def websocket_endpoint(ws: WebSocket):
                     except asyncio.CancelledError:
                         pass
                     stt_event_task = None
-                await streaming_stt.disconnect()
+                await stt_provider.disconnect_stream()
 
             elif msg_type == "audio_chunk":
-                # Streaming audio chunk — forward to Deepgram
                 audio_data = base64.b64decode(msg["data"])
-                await streaming_stt.send_audio(audio_data)
+                await stt_provider.send_audio(audio_data)
 
             elif msg_type == "audio":
-                # Batch mode fallback — full audio blob
+                # Batch mode fallback
                 audio_data = base64.b64decode(msg["data"])
-
-                # Run through batch STT
-                user_text = None
-                async for f in batch_stt.process(audio_frame(audio_data)):
-                    if f.type == FrameType.TEXT:
-                        user_text = f.data
-                        break
+                user_text = await stt_provider.transcribe(audio_data)
 
                 if user_text:
                     await _send(ws, "transcript", user_text, interim=False)
@@ -353,7 +380,6 @@ async def websocket_endpoint(ws: WebSocket):
                     await _send(ws, "status", "Didn't catch that, try again")
 
             elif msg_type == "text":
-                # Text fallback
                 user_text = msg["data"]
                 vision = pending_vision_frame
                 pending_vision_frame = None
@@ -386,7 +412,7 @@ async def websocket_endpoint(ws: WebSocket):
                 await stt_event_task
             except asyncio.CancelledError:
                 pass
-        await streaming_stt.disconnect()
+        await stt_provider.disconnect_stream()
         await batch_stt.stop()
         await llm.stop()
         await tts.stop()

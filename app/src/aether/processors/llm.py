@@ -1,8 +1,9 @@
 """
-LLM Processor — OpenAI GPT-4o for conversation and vision.
+LLM Processor — streaming conversation via provider interface.
 
-v0.02: Streaming response. Yields text frames sentence-by-sentence as the LLM
-generates them, so TTS can start synthesizing immediately.
+v0.03: Uses LLMProvider for token streaming. Sentence splitting, memory
+injection, and conversation history stay here — that's processor logic,
+not provider logic.
 """
 
 from __future__ import annotations
@@ -12,11 +13,11 @@ import logging
 import re
 from typing import AsyncGenerator
 
-from openai import AsyncOpenAI
-
+from aether.core.config import config
 from aether.core.frames import Frame, FrameType, text_frame
 from aether.core.processor import Processor
 from aether.memory.store import MemoryStore
+from aether.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,6 @@ Key behaviors:
 - You have a personality. You can have preferences, opinions (lightly held), and a sense of humor.
 - Never say "As an AI" or "I don't have feelings." Just be present and helpful.
 """
-
-MAX_HISTORY_TURNS = 20
 
 # Sentence boundary pattern — split on . ! ? but avoid false splits on:
 # - Numbered lists (1. 2. 3.)
@@ -47,19 +46,21 @@ SENTENCE_BOUNDARY = re.compile(
 
 
 class LLMProcessor(Processor):
-    def __init__(self, store: MemoryStore):
+    def __init__(self, provider: LLMProvider, store: MemoryStore):
         super().__init__("LLM")
-        self.client = AsyncOpenAI()
+        self.provider = provider
         self.store = store
         self.conversation_history: list[dict] = []
 
+    async def start(self) -> None:
+        await self.provider.start()
+
+    async def stop(self) -> None:
+        await self.provider.stop()
+
     async def process(self, frame: Frame) -> AsyncGenerator[Frame, None]:
         """
-        Collect text, memory, and vision frames, then stream response.
-
-        Yields text frames sentence-by-sentence as the LLM generates tokens.
-        Each sentence frame has metadata 'streaming': True and 'sentence_index'.
-        The final frame has 'streaming_done': True.
+        Collect context frames, then stream LLM response sentence-by-sentence.
         """
         # Accumulate memory context
         if frame.type == FrameType.MEMORY:
@@ -81,67 +82,53 @@ class LLMProcessor(Processor):
         # --- Text frame: time to generate ---
         user_text = frame.data
         messages = self._build_messages(user_text)
+        cfg = config.llm
 
         try:
-            stream = await self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                max_tokens=500,
-                temperature=0.7,
-                stream=True,
-            )
-
             buffer = ""
             full_response = ""
             sentence_index = 0
 
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if not delta.content:
-                    continue
+            async for token in self.provider.generate_stream(
+                messages,
+                max_tokens=cfg.max_tokens,
+                temperature=cfg.temperature,
+            ):
+                buffer += token
+                full_response += token
 
-                buffer += delta.content
-                full_response += delta.content
-
-                # Check for sentence boundaries — yield complete sentences
+                # Check for sentence boundaries
                 parts = SENTENCE_BOUNDARY.split(buffer)
                 if len(parts) > 1:
-                    # All parts except the last are complete sentences
                     for sentence in parts[:-1]:
                         sentence = sentence.strip()
                         if sentence:
-                            logger.info(
-                                f"LLM stream [{sentence_index}]: '{sentence[:60]}'"
-                            )
+                            logger.info(f"LLM stream [{sentence_index}]: '{sentence[:60]}'")
                             yield text_frame(sentence, role="assistant")
                             yield Frame(
                                 type=FrameType.CONTROL,
                                 data={"action": "sentence", "index": sentence_index},
                             )
                             sentence_index += 1
-                    buffer = parts[-1]  # Keep the incomplete part
+                    buffer = parts[-1]
 
-            # Yield any remaining text in the buffer
+            # Yield remaining buffer
             if buffer.strip():
                 logger.info(f"LLM stream [{sentence_index}]: '{buffer.strip()[:60]}'")
                 yield text_frame(buffer.strip(), role="assistant")
                 sentence_index += 1
 
-            # Signal streaming is done
+            # Signal done
             yield Frame(
                 type=FrameType.CONTROL,
                 data={"action": "llm_done", "full_response": full_response},
             )
 
-            logger.info(
-                f"LLM: streamed {sentence_index} sentences, {len(full_response)} chars total"
-            )
+            logger.info(f"LLM: streamed {sentence_index} sentences, {len(full_response)} chars")
 
             # Update history
             self.conversation_history.append({"role": "user", "content": user_text})
-            self.conversation_history.append(
-                {"role": "assistant", "content": full_response}
-            )
+            self.conversation_history.append({"role": "assistant", "content": full_response})
 
             # Store memory async
             async def _save():
@@ -166,36 +153,29 @@ class LLMProcessor(Processor):
         # Memory context
         pending_memory = getattr(self, "_pending_memory", None)
         if pending_memory:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Relevant context from past conversations:\n{pending_memory}\n\nUse this naturally if relevant. Don't force it.",
-                }
-            )
+            messages.append({
+                "role": "system",
+                "content": f"Relevant context from past conversations:\n{pending_memory}\n\nUse this naturally if relevant. Don't force it.",
+            })
             self._pending_memory = None
 
         # Conversation history
-        messages.extend(self.conversation_history[-MAX_HISTORY_TURNS * 2 :])
+        max_turns = config.llm.max_history_turns
+        messages.extend(self.conversation_history[-max_turns * 2:])
 
         # User message (with optional vision)
         pending_vision: Frame | None = getattr(self, "_pending_vision", None)
         if pending_vision:
             import base64
-
             image_b64 = base64.b64encode(pending_vision.data).decode("utf-8")
             mime = pending_vision.metadata.get("mime_type", "image/jpeg")
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                        },
-                    ],
-                }
-            )
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                ],
+            })
             self._pending_vision = None
         else:
             messages.append({"role": "user", "content": user_text})
