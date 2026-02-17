@@ -29,7 +29,6 @@ class STTProcessor(Processor):
 
     async def start(self) -> None:
         await self.provider.start()
-        logger.info("STT processor ready")
 
     async def stop(self) -> None:
         await self.provider.stop()

@@ -25,6 +25,8 @@ class ElevenLabsTTSProvider(TTSProvider):
         self.client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
+        if self.client:
+            return  # Already started
         if not config.tts.elevenlabs_api_key:
             raise ValueError("ELEVENLABS_API_KEY not set")
 
@@ -36,8 +38,7 @@ class ElevenLabsTTSProvider(TTSProvider):
             },
         )
         logger.info(
-            f"ElevenLabs TTS provider ready "
-            f"(model: {config.tts.elevenlabs_model}, voice: {config.tts.elevenlabs_voice_id})"
+            f"ElevenLabs TTS ready (model={config.tts.elevenlabs_model}, voice={config.tts.elevenlabs_voice_id})"
         )
 
     async def stop(self) -> None:

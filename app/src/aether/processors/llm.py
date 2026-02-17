@@ -247,7 +247,7 @@ class LLMProcessor(Processor):
                 yield status_frame(status_text, tool_name=tc.name)
                 yield tool_call_frame(tc.name, tc.arguments, call_id=tc.id)
 
-                logger.info(f"Executing tool: {tc.name}({list(tc.arguments.keys())})")
+                logger.info(f"Tool: {tc.name}({', '.join(tc.arguments.keys())})")
                 result = await self.tool_registry.dispatch(tc.name, tc.arguments)
 
                 yield tool_result_frame(
@@ -263,9 +263,8 @@ class LLMProcessor(Processor):
                     }
                 )
 
-            # Loop back — LLM sees tool results and either responds or calls more tools
-            logger.info(
-                f"Tool loop iteration {iteration}: executed {len(pending_tool_calls)} tools"
+            logger.debug(
+                f"Tool loop iteration {iteration}: {len(pending_tool_calls)} tools executed"
             )
 
         if iteration >= MAX_TOOL_ITERATIONS:
@@ -290,7 +289,7 @@ class LLMProcessor(Processor):
             matched = self.skill_loader.match(user_text)
             if matched:
                 skill = matched[0]  # Best match
-                logger.info(f"Skill matched: {skill.name} for query '{user_text[:60]}'")
+                logger.info(f"Skill: {skill.name}")
                 system_prompt += (
                     f"\n\n--- Active Skill: {skill.name} ---\n{skill.content}"
                 )

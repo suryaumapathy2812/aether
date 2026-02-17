@@ -24,8 +24,10 @@ class OpenAILLMProvider(LLMProvider):
         self.client: AsyncOpenAI | None = None
 
     async def start(self) -> None:
+        if self.client:
+            return  # Already started
         self.client = AsyncOpenAI()
-        logger.info(f"OpenAI LLM provider ready (model: {config.llm.model})")
+        logger.info(f"OpenAI LLM ready (model={config.llm.model})")
 
     async def stop(self) -> None:
         self.client = None
@@ -126,16 +128,24 @@ class OpenAILLMProvider(LLMProvider):
                 for idx in sorted(pending_tool_calls.keys()):
                     tc_data = pending_tool_calls[idx]
                     try:
-                        args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
+                        args = (
+                            json.loads(tc_data["arguments"])
+                            if tc_data["arguments"]
+                            else {}
+                        )
                     except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse tool args: {tc_data['arguments'][:100]}")
+                        logger.warning(
+                            f"Failed to parse tool args: {tc_data['arguments'][:100]}"
+                        )
                         args = {}
 
-                    tool_calls.append(LLMToolCall(
-                        id=tc_data["id"],
-                        name=tc_data["name"],
-                        arguments=args,
-                    ))
+                    tool_calls.append(
+                        LLMToolCall(
+                            id=tc_data["id"],
+                            name=tc_data["name"],
+                            arguments=args,
+                        )
+                    )
 
                 if tool_calls:
                     yield LLMStreamEvent(type="tool_calls", tool_calls=tool_calls)

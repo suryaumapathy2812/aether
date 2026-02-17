@@ -55,12 +55,12 @@ class MemoryRetrieverProcessor(Processor):
                             )
 
                 if memories:
-                    logger.info(f"Found {len(memories)} relevant memories")
+                    logger.info(f"Memory: {len(memories)} matches")
                     yield memory_frame(memories, query=user_text)
                 else:
-                    logger.debug("No memories above similarity threshold")
+                    logger.debug("Memory: no matches above threshold")
             else:
-                logger.debug("No memories found")
+                logger.debug("Memory: empty")
 
         except Exception as e:
             logger.error(f"Memory search error: {e}", exc_info=True)

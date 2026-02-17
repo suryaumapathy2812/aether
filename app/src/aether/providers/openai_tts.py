@@ -21,8 +21,10 @@ class OpenAITTSProvider(TTSProvider):
         self.client: AsyncOpenAI | None = None
 
     async def start(self) -> None:
+        if self.client:
+            return  # Already started
         self.client = AsyncOpenAI()
-        logger.info(f"OpenAI TTS provider ready (voice: {config.tts.voice})")
+        logger.info(f"OpenAI TTS ready (voice={config.tts.voice})")
 
     async def stop(self) -> None:
         self.client = None

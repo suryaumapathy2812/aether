@@ -26,6 +26,8 @@ class SarvamTTSProvider(TTSProvider):
         self.client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
+        if self.client:
+            return  # Already started
         if not config.tts.sarvam_api_key:
             raise ValueError("SARVAM_API_KEY not set")
 
@@ -37,8 +39,7 @@ class SarvamTTSProvider(TTSProvider):
             },
         )
         logger.info(
-            f"Sarvam TTS provider ready "
-            f"(model: {config.tts.sarvam_model}, speaker: {config.tts.sarvam_speaker})"
+            f"Sarvam TTS ready (model={config.tts.sarvam_model}, speaker={config.tts.sarvam_speaker})"
         )
 
     async def stop(self) -> None:

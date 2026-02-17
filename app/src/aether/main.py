@@ -31,6 +31,7 @@ from aether.core.frames import (
     text_frame,
     vision_frame,
 )
+from aether.core.logging import PipelineTimer, setup_logging
 from aether.memory.store import MemoryStore
 from aether.processors.llm import LLMProcessor
 from aether.processors.memory import MemoryRetrieverProcessor
@@ -50,11 +51,7 @@ from aether.skills.loader import SkillLoader
 from aether.agents.task_runner import TaskRunner
 
 # --- Setup ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging()
 logger = logging.getLogger("aether")
 
 # --- App ---
@@ -182,6 +179,8 @@ async def _run_llm_tts_streaming(
     """
     Run Memory → LLM → TTS streaming pipeline for a complete utterance.
     """
+    timer = PipelineTimer()
+
     # Phase 1: Memory retrieval
     pre_frames: list[Frame] = []
     user_frame = text_frame(user_text, role="user")
@@ -193,8 +192,13 @@ async def _run_llm_tts_streaming(
     async for f in memory_retriever.process(user_frame):
         pre_frames.append(f)
 
+    timer.mark("Memory")
+
     # Phase 2: Stream LLM → TTS
     sentence_index = 0
+    total_chars = 0
+    total_audio_bytes = 0
+    llm_marked = False
 
     for pf in pre_frames:
         async for llm_frame in llm.process(pf):
@@ -202,12 +206,18 @@ async def _run_llm_tts_streaming(
                 llm_frame.type == FrameType.TEXT
                 and llm_frame.metadata.get("role") == "assistant"
             ):
+                if not llm_marked:
+                    timer.mark("LLM")
+                    llm_marked = True
+
                 sentence_text = llm_frame.data
+                total_chars += len(sentence_text)
                 await _send(ws, "text_chunk", sentence_text, index=sentence_index)
 
                 try:
                     async for tts_frame in tts.process(llm_frame):
                         if tts_frame.type == FrameType.AUDIO:
+                            total_audio_bytes += len(tts_frame.data)
                             await _send(
                                 ws,
                                 "audio_chunk",
@@ -252,6 +262,20 @@ async def _run_llm_tts_streaming(
             elif llm_frame.type == FrameType.CONTROL:
                 if llm_frame.data.get("action") == "llm_done":
                     await _send(ws, "stream_end")
+
+    timer.mark("TTS")
+
+    # --- Clean pipeline summary ---
+    audio_kb = total_audio_bytes / 1024
+    llm_time = timer.elapsed("LLM")
+    tts_time = timer.elapsed("TTS")
+    llm_str = f"{llm_time:.1f}s" if llm_time else "?"
+    tts_str = f"{tts_time:.1f}s" if tts_time else "?"
+    logger.info(
+        f"LLM: {sentence_index} sentences, {total_chars} chars ({llm_str}) | "
+        f"TTS: {sentence_index} chunks, {audio_kb:.0f}KB ({tts_str}) | "
+        f"{timer.summary()}"
+    )
 
 
 @app.websocket("/ws")
@@ -312,7 +336,7 @@ async def websocket_endpoint(ws: WebSocket):
         await _send(ws, "status", "thinking...")
 
         try:
-            logger.info(f"Triggering LLM: '{transcript[:60]}'")
+            logger.info(f'STT: "{transcript}"')
             await _send(ws, "transcript", transcript, interim=False)
 
             vision = pending_vision_frame
@@ -330,30 +354,24 @@ async def websocket_endpoint(ws: WebSocket):
         finally:
             is_responding = False
             await _send(ws, "status", "listening...")
-            logger.info("Response cycle complete, ready for next utterance")
 
     async def _debounce_and_trigger():
         """Wait for silence, then trigger the response."""
         nonlocal accumulated_transcript, debounce_task
 
         try:
-            logger.info(
-                f"Debounce started (accumulated: '{accumulated_transcript[:60]}')"
-            )
             await asyncio.sleep(config.server.debounce_delay)
 
             transcript = accumulated_transcript.strip()
             accumulated_transcript = ""
 
             if not transcript:
-                logger.info("Debounce fired but transcript empty, ignoring")
                 return
 
-            logger.info("Debounce fired -> triggering response")
             await _trigger_response(transcript)
 
         except asyncio.CancelledError:
-            logger.info("Debounce cancelled (user still speaking)")
+            logger.debug("Debounce reset (user still speaking)")
         except Exception as e:
             logger.error(f"Debounce/trigger error: {e}", exc_info=True)
         finally:
@@ -388,9 +406,6 @@ async def websocket_endpoint(ws: WebSocket):
                             )
 
                             if debounce_task and not debounce_task.done():
-                                logger.info(
-                                    "Cancelling previous debounce (new utterance)"
-                                )
                                 debounce_task.cancel()
                             debounce_task = asyncio.create_task(_debounce_and_trigger())
 
@@ -448,7 +463,7 @@ async def websocket_endpoint(ws: WebSocket):
             is_responding = False
             await _send(ws_conn, "status", "listening...")
 
-    logger.info("Pipeline ready: StreamingSTT -> Memory -> LLM -> TTS")
+    logger.debug("Session pipeline initialized")
 
     try:
         while True:

@@ -31,14 +31,18 @@ class DeepgramSTTProvider(STTProvider):
         self._listen_task: asyncio.Task | None = None
         self._connected = False
         self._reconnecting = False
-        self._should_be_connected = False  # Intent flag — are we supposed to be streaming?
+        self._should_be_connected = (
+            False  # Intent flag — are we supposed to be streaming?
+        )
 
     async def start(self) -> None:
+        if self.client:
+            return  # Already started
         cfg = config.stt
         if not cfg.api_key:
             raise ValueError("DEEPGRAM_API_KEY not set")
         self.client = AsyncDeepgramClient(api_key=cfg.api_key)
-        logger.info("Deepgram STT provider ready")
+        logger.info("Deepgram STT ready")
 
     async def stop(self) -> None:
         self._should_be_connected = False
@@ -96,7 +100,7 @@ class DeepgramSTTProvider(STTProvider):
 
             # Start listening
             self._listen_task = asyncio.create_task(self._listen_loop())
-            logger.info("Deepgram live connection opened")
+            logger.debug("Deepgram live connection opened")
 
         except Exception as e:
             self._connected = False
@@ -119,6 +123,7 @@ class DeepgramSTTProvider(STTProvider):
         if self._socket:
             try:
                 from deepgram.extensions.types.sockets import ListenV1ControlMessage
+
                 await self._socket.send_control(
                     ListenV1ControlMessage(type="CloseStream")
                 )
@@ -131,7 +136,7 @@ class DeepgramSTTProvider(STTProvider):
                 pass
             self._socket = None
 
-        logger.info("Deepgram live connection closed")
+        logger.debug("Deepgram live connection closed")
 
     async def send_audio(self, chunk: bytes) -> None:
         """Send audio chunk. If connection is dead, trigger reconnect."""
@@ -201,7 +206,9 @@ class DeepgramSTTProvider(STTProvider):
                 logger.info("Reconnect cancelled — stream no longer needed")
                 break
 
-            logger.info(f"Deepgram reconnect attempt {attempt}/{cfg.reconnect_attempts} (delay: {delay:.1f}s)")
+            logger.debug(
+                f"Deepgram reconnect attempt {attempt}/{cfg.reconnect_attempts} (delay: {delay:.1f}s)"
+            )
             await asyncio.sleep(delay)
 
             try:
@@ -259,7 +266,7 @@ class DeepgramSTTProvider(STTProvider):
                 )
                 self._interim_text = ""
                 await self._event_queue.put(text_frame(transcript, role="user"))
-                logger.info(f"STT final: '{transcript[:60]}'")
+                logger.debug(f"STT final: '{transcript[:60]}'")
 
                 if speech_final:
                     await self._emit_utterance_end()
@@ -281,7 +288,7 @@ class DeepgramSTTProvider(STTProvider):
         """Emit accumulated transcript as a complete utterance."""
         final_text = self._transcript_buffer.strip()
         if final_text:
-            logger.info(f"STT utterance complete: '{final_text[:80]}'")
+            logger.debug(f"STT utterance: '{final_text[:80]}'")
             await self._event_queue.put(
                 control_frame("utterance_end", transcript=final_text)
             )

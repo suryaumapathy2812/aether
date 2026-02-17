@@ -47,7 +47,9 @@ class TTSProcessor(Processor):
                 timeout=timeout,
             )
 
-            logger.info(f"TTS: generated {len(audio_bytes)} bytes of audio")
+            logger.debug(
+                f"TTS chunk: {len(audio_bytes) / 1024:.0f}KB for '{text[:40]}'"
+            )
             yield audio_frame(audio_bytes, sample_rate=24000)
             yield frame  # Also yield text so client can display it
 
