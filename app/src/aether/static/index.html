@@ -30,7 +30,6 @@
         #status.active { color: #4ecdc4; }
         #status.error { color: #ff6b6b; }
 
-        /* The orb — central interaction point */
         #orb-container {
             position: relative;
             width: 180px;
@@ -83,7 +82,6 @@
             text-transform: uppercase;
         }
 
-        /* Conversation display */
         #conversation {
             position: fixed;
             bottom: 100px;
@@ -110,11 +108,13 @@
         .message.user { color: #888; text-align: right; }
         .message.assistant { color: #e0e0e0; }
 
+        /* Streaming text appears word by word */
+        .message.streaming { opacity: 1; }
+
         @keyframes fadeIn {
             to { opacity: 1; }
         }
 
-        /* Bottom controls */
         #controls {
             position: fixed;
             bottom: 30px;
@@ -136,7 +136,6 @@
 
         .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
 
-        /* Text input fallback */
         #text-input-container {
             position: fixed;
             bottom: 70px;
@@ -191,6 +190,12 @@
         let isTextMode = false;
         let audioContext = null;
 
+        // --- Audio Queue (v0.02) ---
+        // Queues audio chunks and plays them in order, back-to-back
+        const audioQueue = [];
+        let isPlaying = false;
+        let streamingMessageEl = null;  // The DOM element being built sentence-by-sentence
+
         // --- Elements ---
         const orb = document.getElementById('orb');
         const orbLabel = document.getElementById('orb-label');
@@ -212,17 +217,26 @@
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
 
-                if (msg.type === 'audio') {
-                    playAudio(msg.data);
-                } else if (msg.type === 'text') {
-                    addMessage(msg.data, msg.role || 'assistant');
-                    if (msg.role === 'assistant') {
-                        setOrbState('speaking');
-                        // Reset after a delay
-                        setTimeout(() => setOrbState('idle'), 2000);
-                    }
-                } else if (msg.type === 'status') {
-                    setStatus(msg.data, true);
+                switch (msg.type) {
+                    case 'text_chunk':
+                        handleTextChunk(msg.data, msg.index);
+                        break;
+                    case 'audio_chunk':
+                        handleAudioChunk(msg.data, msg.index);
+                        break;
+                    case 'stream_end':
+                        handleStreamEnd();
+                        break;
+                    // Legacy v0.01 support
+                    case 'audio':
+                        queueAudio(msg.data);
+                        break;
+                    case 'text':
+                        addMessage(msg.data, msg.role || 'assistant');
+                        break;
+                    case 'status':
+                        setStatus(msg.data, true);
+                        break;
                 }
             };
 
@@ -234,6 +248,90 @@
             ws.onerror = () => {
                 setStatus('connection error', true, true);
             };
+        }
+
+        // --- Streaming Text (v0.02) ---
+        function handleTextChunk(text, index) {
+            if (index === 0) {
+                // First sentence — create the message element
+                streamingMessageEl = document.createElement('div');
+                streamingMessageEl.className = 'message assistant streaming';
+                streamingMessageEl.textContent = text;
+                conversation.appendChild(streamingMessageEl);
+                setOrbState('speaking');
+                setStatus('speaking...', true);
+            } else if (streamingMessageEl) {
+                // Append subsequent sentences with a space
+                streamingMessageEl.textContent += ' ' + text;
+            }
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+
+        // --- Audio Queue (v0.02) ---
+        function handleAudioChunk(base64Data, index) {
+            queueAudio(base64Data);
+        }
+
+        function handleStreamEnd() {
+            // Mark streaming message as complete
+            if (streamingMessageEl) {
+                streamingMessageEl.classList.remove('streaming');
+                streamingMessageEl = null;
+            }
+            // Trim old messages
+            while (conversation.children.length > 10) {
+                conversation.removeChild(conversation.firstChild);
+            }
+        }
+
+        function queueAudio(base64Data) {
+            audioQueue.push(base64Data);
+            if (!isPlaying) {
+                playNextInQueue();
+            }
+        }
+
+        async function playNextInQueue() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                // Only go idle if stream has ended
+                if (!streamingMessageEl) {
+                    setOrbState('idle');
+                }
+                return;
+            }
+
+            isPlaying = true;
+            setOrbState('speaking');
+
+            const base64Data = audioQueue.shift();
+            try {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                const binaryStr = atob(base64Data);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
+
+                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                source.onended = () => {
+                    // Play next chunk immediately when this one finishes
+                    playNextInQueue();
+                };
+
+                source.start();
+            } catch (err) {
+                console.error('Audio playback error:', err);
+                // Try next chunk even if this one failed
+                playNextInQueue();
+            }
         }
 
         // --- Recording ---
@@ -278,7 +376,6 @@
                         setStatus('audio error — try again', false, true);
                         setOrbState('idle');
                     } finally {
-                        // Stop all tracks
                         stream.getTracks().forEach(t => t.stop());
                     }
                 };
@@ -297,33 +394,6 @@
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
                 isRecording = false;
-            }
-        }
-
-        // --- Audio Playback ---
-        async function playAudio(base64Data) {
-            try {
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-
-                const binaryStr = atob(base64Data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
-
-                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
-                const source = audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
-
-                setOrbState('speaking');
-                source.onended = () => setOrbState('idle');
-                source.start();
-            } catch (err) {
-                console.error('Audio playback error:', err);
-                setOrbState('idle');
             }
         }
 
@@ -352,23 +422,20 @@
                     video: { facingMode: 'environment' }
                 });
 
-                // Create a video element to capture a frame
                 const video = document.createElement('video');
                 video.srcObject = stream;
                 video.play();
 
                 await new Promise(resolve => video.onloadedmetadata = resolve);
-                await new Promise(resolve => setTimeout(resolve, 500)); // Let camera stabilize
+                await new Promise(resolve => setTimeout(resolve, 500));
 
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 canvas.getContext('2d').drawImage(video, 0, 0);
 
-                // Stop camera
                 stream.getTracks().forEach(t => t.stop());
 
-                // Convert to base64 JPEG
                 const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
                 const base64 = dataUrl.split(',')[1];
 
@@ -402,7 +469,6 @@
             conversation.appendChild(div);
             conversation.scrollTop = conversation.scrollHeight;
 
-            // Keep only last 10 messages visible
             while (conversation.children.length > 10) {
                 conversation.removeChild(conversation.firstChild);
             }

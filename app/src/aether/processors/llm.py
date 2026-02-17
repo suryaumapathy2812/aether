@@ -1,13 +1,15 @@
 """
 LLM Processor — OpenAI GPT-4o for conversation and vision.
 
-Takes text + memory + optional vision frames, yields text frame with response.
-Manages conversation history within a session and stores to memory after response.
+v0.02: Streaming response. Yields text frames sentence-by-sentence as the LLM
+generates them, so TTS can start synthesizing immediately.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
@@ -29,8 +31,19 @@ Key behaviors:
 - Never say "As an AI" or "I don't have feelings." Just be present and helpful.
 """
 
-# Max conversation turns to keep in context (avoid token overflow)
 MAX_HISTORY_TURNS = 20
+
+# Sentence boundary pattern — split on . ! ? but avoid false splits on:
+# - Numbered lists (1. 2. 3.)
+# - Abbreviations (Dr. Mr. U.S.)
+# - Decimals (3.50)
+SENTENCE_BOUNDARY = re.compile(
+    r"(?<!\d)"  # not after a digit (handles 1. 2. 3. and 3.50)
+    r"(?<![A-Z])"  # not after a single capital letter (handles Dr. Mr. U.S.)
+    r"(?<=[.!?])"  # after sentence-ending punctuation
+    r"\s+"  # whitespace separator
+    r'(?=[A-Z"\'\d(])'  # next chunk starts with capital, quote, digit, or paren
+)
 
 
 class LLMProcessor(Processor):
@@ -42,54 +55,131 @@ class LLMProcessor(Processor):
 
     async def process(self, frame: Frame) -> AsyncGenerator[Frame, None]:
         """
-        Collect text, memory, and vision frames, then generate response.
+        Collect text, memory, and vision frames, then stream response.
 
-        The pipeline sends frames in order: memory_frame, vision_frame, text_frame.
-        We accumulate context until we get a user text frame, then generate.
+        Yields text frames sentence-by-sentence as the LLM generates tokens.
+        Each sentence frame has metadata 'streaming': True and 'sentence_index'.
+        The final frame has 'streaming_done': True.
         """
         # Accumulate memory context
         if frame.type == FrameType.MEMORY:
             memories = frame.data.get("memories", [])
             if memories:
-                memory_text = "\n".join(memories)
-                # Inject as a system-level context note
-                self._pending_memory = memory_text
-            return  # Don't yield — wait for the text frame
+                self._pending_memory = "\n".join(memories)
+            return
 
         # Accumulate vision context
         if frame.type == FrameType.VISION:
             self._pending_vision = frame
-            return  # Don't yield — wait for the text frame
+            return
 
         # Non-text frames pass through
         if frame.type != FrameType.TEXT:
             yield frame
             return
 
-        # --- We have a text frame. Time to generate. ---
+        # --- Text frame: time to generate ---
         user_text = frame.data
+        messages = self._build_messages(user_text)
 
-        # Build messages
+        try:
+            stream = await self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=500,
+                temperature=0.7,
+                stream=True,
+            )
+
+            buffer = ""
+            full_response = ""
+            sentence_index = 0
+
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                if not delta.content:
+                    continue
+
+                buffer += delta.content
+                full_response += delta.content
+
+                # Check for sentence boundaries — yield complete sentences
+                parts = SENTENCE_BOUNDARY.split(buffer)
+                if len(parts) > 1:
+                    # All parts except the last are complete sentences
+                    for sentence in parts[:-1]:
+                        sentence = sentence.strip()
+                        if sentence:
+                            logger.info(
+                                f"LLM stream [{sentence_index}]: '{sentence[:60]}'"
+                            )
+                            yield text_frame(sentence, role="assistant")
+                            yield Frame(
+                                type=FrameType.CONTROL,
+                                data={"action": "sentence", "index": sentence_index},
+                            )
+                            sentence_index += 1
+                    buffer = parts[-1]  # Keep the incomplete part
+
+            # Yield any remaining text in the buffer
+            if buffer.strip():
+                logger.info(f"LLM stream [{sentence_index}]: '{buffer.strip()[:60]}'")
+                yield text_frame(buffer.strip(), role="assistant")
+                sentence_index += 1
+
+            # Signal streaming is done
+            yield Frame(
+                type=FrameType.CONTROL,
+                data={"action": "llm_done", "full_response": full_response},
+            )
+
+            logger.info(
+                f"LLM: streamed {sentence_index} sentences, {len(full_response)} chars total"
+            )
+
+            # Update history
+            self.conversation_history.append({"role": "user", "content": user_text})
+            self.conversation_history.append(
+                {"role": "assistant", "content": full_response}
+            )
+
+            # Store memory async
+            async def _save():
+                try:
+                    await self.store.add(user_text, full_response)
+                except Exception as e:
+                    logger.error(f"Failed to store memory: {e}")
+
+            asyncio.create_task(_save())
+
+        except Exception as e:
+            logger.error(f"LLM error: {e}", exc_info=True)
+            yield text_frame(
+                "Sorry, I had trouble thinking about that. Can you try again?",
+                role="assistant",
+            )
+
+    def _build_messages(self, user_text: str) -> list[dict]:
+        """Build the messages list for the LLM call."""
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-        # Inject memory context if available
+        # Memory context
         pending_memory = getattr(self, "_pending_memory", None)
         if pending_memory:
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Relevant context from past conversations:\n{pending_memory}\n\nUse this naturally in your response if relevant. Don't force it.",
+                    "content": f"Relevant context from past conversations:\n{pending_memory}\n\nUse this naturally if relevant. Don't force it.",
                 }
             )
             self._pending_memory = None
 
-        # Add conversation history
+        # Conversation history
         messages.extend(self.conversation_history[-MAX_HISTORY_TURNS * 2 :])
 
-        # Build user message (text + optional vision)
+        # User message (with optional vision)
         pending_vision: Frame | None = getattr(self, "_pending_vision", None)
         if pending_vision:
-            # Multimodal message with image
             import base64
 
             image_b64 = base64.b64encode(pending_vision.data).decode("utf-8")
@@ -110,39 +200,4 @@ class LLMProcessor(Processor):
         else:
             messages.append({"role": "user", "content": user_text})
 
-        try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                max_tokens=500,
-                temperature=0.7,
-            )
-
-            assistant_text = response.choices[0].message.content or ""
-            logger.info(f"LLM: '{assistant_text[:80]}'")
-
-            # Update conversation history
-            self.conversation_history.append({"role": "user", "content": user_text})
-            self.conversation_history.append(
-                {"role": "assistant", "content": assistant_text}
-            )
-
-            # Store in memory (fire and forget — don't block the response)
-            import asyncio
-
-            async def _save_memory():
-                try:
-                    await self.store.add(user_text, assistant_text)
-                except Exception as e:
-                    logger.error(f"Failed to store memory: {e}")
-
-            asyncio.create_task(_save_memory())
-
-            yield text_frame(assistant_text, role="assistant")
-
-        except Exception as e:
-            logger.error(f"LLM error: {e}", exc_info=True)
-            yield text_frame(
-                "Sorry, I had trouble thinking about that. Can you try again?",
-                role="assistant",
-            )
+        return messages
