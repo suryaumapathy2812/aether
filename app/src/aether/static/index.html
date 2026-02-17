@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        #status {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 2rem;
+            min-height: 1.2rem;
+            transition: color 0.3s;
+        }
+
+        #status.active { color: #4ecdc4; }
+        #status.error { color: #ff6b6b; }
+
+        /* The orb — central interaction point */
+        #orb-container {
+            position: relative;
+            width: 180px;
+            height: 180px;
+            margin-bottom: 2rem;
+            cursor: pointer;
+        }
+
+        #orb {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #1a1a2e, #0a0a15);
+            border: 1px solid #1a1a2e;
+            transition: all 0.4s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #orb:hover { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.1); }
+
+        #orb.listening {
+            border-color: #4ecdc4;
+            box-shadow: 0 0 60px rgba(78, 205, 196, 0.2);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        #orb.thinking {
+            border-color: #a78bfa;
+            box-shadow: 0 0 60px rgba(167, 139, 250, 0.2);
+            animation: pulse 1.2s ease-in-out infinite;
+        }
+
+        #orb.speaking {
+            border-color: #f59e0b;
+            box-shadow: 0 0 60px rgba(245, 158, 11, 0.2);
+            animation: pulse 0.8s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+        }
+
+        #orb-label {
+            font-size: 0.75rem;
+            color: #444;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        /* Conversation display */
+        #conversation {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 600px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 1rem;
+        }
+
+        .message {
+            font-size: 0.9rem;
+            line-height: 1.5;
+            padding: 0.5rem 0;
+            opacity: 0;
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        .message.user { color: #888; text-align: right; }
+        .message.assistant { color: #e0e0e0; }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+        /* Bottom controls */
+        #controls {
+            position: fixed;
+            bottom: 30px;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .ctrl-btn {
+            background: none;
+            border: 1px solid #333;
+            color: #666;
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
+
+        /* Text input fallback */
+        #text-input-container {
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 500px;
+            display: none;
+        }
+
+        #text-input {
+            width: 100%;
+            background: #111;
+            border: 1px solid #333;
+            color: #e0e0e0;
+            padding: 0.75rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        #text-input:focus { border-color: #4ecdc4; }
+    </style>
+</head>
+<body>
+    <div id="status">tap the orb to speak</div>
+
+    <div id="orb-container" onclick="toggleRecording()">
+        <div id="orb">
+            <span id="orb-label">aether</span>
+        </div>
+    </div>
+
+    <div id="conversation"></div>
+
+    <div id="text-input-container">
+        <input id="text-input" type="text" placeholder="Type a message..."
+               onkeydown="if(event.key==='Enter')sendText()">
+    </div>
+
+    <div id="controls">
+        <button class="ctrl-btn" onclick="toggleTextMode()">text</button>
+        <button class="ctrl-btn" onclick="captureImage()">camera</button>
+    </div>
+
+    <script>
+        // --- State ---
+        let ws = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let isTextMode = false;
+        let audioContext = null;
+
+        // --- Elements ---
+        const orb = document.getElementById('orb');
+        const orbLabel = document.getElementById('orb-label');
+        const status = document.getElementById('status');
+        const conversation = document.getElementById('conversation');
+        const textContainer = document.getElementById('text-input-container');
+        const textInput = document.getElementById('text-input');
+
+        // --- WebSocket ---
+        function connect() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+            ws.onopen = () => {
+                setStatus('ready', false);
+                orbLabel.textContent = 'aether';
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+
+                if (msg.type === 'audio') {
+                    playAudio(msg.data);
+                } else if (msg.type === 'text') {
+                    addMessage(msg.data, msg.role || 'assistant');
+                    if (msg.role === 'assistant') {
+                        setOrbState('speaking');
+                        // Reset after a delay
+                        setTimeout(() => setOrbState('idle'), 2000);
+                    }
+                } else if (msg.type === 'status') {
+                    setStatus(msg.data, true);
+                }
+            };
+
+            ws.onclose = () => {
+                setStatus('disconnected — reconnecting...', false);
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = () => {
+                setStatus('connection error', true, true);
+            };
+        }
+
+        // --- Recording ---
+        async function toggleRecording() {
+            if (isTextMode) return;
+
+            if (isRecording) {
+                stopRecording();
+            } else {
+                await startRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) audioChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    try {
+                        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const buffer = await blob.arrayBuffer();
+                        const bytes = new Uint8Array(buffer);
+                        let binary = '';
+                        for (let i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        const base64 = btoa(binary);
+
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            setOrbState('thinking');
+                            setStatus('thinking...', true);
+                            ws.send(JSON.stringify({ type: 'audio', data: base64 }));
+                        }
+                    } catch (err) {
+                        console.error('Audio encoding error:', err);
+                        setStatus('audio error — try again', false, true);
+                        setOrbState('idle');
+                    } finally {
+                        // Stop all tracks
+                        stream.getTracks().forEach(t => t.stop());
+                    }
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                setOrbState('listening');
+                setStatus('listening...', true);
+            } catch (err) {
+                setStatus('microphone access denied', false, true);
+                console.error('Mic error:', err);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                isRecording = false;
+            }
+        }
+
+        // --- Audio Playback ---
+        async function playAudio(base64Data) {
+            try {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                const binaryStr = atob(base64Data);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
+
+                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                setOrbState('speaking');
+                source.onended = () => setOrbState('idle');
+                source.start();
+            } catch (err) {
+                console.error('Audio playback error:', err);
+                setOrbState('idle');
+            }
+        }
+
+        // --- Text Mode ---
+        function toggleTextMode() {
+            isTextMode = !isTextMode;
+            textContainer.style.display = isTextMode ? 'block' : 'none';
+            if (isTextMode) textInput.focus();
+        }
+
+        function sendText() {
+            const text = textInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            addMessage(text, 'user');
+            ws.send(JSON.stringify({ type: 'text', data: text }));
+            textInput.value = '';
+            setOrbState('thinking');
+            setStatus('thinking...', true);
+        }
+
+        // --- Camera ---
+        async function captureImage() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+
+                // Create a video element to capture a frame
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.play();
+
+                await new Promise(resolve => video.onloadedmetadata = resolve);
+                await new Promise(resolve => setTimeout(resolve, 500)); // Let camera stabilize
+
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+
+                // Stop camera
+                stream.getTracks().forEach(t => t.stop());
+
+                // Convert to base64 JPEG
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                const base64 = dataUrl.split(',')[1];
+
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
+                    setStatus('image sent — speak or type your question', true);
+                }
+            } catch (err) {
+                setStatus('camera access denied', false, true);
+                console.error('Camera error:', err);
+            }
+        }
+
+        // --- UI Helpers ---
+        function setOrbState(state) {
+            orb.className = state === 'idle' ? '' : state;
+            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '♪' };
+            orbLabel.textContent = labels[state] || 'aether';
+            if (state === 'idle') setStatus('ready', false);
+        }
+
+        function setStatus(text, active = false, error = false) {
+            status.textContent = text;
+            status.className = error ? 'error' : (active ? 'active' : '');
+        }
+
+        function addMessage(text, role) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.textContent = text;
+            conversation.appendChild(div);
+            conversation.scrollTop = conversation.scrollHeight;
+
+            // Keep only last 10 messages visible
+            while (conversation.children.length > 10) {
+                conversation.removeChild(conversation.firstChild);
+            }
+        }
+
+        // --- Init ---
+        connect();
+    </script>
+</body>
+</html>
