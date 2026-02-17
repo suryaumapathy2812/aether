@@ -18,6 +18,9 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import socket
+import time
 import uuid
 from pathlib import Path
 
@@ -56,8 +59,13 @@ from aether.agents.task_runner import TaskRunner
 setup_logging()
 logger = logging.getLogger("aether")
 
+# --- Orchestrator registration ---
+ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "")
+AGENT_ID = os.getenv("AETHER_AGENT_ID", f"agent-{socket.gethostname()}")
+AGENT_USER_ID = os.getenv("AETHER_USER_ID", "")
+
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.6")
+app = FastAPI(title="Aether", version="0.0.7")
 
 # Static files: serve from client/web/ (new structure) or fallback to legacy static/
 CLIENT_WEB_DIR = Path(__file__).parent.parent.parent.parent.parent / "client" / "web"
@@ -99,14 +107,59 @@ skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
 
 
+async def _register_with_orchestrator():
+    """Register this agent with the orchestrator on startup."""
+    if not ORCHESTRATOR_URL:
+        logger.info("No ORCHESTRATOR_URL — skipping registration")
+        return
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{ORCHESTRATOR_URL}/agents/register",
+                json={
+                    "agent_id": AGENT_ID,
+                    "host": socket.gethostname(),
+                    "port": config.server.port,
+                    "container_id": os.getenv("HOSTNAME", ""),
+                    "user_id": AGENT_USER_ID or None,
+                },
+            )
+            logger.info(f"Registered with orchestrator: {resp.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to register with orchestrator: {e}")
+
+
+async def _heartbeat_loop():
+    """Send periodic heartbeats to the orchestrator."""
+    import httpx
+
+    while True:
+        await asyncio.sleep(30)
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(f"{ORCHESTRATOR_URL}/agents/{AGENT_ID}/heartbeat")
+        except Exception:
+            logger.warning("Heartbeat to orchestrator failed")
+
+
 @app.on_event("startup")
 async def startup():
     await memory_store.start()
     await stt_provider.start()
     await llm_provider.start()
     await tts_provider.start()
+
+    # Register with orchestrator and start heartbeat
+    await _register_with_orchestrator()
+    if ORCHESTRATOR_URL:
+        asyncio.create_task(_heartbeat_loop())
+
     logger.info(
-        "Aether v0.07 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
+        "Aether v0.07 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
+        AGENT_ID,
         config.stt.provider,
         config.llm.provider,
         config.tts.provider,

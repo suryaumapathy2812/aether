@@ -12,6 +12,7 @@ dependencies = [
     "pyjwt>=2.9.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.0.0",
+    "docker>=7.0.0",
 ]
 
 [project.optional-dependencies]

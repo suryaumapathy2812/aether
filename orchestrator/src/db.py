@@ -55,11 +55,13 @@ async def bootstrap_schema():
                 id              TEXT PRIMARY KEY,
                 user_id         TEXT UNIQUE REFERENCES users(id),
                 container_id    TEXT,
+                container_name  TEXT,
                 host            TEXT NOT NULL,
                 port            INTEGER NOT NULL,
-                status          TEXT DEFAULT 'running',
+                status          TEXT DEFAULT 'starting',
                 registered_at   TIMESTAMPTZ DEFAULT now(),
-                last_health     TIMESTAMPTZ
+                last_health     TIMESTAMPTZ,
+                created_at      TIMESTAMPTZ DEFAULT now()
             );
 
             CREATE TABLE IF NOT EXISTS pair_requests (

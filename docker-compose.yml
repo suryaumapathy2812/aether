@@ -16,28 +16,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- Aether Agent (FastAPI) ---
-  agent:
-    build: ./app
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
-      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
-      - AETHER_DB_PATH=/data/aether_memory.db
-      - AETHER_WORKING_DIR=/workspace
-      - AETHER_HOST=0.0.0.0
-      - AETHER_PORT=8000
-      # Orchestrator registration
-      - ORCHESTRATOR_URL=http://orchestrator:9000
-    volumes:
-      - agent_memory:/data
-      - agent_workspace:/workspace
-    ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
+  # --- Aether Agent ---
+  # In multi-user mode, agent containers are provisioned dynamically
+  # by the orchestrator via Docker SDK. No static agent service needed.
+  # The agent image must be pre-built: docker build -t core-ai-agent:latest ./app
 
   # --- Orchestrator (FastAPI / Python) ---
   orchestrator:
@@ -48,6 +30,16 @@ services:
       - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
+      # Multi-user agent provisioning
+      - MULTI_USER_MODE=true
+      - AGENT_IMAGE=${AGENT_IMAGE:-core-ai-agent:latest}
+      - AGENT_NETWORK=${AGENT_NETWORK:-core-ai_default}
+      - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
+      # System-wide fallback API keys (used when user hasn't set their own)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
     ports:
       - "9000:9000"
     depends_on:
@@ -74,5 +66,5 @@ services:
 
 volumes:
   postgres_data:
-  agent_memory:
-  agent_workspace:
+  # Per-user volumes (aether-memory-{user_id}, aether-workspace-{user_id})
+  # are created dynamically by the orchestrator's agent_manager.

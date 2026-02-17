@@ -33,6 +33,7 @@ services:
       - AETHER_PORT=8000
       - AETHER_LOG_LEVEL=DEBUG
       - ORCHESTRATOR_URL=http://orchestrator:9000
+      - AETHER_AGENT_ID=agent-dev
     volumes:
       # Hot-reload: mount source code over the installed copy
       - ./app/src:/app/src

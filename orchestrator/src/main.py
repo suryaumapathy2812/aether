@@ -18,6 +18,14 @@ from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
 from .auth import hash_password, verify_password, create_token, decode_token
+from .agent_manager import (
+    MULTI_USER_MODE,
+    IDLE_TIMEOUT_MINUTES,
+    provision_agent,
+    stop_agent,
+    get_agent_status,
+    reconcile_containers,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")
@@ -39,12 +47,44 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await bootstrap_schema()
-    log.info("Orchestrator ready")
+
+    # Reconcile orphaned containers on startup
+    if MULTI_USER_MODE:
+        pool = await get_pool()
+        await reconcile_containers(pool)
+        asyncio.create_task(_idle_reaper())
+        log.info(
+            f"Orchestrator ready (multi-user mode, idle timeout={IDLE_TIMEOUT_MINUTES}m)"
+        )
+    else:
+        log.info("Orchestrator ready (dev mode — single agent)")
 
 
 @app.on_event("shutdown")
 async def shutdown():
     await close_pool()
+
+
+async def _idle_reaper():
+    """Background task: stop agent containers that haven't sent a heartbeat."""
+    while True:
+        await asyncio.sleep(60)  # Check every minute
+        try:
+            pool = await get_pool()
+            idle_agents = await pool.fetch(
+                "SELECT id, user_id FROM agents WHERE status = 'running' "
+                "AND last_health < now() - make_interval(mins := $1)",
+                IDLE_TIMEOUT_MINUTES,
+            )
+            for agent in idle_agents:
+                log.info(f"Stopping idle agent {agent['id']} (user={agent['user_id']})")
+                await stop_agent(agent["user_id"])
+                await pool.execute(
+                    "UPDATE agents SET status = 'stopped' WHERE id = $1",
+                    agent["id"],
+                )
+        except Exception as e:
+            log.error(f"Idle reaper error: {e}")
 
 
 # ── Models ─────────────────────────────────────────────────
@@ -66,6 +106,7 @@ class AgentRegisterRequest(BaseModel):
     host: str
     port: int
     container_id: str | None = None
+    user_id: str | None = None
 
 
 class PairRequestBody(BaseModel):
@@ -86,34 +127,94 @@ class ApiKeyBody(BaseModel):
 # ── Auth ───────────────────────────────────────────────────
 
 
-async def _auto_assign_agent(user_id: str):
-    """Dev convenience: if user has no agent, assign an available one."""
+async def _ensure_agent(user_id: str) -> None:
+    """
+    Ensure the user has a running agent.
+
+    Dev mode: grab any running agent (single shared agent from docker-compose).
+    Multi-user mode: provision a dedicated container per user via Docker SDK.
+    """
     pool = await get_pool()
-    # Already has an agent?
-    existing = await pool.fetchrow(
-        "SELECT id FROM agents WHERE user_id = $1 AND status = 'running'", user_id
-    )
-    if existing:
-        return
-    # Find an unassigned running agent
-    agent = await pool.fetchrow(
-        "SELECT id FROM agents WHERE user_id IS NULL AND status = 'running' LIMIT 1"
-    )
-    if agent:
-        await pool.execute(
-            "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent["id"]
+
+    if not MULTI_USER_MODE:
+        # ── Dev mode: single shared agent ──────────────────────
+        existing = await pool.fetchrow(
+            "SELECT id FROM agents WHERE user_id = $1 AND status = 'running'", user_id
         )
-        log.info(f"Auto-assigned agent {agent['id']} to user {user_id}")
-    else:
-        # All agents are assigned — reassign any running agent (single-agent dev mode)
+        if existing:
+            return
+        # Find an unassigned running agent
         agent = await pool.fetchrow(
-            "SELECT id FROM agents WHERE status = 'running' LIMIT 1"
+            "SELECT id FROM agents WHERE user_id IS NULL AND status = 'running' LIMIT 1"
         )
         if agent:
             await pool.execute(
                 "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent["id"]
             )
-            log.info(f"Reassigned agent {agent['id']} to user {user_id} (dev mode)")
+            log.info(f"Dev mode: assigned agent {agent['id']} to user {user_id}")
+        else:
+            # All agents assigned — reassign any running agent (single-agent dev)
+            agent = await pool.fetchrow(
+                "SELECT id FROM agents WHERE status = 'running' LIMIT 1"
+            )
+            if agent:
+                await pool.execute(
+                    "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent["id"]
+                )
+                log.info(f"Dev mode: reassigned agent {agent['id']} to user {user_id}")
+        return
+
+    # ── Multi-user mode: dedicated container per user ──────
+    existing = await pool.fetchrow(
+        "SELECT id, status FROM agents WHERE user_id = $1", user_id
+    )
+
+    if existing and existing["status"] == "running":
+        # Verify the container is actually alive
+        container_status = await get_agent_status(user_id)
+        if container_status == "running":
+            return
+        log.warning(
+            f"Agent {existing['id']} marked running but container is {container_status}"
+        )
+
+    # Fetch user's API keys for injection into the container
+    rows = await pool.fetch(
+        "SELECT provider, key_value FROM api_keys WHERE user_id = $1", user_id
+    )
+    user_keys = {r["provider"]: r["key_value"] for r in rows}
+
+    # Provision (or restart) the agent container
+    result = await provision_agent(user_id, user_keys)
+
+    # Upsert agent record (agent will also self-register, but we pre-create the row)
+    await pool.execute(
+        """
+        INSERT INTO agents (id, user_id, host, port, container_id, container_name, status, registered_at, last_health)
+        VALUES ($1, $2, $3, $4, $5, $6, 'starting', now(), now())
+        ON CONFLICT (id) DO UPDATE SET
+            host = $3, port = $4, container_id = $5, container_name = $6,
+            status = 'starting', last_health = now()
+        """,
+        result["agent_id"],
+        user_id,
+        result["host"],
+        result["port"],
+        result["container_id"],
+        f"aether-agent-{user_id}",
+    )
+
+    # Wait for agent to self-register as 'running' (max 15 seconds)
+    for _ in range(30):
+        await asyncio.sleep(0.5)
+        row = await pool.fetchrow(
+            "SELECT status FROM agents WHERE user_id = $1", user_id
+        )
+        if row and row["status"] == "running":
+            log.info(f"Agent for user {user_id} is ready")
+            return
+
+    log.warning(f"Agent for user {user_id} didn't become ready in 15s")
 
 
 @app.post("/auth/signup")
@@ -132,7 +233,7 @@ async def signup(body: SignupRequest):
     except Exception:
         raise HTTPException(400, "Email already registered")
     token = create_token(user_id)
-    await _auto_assign_agent(user_id)
+    await _ensure_agent(user_id)
     return {"user_id": user_id, "token": token}
 
 
@@ -145,7 +246,7 @@ async def login(body: LoginRequest):
     if not row or not verify_password(body.password, row["password"]):
         raise HTTPException(401, "Invalid credentials")
     token = create_token(row["id"])
-    await _auto_assign_agent(row["id"])
+    await _ensure_agent(row["id"])
     return {"user_id": row["id"], "token": token}
 
 
@@ -172,18 +273,22 @@ async def register_agent(body: AgentRegisterRequest):
     pool = await get_pool()
     await pool.execute(
         """
-        INSERT INTO agents (id, host, port, container_id, status, registered_at, last_health)
-        VALUES ($1, $2, $3, $4, 'running', now(), now())
+        INSERT INTO agents (id, host, port, container_id, user_id, status, registered_at, last_health)
+        VALUES ($1, $2, $3, $4, $5, 'running', now(), now())
         ON CONFLICT (id) DO UPDATE SET
             host = $2, port = $3, container_id = $4,
+            user_id = COALESCE($5, agents.user_id),
             status = 'running', last_health = now()
     """,
         body.agent_id,
         body.host,
         body.port,
         body.container_id,
+        body.user_id,
     )
-    log.info(f"Agent registered: {body.agent_id} at {body.host}:{body.port}")
+    log.info(
+        f"Agent registered: {body.agent_id} at {body.host}:{body.port} (user={body.user_id})"
+    )
     return {"status": "registered"}
 
 
@@ -365,12 +470,29 @@ async def delete_api_key(provider: str, token: str = Query(...)):
 
 
 async def _get_agent_for_user(user_id: str) -> dict | None:
-    """Look up which agent this user is assigned to."""
+    """Look up which agent this user is assigned to, provisioning if needed."""
     pool = await get_pool()
-    return await pool.fetchrow(
+    agent = await pool.fetchrow(
         "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
         user_id,
     )
+    if agent:
+        return agent
+
+    # No running agent — try to provision one
+    await _ensure_agent(user_id)
+
+    # Poll briefly for agent readiness
+    for _ in range(20):  # Up to 10 seconds
+        agent = await pool.fetchrow(
+            "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+            user_id,
+        )
+        if agent:
+            return agent
+        await asyncio.sleep(0.5)
+
+    return None
 
 
 @app.get("/memory/facts")
@@ -440,16 +562,27 @@ async def ws_proxy(ws: WebSocket, token: str = Query(...)):
 
     user_id = payload["sub"]
 
-    # Find user's agent
+    # Ensure agent is provisioned (starts container in multi-user mode)
+    await _ensure_agent(user_id)
+
+    # Poll for agent readiness (container may still be starting)
     pool = await get_pool()
-    agent = await pool.fetchrow(
-        "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
-        user_id,
-    )
+    agent = None
+    for _ in range(30):  # Up to 15 seconds
+        agent = await pool.fetchrow(
+            "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+            user_id,
+        )
+        if agent:
+            break
+        await asyncio.sleep(0.5)
+
     if not agent:
         await ws.accept()
-        await ws.send_json({"type": "error", "message": "No agent available"})
-        await ws.close(code=4002, reason="No agent")
+        await ws.send_json(
+            {"type": "error", "message": "Agent not ready — try again shortly"}
+        )
+        await ws.close(code=4002, reason="Agent not ready")
         return
 
     agent_url = f"ws://{agent['host']}:{agent['port']}/ws"
