@@ -344,7 +344,7 @@
         }
 
         function sendAudioChunk(e) {
-            if (!isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!isStreaming || isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
             const inputData = e.inputBuffer.getChannelData(0);
             const pcm16 = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
@@ -357,9 +357,33 @@
             ws.send(JSON.stringify({ type: 'audio_chunk', data: btoa(binary) }));
         }
 
+        // --- Mute ---
+        function toggleMute() {
+            if (!isStreaming) return;
+
+            isMuted = !isMuted;
+
+            if (isMuted) {
+                ws.send(JSON.stringify({ type: 'mute' }));
+                setOrbState('muted');
+                muteBtn.textContent = 'unmute';
+                muteBtn.style.borderColor = '#ff6b6b';
+                muteBtn.style.color = '#ff6b6b';
+                liveTranscript.textContent = '';
+            } else {
+                ws.send(JSON.stringify({ type: 'unmute' }));
+                setOrbState('listening');
+                setStatus('listening...', true);
+                muteBtn.textContent = 'mute';
+                muteBtn.style.borderColor = '';
+                muteBtn.style.color = '';
+            }
+        }
+
         // --- Streaming STT ---
         async function toggleStreaming() {
             if (isTextMode) return;
+            if (isMuted) { toggleMute(); return; } // Unmute on orb tap
             if (isStreaming) stopStreaming();
             else await startStreaming();
         }
@@ -389,6 +413,11 @@
                 audioProcessor.connect(audioContext.destination);
 
                 isStreaming = true;
+                isMuted = false;
+                muteBtn.style.display = '';
+                muteBtn.textContent = 'mute';
+                muteBtn.style.borderColor = '';
+                muteBtn.style.color = '';
                 setOrbState('listening');
                 setStatus('listening...', true);
                 liveTranscript.textContent = '';
@@ -400,7 +429,9 @@
 
         function stopStreaming() {
             isStreaming = false;
+            isMuted = false;
             wasStreaming = false;
+            muteBtn.style.display = 'none';
 
             if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
             if (streamSource) { streamSource.disconnect(); streamSource = null; }
@@ -552,9 +583,10 @@
         // --- UI Helpers ---
         function setOrbState(state) {
             orb.className = state === 'idle' ? '' : state;
-            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '\u266A', connecting: '\u00B7\u00B7\u00B7' };
+            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '\u266A', connecting: '\u00B7\u00B7\u00B7', muted: 'muted' };
             orbLabel.textContent = labels[state] || 'aether';
             if (state === 'idle') setStatus('tap the orb to speak');
+            if (state === 'muted') setStatus('muted — tap orb or unmute to resume');
         }
 
         function setStatus(text, active = false, error = false) {
