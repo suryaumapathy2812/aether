@@ -138,30 +138,30 @@ async def _ensure_agent(user_id: str) -> None:
 
     if not MULTI_USER_MODE:
         # ── Dev mode: single shared agent ──────────────────────
+        # Always prefer the most recently healthy agent (handles restarts/stale records)
+        freshest = await pool.fetchrow(
+            "SELECT id FROM agents WHERE status = 'running' ORDER BY last_health DESC NULLS LAST LIMIT 1"
+        )
+        if not freshest:
+            return  # No agents at all — agent hasn't registered yet
+
+        # Assign (or reassign) the user to the freshest agent
         existing = await pool.fetchrow(
             "SELECT id FROM agents WHERE user_id = $1 AND status = 'running'", user_id
         )
+        if existing and existing["id"] == freshest["id"]:
+            return  # Already on the right agent
+
+        # Clear old assignment if any
         if existing:
-            return
-        # Find an unassigned running agent
-        agent = await pool.fetchrow(
-            "SELECT id FROM agents WHERE user_id IS NULL AND status = 'running' LIMIT 1"
-        )
-        if agent:
             await pool.execute(
-                "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent["id"]
+                "UPDATE agents SET user_id = NULL WHERE id = $1", existing["id"]
             )
-            log.info(f"Dev mode: assigned agent {agent['id']} to user {user_id}")
-        else:
-            # All agents assigned — reassign any running agent (single-agent dev)
-            agent = await pool.fetchrow(
-                "SELECT id FROM agents WHERE status = 'running' LIMIT 1"
-            )
-            if agent:
-                await pool.execute(
-                    "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent["id"]
-                )
-                log.info(f"Dev mode: reassigned agent {agent['id']} to user {user_id}")
+
+        await pool.execute(
+            "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, freshest["id"]
+        )
+        log.info(f"Dev mode: assigned agent {freshest['id']} to user {user_id}")
         return
 
     # ── Multi-user mode: dedicated container per user ──────

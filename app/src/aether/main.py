@@ -121,7 +121,7 @@ async def _register_with_orchestrator():
                 f"{ORCHESTRATOR_URL}/agents/register",
                 json={
                     "agent_id": AGENT_ID,
-                    "host": socket.gethostname(),
+                    "host": os.getenv("AETHER_AGENT_HOST", socket.gethostname()),
                     "port": config.server.port,
                     "container_id": os.getenv("HOSTNAME", ""),
                     "user_id": AGENT_USER_ID or None,
@@ -253,7 +253,7 @@ async def health():
     return JSONResponse(
         {
             "status": "ok",
-            "version": "0.0.6",
+            "version": "0.0.7",
             "providers": {
                 "stt": stt_health,
                 "llm": llm_health,
@@ -267,6 +267,27 @@ async def health():
             "skills": [s.name for s in skill_loader.all()],
         }
     )
+
+
+@app.get("/memory/facts")
+async def memory_facts():
+    """Return all extracted facts from memory."""
+    facts = await memory_store.get_facts()
+    return JSONResponse({"facts": facts})
+
+
+@app.get("/memory/sessions")
+async def memory_sessions():
+    """Return session summaries."""
+    sessions = await memory_store.get_session_summaries()
+    return JSONResponse({"sessions": sessions})
+
+
+@app.get("/memory/conversations")
+async def memory_conversations(limit: int = 20):
+    """Return recent conversations."""
+    conversations = await memory_store.get_recent(limit=limit)
+    return JSONResponse({"conversations": conversations})
 
 
 async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
