@@ -14,6 +14,7 @@ def get_stt_provider() -> STTProvider:
     provider = config.stt.provider.lower()
     if provider == "deepgram":
         from aether.providers.deepgram_stt import DeepgramSTTProvider
+
         return DeepgramSTTProvider()
     raise ValueError(f"Unknown STT provider: {provider}")
 
@@ -22,6 +23,7 @@ def get_llm_provider() -> LLMProvider:
     provider = config.llm.provider.lower()
     if provider == "openai":
         from aether.providers.openai_llm import OpenAILLMProvider
+
         return OpenAILLMProvider()
     raise ValueError(f"Unknown LLM provider: {provider}")
 
@@ -30,5 +32,14 @@ def get_tts_provider() -> TTSProvider:
     provider = config.tts.provider.lower()
     if provider == "openai":
         from aether.providers.openai_tts import OpenAITTSProvider
+
         return OpenAITTSProvider()
+    elif provider == "sarvam":
+        from aether.providers.sarvam_tts import SarvamTTSProvider
+
+        return SarvamTTSProvider()
+    elif provider == "elevenlabs":
+        from aether.providers.elevenlabs_tts import ElevenLabsTTSProvider
+
+        return ElevenLabsTTSProvider()
     raise ValueError(f"Unknown TTS provider: {provider}")

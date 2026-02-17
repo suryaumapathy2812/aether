@@ -71,27 +71,6 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
-class TTSConfig:
-    """Text-to-speech provider settings."""
-
-    provider: str = "openai"
-    api_key: str = ""
-    model: str = "tts-1"
-    voice: str = "nova"
-    timeout: float = 15.0
-
-    @classmethod
-    def from_env(cls) -> TTSConfig:
-        return cls(
-            provider=os.getenv("AETHER_TTS_PROVIDER", "openai"),
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            model=os.getenv("AETHER_TTS_MODEL", "tts-1"),
-            voice=os.getenv("AETHER_TTS_VOICE", "nova"),
-            timeout=float(os.getenv("AETHER_TTS_TIMEOUT", "15.0")),
-        )
-
-
-@dataclass(frozen=True)
 class MemoryConfig:
     """Memory store settings."""
 
@@ -111,6 +90,51 @@ class MemoryConfig:
             embedding_dim=int(os.getenv("AETHER_EMBEDDING_DIM", "1536")),
             similarity_threshold=float(os.getenv("AETHER_MEMORY_THRESHOLD", "0.3")),
             search_limit=int(os.getenv("AETHER_MEMORY_SEARCH_LIMIT", "5")),
+        )
+
+
+@dataclass(frozen=True)
+class TTSConfig:
+    """Text-to-speech provider settings."""
+
+    provider: str = "openai"
+    api_key: str = ""
+    model: str = "tts-1"
+    voice: str = "nova"
+    timeout: float = 15.0
+    # Sarvam (Bulbul v3)
+    sarvam_api_key: str = ""
+    sarvam_model: str = "bulbul:v3"
+    sarvam_speaker: str = "shubh"
+    sarvam_language: str = "en-IN"
+    sarvam_sample_rate: int = 24000
+    # ElevenLabs
+    elevenlabs_api_key: str = ""
+    elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+
+    @classmethod
+    def from_env(cls) -> TTSConfig:
+        return cls(
+            provider=os.getenv("AETHER_TTS_PROVIDER", "openai"),
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            model=os.getenv("AETHER_TTS_MODEL", "tts-1"),
+            voice=os.getenv("AETHER_TTS_VOICE", "nova"),
+            timeout=float(os.getenv("AETHER_TTS_TIMEOUT", "15.0")),
+            # Sarvam
+            sarvam_api_key=os.getenv("SARVAM_API_KEY", ""),
+            sarvam_model=os.getenv("AETHER_SARVAM_MODEL", "bulbul:v3"),
+            sarvam_speaker=os.getenv("AETHER_SARVAM_SPEAKER", "shubh"),
+            sarvam_language=os.getenv("AETHER_SARVAM_LANGUAGE", "en-IN"),
+            sarvam_sample_rate=int(os.getenv("AETHER_SARVAM_SAMPLE_RATE", "24000")),
+            # ElevenLabs
+            elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            elevenlabs_model=os.getenv(
+                "AETHER_ELEVENLABS_MODEL", "eleven_multilingual_v2"
+            ),
+            elevenlabs_voice_id=os.getenv(
+                "AETHER_ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"
+            ),
         )
 
 
