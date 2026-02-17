@@ -146,6 +146,7 @@ class ServerConfig:
     port: int = 8000
     ws_send_timeout: float = 5.0
     debounce_delay: float = 1.5
+    working_dir: str = "/"  # Docker default: full access. Container is the sandbox.
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -154,6 +155,7 @@ class ServerConfig:
             port=int(os.getenv("AETHER_PORT", "8000")),
             ws_send_timeout=float(os.getenv("AETHER_WS_SEND_TIMEOUT", "5.0")),
             debounce_delay=float(os.getenv("AETHER_DEBOUNCE_DELAY", "1.5")),
+            working_dir=os.getenv("AETHER_WORKING_DIR", "/"),
         )
 
 

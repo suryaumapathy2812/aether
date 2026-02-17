@@ -1,9 +1,12 @@
 """
-Aether v0.04 — Alive.
+Aether v0.05 — Hands.
 
-Changes from v0.03:
-- Session greeting with memory (personalized hello on connect)
-- Client WebSocket reconnect with session continuity
+Changes from v0.04:
+- Tool system: 5 core tools (read_file, write_file, list_directory, run_command, web_search)
+- Agentic loop: LLM can call tools, get results, continue
+- Status/acknowledge: each tool has status_text for UI spinners / voice acknowledgment
+- Skill system: SKILL.md discovery + description-matching trigger
+- Background tasks: simple sub-agents (max 3 concurrent, 60s timeout)
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -36,6 +39,15 @@ from aether.processors.tts import TTSProcessor
 from aether.processors.vision import VisionProcessor
 from aether.greeting import generate_greeting
 from aether.providers import get_stt_provider, get_llm_provider, get_tts_provider
+from aether.tools.registry import ToolRegistry
+from aether.tools.read_file import ReadFileTool
+from aether.tools.write_file import WriteFileTool
+from aether.tools.list_directory import ListDirectoryTool
+from aether.tools.run_command import RunCommandTool
+from aether.tools.web_search import WebSearchTool
+from aether.tools.run_task import RunTaskTool
+from aether.skills.loader import SkillLoader
+from aether.agents.task_runner import TaskRunner
 
 # --- Setup ---
 logging.basicConfig(
@@ -46,7 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger("aether")
 
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.4")
+app = FastAPI(title="Aether", version="0.0.5")
 
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
@@ -60,6 +72,25 @@ stt_provider = get_stt_provider()
 llm_provider = get_llm_provider()
 tts_provider = get_tts_provider()
 
+# --- Tool Registry ---
+WORKING_DIR = config.server.working_dir
+
+tool_registry = ToolRegistry()
+tool_registry.register(ReadFileTool(working_dir=WORKING_DIR))
+tool_registry.register(WriteFileTool(working_dir=WORKING_DIR))
+tool_registry.register(ListDirectoryTool(working_dir=WORKING_DIR))
+tool_registry.register(RunCommandTool(working_dir=WORKING_DIR))
+tool_registry.register(WebSearchTool())
+
+# --- Background Task Runner ---
+task_runner = TaskRunner(provider=llm_provider, tool_registry=tool_registry)
+tool_registry.register(RunTaskTool(task_runner))
+
+# --- Skill Loader ---
+SKILLS_DIR = str(Path(__file__).parent.parent.parent / "skills")
+skill_loader = SkillLoader(skills_dirs=[SKILLS_DIR])
+skill_loader.discover()
+
 
 @app.on_event("startup")
 async def startup():
@@ -68,10 +99,12 @@ async def startup():
     await llm_provider.start()
     await tts_provider.start()
     logger.info(
-        "Aether v0.03 ready (providers: STT=%s, LLM=%s, TTS=%s)",
+        "Aether v0.05 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
         config.stt.provider,
         config.llm.provider,
         config.tts.provider,
+        tool_registry.tool_names(),
+        [s.name for s in skill_loader.all()],
     )
 
 
@@ -105,7 +138,7 @@ async def health():
     return JSONResponse(
         {
             "status": "ok",
-            "version": "0.0.3",
+            "version": "0.0.5",
             "providers": {
                 "stt": stt_health,
                 "llm": llm_health,
@@ -115,6 +148,8 @@ async def health():
                 "facts_count": len(facts),
                 "has_conversations": len(recent) > 0,
             },
+            "tools": tool_registry.tool_names(),
+            "skills": [s.name for s in skill_loader.all()],
         }
     )
 
@@ -180,6 +215,36 @@ async def _run_llm_tts_streaming(
 
                 sentence_index += 1
 
+            elif llm_frame.type == FrameType.STATUS:
+                await _send(ws, "status", llm_frame.data.get("text", "Working..."))
+
+            elif llm_frame.type == FrameType.TOOL_CALL:
+                await _send(
+                    ws,
+                    "tool_call",
+                    json.dumps(
+                        {
+                            "name": llm_frame.data["tool_name"],
+                            "call_id": llm_frame.data.get("call_id", ""),
+                        }
+                    ),
+                )
+
+            elif llm_frame.type == FrameType.TOOL_RESULT:
+                await _send(
+                    ws,
+                    "tool_result",
+                    json.dumps(
+                        {
+                            "name": llm_frame.data["tool_name"],
+                            "output": llm_frame.data["output"][
+                                :500
+                            ],  # Truncate for client
+                            "error": llm_frame.data.get("error", False),
+                        }
+                    ),
+                )
+
             elif llm_frame.type == FrameType.CONTROL:
                 if llm_frame.data.get("action") == "llm_done":
                     await _send(ws, "stream_end")
@@ -214,7 +279,12 @@ async def websocket_endpoint(ws: WebSocket):
     # Create per-connection processor instances (they hold conversation state)
     batch_stt = STTProcessor(stt_provider)
     memory_retriever = MemoryRetrieverProcessor(memory_store)
-    llm = LLMProcessor(llm_provider, memory_store)
+    llm = LLMProcessor(
+        llm_provider,
+        memory_store,
+        tool_registry=tool_registry,
+        skill_loader=skill_loader,
+    )
     tts = TTSProcessor(tts_provider)
 
     await batch_stt.start()
@@ -333,7 +403,9 @@ async def websocket_endpoint(ws: WebSocket):
         except Exception as e:
             logger.error(f"STT event handler error: {e}", exc_info=True)
 
-    async def _session_greeting(ws_conn: WebSocket, tts_proc: TTSProcessor, is_reconnect: bool = False):
+    async def _session_greeting(
+        ws_conn: WebSocket, tts_proc: TTSProcessor, is_reconnect: bool = False
+    ):
         """Generate and speak a personalized greeting."""
         nonlocal is_responding
         try:

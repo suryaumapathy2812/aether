@@ -20,6 +20,9 @@ class FrameType(str, Enum):
     VISION = "vision"
     MEMORY = "memory"
     CONTROL = "control"
+    TOOL_CALL = "tool_call"      # LLM wants to call a tool
+    TOOL_RESULT = "tool_result"  # Tool execution result
+    STATUS = "status"            # Status/acknowledge for UI/voice
 
 
 @dataclass
@@ -68,4 +71,26 @@ def control_frame(action: str, **kwargs) -> Frame:
     return Frame(
         type=FrameType.CONTROL,
         data={"action": action, **kwargs},
+    )
+
+
+def tool_call_frame(tool_name: str, arguments: dict, call_id: str = "") -> Frame:
+    return Frame(
+        type=FrameType.TOOL_CALL,
+        data={"tool_name": tool_name, "arguments": arguments, "call_id": call_id},
+    )
+
+
+def tool_result_frame(tool_name: str, output: str, call_id: str = "", error: bool = False) -> Frame:
+    return Frame(
+        type=FrameType.TOOL_RESULT,
+        data={"tool_name": tool_name, "output": output, "call_id": call_id, "error": error},
+    )
+
+
+def status_frame(text: str, tool_name: str = "") -> Frame:
+    """Status frame — shown as spinner text in UI, spoken as TTS acknowledge in voice."""
+    return Frame(
+        type=FrameType.STATUS,
+        data={"text": text, "tool_name": tool_name},
     )
