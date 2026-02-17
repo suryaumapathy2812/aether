@@ -22,13 +22,26 @@
         #status {
             font-size: 0.85rem;
             color: #666;
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
             min-height: 1.2rem;
             transition: color 0.3s;
         }
-
         #status.active { color: #4ecdc4; }
         #status.error { color: #ff6b6b; }
+
+        /* Live transcript — shows what user is saying in real-time */
+        #live-transcript {
+            font-size: 0.85rem;
+            color: #4ecdc4;
+            margin-bottom: 1.5rem;
+            min-height: 1.2rem;
+            max-width: 500px;
+            text-align: center;
+            opacity: 0.7;
+            font-style: italic;
+            transition: opacity 0.2s;
+        }
+        #live-transcript.active { opacity: 1; font-style: normal; }
 
         #orb-container {
             position: relative;
@@ -57,13 +70,11 @@
             box-shadow: 0 0 60px rgba(78, 205, 196, 0.2);
             animation: pulse 2s ease-in-out infinite;
         }
-
         #orb.thinking {
             border-color: #a78bfa;
             box-shadow: 0 0 60px rgba(167, 139, 250, 0.2);
             animation: pulse 1.2s ease-in-out infinite;
         }
-
         #orb.speaking {
             border-color: #f59e0b;
             box-shadow: 0 0 60px rgba(245, 158, 11, 0.2);
@@ -104,16 +115,11 @@
             opacity: 0;
             animation: fadeIn 0.3s ease forwards;
         }
-
         .message.user { color: #888; text-align: right; }
         .message.assistant { color: #e0e0e0; }
-
-        /* Streaming text appears word by word */
         .message.streaming { opacity: 1; }
 
-        @keyframes fadeIn {
-            to { opacity: 1; }
-        }
+        @keyframes fadeIn { to { opacity: 1; } }
 
         #controls {
             position: fixed;
@@ -133,7 +139,6 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-
         .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
 
         #text-input-container {
@@ -156,14 +161,14 @@
             font-size: 0.9rem;
             outline: none;
         }
-
         #text-input:focus { border-color: #4ecdc4; }
     </style>
 </head>
 <body>
     <div id="status">tap the orb to speak</div>
+    <div id="live-transcript"></div>
 
-    <div id="orb-container" onclick="toggleRecording()">
+    <div id="orb-container" onclick="toggleStreaming()">
         <div id="orb">
             <span id="orb-label">aether</span>
         </div>
@@ -184,22 +189,25 @@
     <script>
         // --- State ---
         let ws = null;
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let isRecording = false;
         let isTextMode = false;
         let audioContext = null;
 
-        // --- Audio Queue (v0.02) ---
-        // Queues audio chunks and plays them in order, back-to-back
+        // --- Streaming STT state ---
+        let isStreaming = false;
+        let audioStream = null;       // MediaStream from getUserMedia
+        let audioProcessor = null;    // ScriptProcessorNode or AudioWorklet
+        let streamSource = null;      // MediaStreamAudioSourceNode
+        let streamingMessageEl = null;
+
+        // --- Audio playback queue ---
         const audioQueue = [];
         let isPlaying = false;
-        let streamingMessageEl = null;  // The DOM element being built sentence-by-sentence
 
         // --- Elements ---
         const orb = document.getElementById('orb');
         const orbLabel = document.getElementById('orb-label');
-        const status = document.getElementById('status');
+        const statusEl = document.getElementById('status');
+        const liveTranscript = document.getElementById('live-transcript');
         const conversation = document.getElementById('conversation');
         const textContainer = document.getElementById('text-input-container');
         const textInput = document.getElementById('text-input');
@@ -210,7 +218,7 @@
             ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
             ws.onopen = () => {
-                setStatus('ready', false);
+                setStatus('ready');
                 orbLabel.textContent = 'aether';
             };
 
@@ -218,21 +226,17 @@
                 const msg = JSON.parse(event.data);
 
                 switch (msg.type) {
+                    case 'transcript':
+                        handleTranscript(msg.data, msg.interim);
+                        break;
                     case 'text_chunk':
                         handleTextChunk(msg.data, msg.index);
                         break;
                     case 'audio_chunk':
-                        handleAudioChunk(msg.data, msg.index);
+                        queueAudio(msg.data);
                         break;
                     case 'stream_end':
                         handleStreamEnd();
-                        break;
-                    // Legacy v0.01 support
-                    case 'audio':
-                        queueAudio(msg.data);
-                        break;
-                    case 'text':
-                        addMessage(msg.data, msg.role || 'assistant');
                         break;
                     case 'status':
                         setStatus(msg.data, true);
@@ -241,19 +245,135 @@
             };
 
             ws.onclose = () => {
-                setStatus('disconnected — reconnecting...', false);
+                setStatus('disconnected — reconnecting...');
                 setTimeout(connect, 2000);
             };
 
-            ws.onerror = () => {
-                setStatus('connection error', true, true);
-            };
+            ws.onerror = () => setStatus('connection error', false, true);
         }
 
-        // --- Streaming Text (v0.02) ---
+        // --- Streaming STT (v0.02) ---
+        async function toggleStreaming() {
+            if (isTextMode) return;
+
+            if (isStreaming) {
+                stopStreaming();
+            } else {
+                await startStreaming();
+            }
+        }
+
+        async function startStreaming() {
+            try {
+                // Get microphone
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    }
+                });
+
+                // Tell server to open Deepgram connection
+                ws.send(JSON.stringify({ type: 'stream_start' }));
+
+                // Set up audio processing to send chunks
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 16000,
+                    });
+                }
+
+                streamSource = audioContext.createMediaStreamSource(audioStream);
+
+                // Use ScriptProcessor to capture raw PCM and send as chunks
+                // (AudioWorklet is better but ScriptProcessor works everywhere)
+                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                audioProcessor.onaudioprocess = (e) => {
+                    if (!isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+
+                    // Convert float32 to int16 PCM
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+
+                    // Send as base64
+                    const bytes = new Uint8Array(pcm16.buffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.length; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    ws.send(JSON.stringify({
+                        type: 'audio_chunk',
+                        data: btoa(binary),
+                    }));
+                };
+
+                streamSource.connect(audioProcessor);
+                audioProcessor.connect(audioContext.destination);
+
+                isStreaming = true;
+                setOrbState('listening');
+                setStatus('listening...', true);
+                liveTranscript.textContent = '';
+
+            } catch (err) {
+                console.error('Streaming start error:', err);
+                setStatus('microphone access denied', false, true);
+            }
+        }
+
+        function stopStreaming() {
+            isStreaming = false;
+
+            // Disconnect audio processing
+            if (audioProcessor) {
+                audioProcessor.disconnect();
+                audioProcessor = null;
+            }
+            if (streamSource) {
+                streamSource.disconnect();
+                streamSource = null;
+            }
+            if (audioStream) {
+                audioStream.getTracks().forEach(t => t.stop());
+                audioStream = null;
+            }
+
+            // Tell server to close Deepgram connection
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stream_stop' }));
+            }
+
+            liveTranscript.textContent = '';
+            setOrbState('idle');
+        }
+
+        // --- Handle live transcription ---
+        function handleTranscript(text, interim) {
+            if (interim) {
+                // Show interim (partial) transcript — updates in real-time
+                liveTranscript.textContent = text;
+                liveTranscript.className = 'active';
+            } else {
+                // Final transcript — add as user message, clear live display
+                liveTranscript.textContent = '';
+                liveTranscript.className = '';
+                addMessage(text, 'user');
+                setOrbState('thinking');
+                setStatus('thinking...', true);
+            }
+        }
+
+        // --- Streaming LLM response ---
         function handleTextChunk(text, index) {
             if (index === 0) {
-                // First sentence — create the message element
                 streamingMessageEl = document.createElement('div');
                 streamingMessageEl.className = 'message assistant streaming';
                 streamingMessageEl.textContent = text;
@@ -261,42 +381,47 @@
                 setOrbState('speaking');
                 setStatus('speaking...', true);
             } else if (streamingMessageEl) {
-                // Append subsequent sentences with a space
                 streamingMessageEl.textContent += ' ' + text;
             }
             conversation.scrollTop = conversation.scrollHeight;
         }
 
-        // --- Audio Queue (v0.02) ---
-        function handleAudioChunk(base64Data, index) {
-            queueAudio(base64Data);
-        }
-
         function handleStreamEnd() {
-            // Mark streaming message as complete
             if (streamingMessageEl) {
                 streamingMessageEl.classList.remove('streaming');
                 streamingMessageEl = null;
             }
-            // Trim old messages
             while (conversation.children.length > 10) {
                 conversation.removeChild(conversation.firstChild);
             }
+            // If still streaming mic, go back to listening
+            if (isStreaming) {
+                // Small delay before going back to listening state
+                setTimeout(() => {
+                    if (isStreaming && !isPlaying) {
+                        setOrbState('listening');
+                        setStatus('listening...', true);
+                    }
+                }, 500);
+            }
         }
 
+        // --- Audio Queue ---
         function queueAudio(base64Data) {
             audioQueue.push(base64Data);
-            if (!isPlaying) {
-                playNextInQueue();
-            }
+            if (!isPlaying) playNextInQueue();
         }
 
         async function playNextInQueue() {
             if (audioQueue.length === 0) {
                 isPlaying = false;
-                // Only go idle if stream has ended
                 if (!streamingMessageEl) {
-                    setOrbState('idle');
+                    if (isStreaming) {
+                        setOrbState('listening');
+                        setStatus('listening...', true);
+                    } else {
+                        setOrbState('idle');
+                    }
                 }
                 return;
             }
@@ -306,6 +431,7 @@
 
             const base64Data = audioQueue.shift();
             try {
+                // Use a separate context for playback (may have different sample rate)
                 if (!audioContext) {
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 }
@@ -320,80 +446,11 @@
                 const source = audioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(audioContext.destination);
-
-                source.onended = () => {
-                    // Play next chunk immediately when this one finishes
-                    playNextInQueue();
-                };
-
+                source.onended = () => playNextInQueue();
                 source.start();
             } catch (err) {
                 console.error('Audio playback error:', err);
-                // Try next chunk even if this one failed
                 playNextInQueue();
-            }
-        }
-
-        // --- Recording ---
-        async function toggleRecording() {
-            if (isTextMode) return;
-
-            if (isRecording) {
-                stopRecording();
-            } else {
-                await startRecording();
-            }
-        }
-
-        async function startRecording() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                audioChunks = [];
-
-                mediaRecorder.ondataavailable = (e) => {
-                    if (e.data.size > 0) audioChunks.push(e.data);
-                };
-
-                mediaRecorder.onstop = async () => {
-                    try {
-                        const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                        const buffer = await blob.arrayBuffer();
-                        const bytes = new Uint8Array(buffer);
-                        let binary = '';
-                        for (let i = 0; i < bytes.length; i++) {
-                            binary += String.fromCharCode(bytes[i]);
-                        }
-                        const base64 = btoa(binary);
-
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            setOrbState('thinking');
-                            setStatus('thinking...', true);
-                            ws.send(JSON.stringify({ type: 'audio', data: base64 }));
-                        }
-                    } catch (err) {
-                        console.error('Audio encoding error:', err);
-                        setStatus('audio error — try again', false, true);
-                        setOrbState('idle');
-                    } finally {
-                        stream.getTracks().forEach(t => t.stop());
-                    }
-                };
-
-                mediaRecorder.start();
-                isRecording = true;
-                setOrbState('listening');
-                setStatus('listening...', true);
-            } catch (err) {
-                setStatus('microphone access denied', false, true);
-                console.error('Mic error:', err);
-            }
-        }
-
-        function stopRecording() {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-                isRecording = false;
             }
         }
 
@@ -401,7 +458,10 @@
         function toggleTextMode() {
             isTextMode = !isTextMode;
             textContainer.style.display = isTextMode ? 'block' : 'none';
-            if (isTextMode) textInput.focus();
+            if (isTextMode) {
+                if (isStreaming) stopStreaming();
+                textInput.focus();
+            }
         }
 
         function sendText() {
@@ -433,7 +493,6 @@
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 canvas.getContext('2d').drawImage(video, 0, 0);
-
                 stream.getTracks().forEach(t => t.stop());
 
                 const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
@@ -441,7 +500,7 @@
 
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
-                    setStatus('image sent — speak or type your question', true);
+                    setStatus('image sent — now speak your question', true);
                 }
             } catch (err) {
                 setStatus('camera access denied', false, true);
@@ -454,12 +513,12 @@
             orb.className = state === 'idle' ? '' : state;
             const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '♪' };
             orbLabel.textContent = labels[state] || 'aether';
-            if (state === 'idle') setStatus('ready', false);
+            if (state === 'idle') setStatus('tap the orb to speak');
         }
 
         function setStatus(text, active = false, error = false) {
-            status.textContent = text;
-            status.className = error ? 'error' : (active ? 'active' : '');
+            statusEl.textContent = text;
+            statusEl.className = error ? 'error' : (active ? 'active' : '');
         }
 
         function addMessage(text, role) {
@@ -468,7 +527,6 @@
             div.textContent = text;
             conversation.appendChild(div);
             conversation.scrollTop = conversation.scrollHeight;
-
             while (conversation.children.length > 10) {
                 conversation.removeChild(conversation.firstChild);
             }
