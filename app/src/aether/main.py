@@ -87,8 +87,12 @@ task_runner = TaskRunner(provider=llm_provider, tool_registry=tool_registry)
 tool_registry.register(RunTaskTool(task_runner))
 
 # --- Skill Loader ---
-SKILLS_DIR = str(Path(__file__).parent.parent.parent / "skills")
-skill_loader = SkillLoader(skills_dirs=[SKILLS_DIR])
+APP_ROOT = Path(__file__).parent.parent.parent
+SKILLS_DIRS = [
+    str(APP_ROOT / "skills"),  # Custom skills
+    str(APP_ROOT / ".agents" / "skills"),  # skills.sh marketplace
+]
+skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
 
 
