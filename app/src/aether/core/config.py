@@ -79,6 +79,10 @@ class MemoryConfig:
     embedding_dim: int = 1536
     similarity_threshold: float = 0.3
     search_limit: int = 5
+    # v0.07: action memory + session summaries
+    action_retention_days: int = 7
+    session_summary_limit: int = 3
+    action_output_max_chars: int = 1000
 
     @classmethod
     def from_env(cls) -> MemoryConfig:
@@ -90,6 +94,11 @@ class MemoryConfig:
             embedding_dim=int(os.getenv("AETHER_EMBEDDING_DIM", "1536")),
             similarity_threshold=float(os.getenv("AETHER_MEMORY_THRESHOLD", "0.3")),
             search_limit=int(os.getenv("AETHER_MEMORY_SEARCH_LIMIT", "5")),
+            action_retention_days=int(os.getenv("AETHER_ACTION_RETENTION_DAYS", "7")),
+            session_summary_limit=int(os.getenv("AETHER_SESSION_SUMMARY_LIMIT", "3")),
+            action_output_max_chars=int(
+                os.getenv("AETHER_ACTION_OUTPUT_MAX_CHARS", "1000")
+            ),
         )
 
 

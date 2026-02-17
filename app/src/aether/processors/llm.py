@@ -254,6 +254,13 @@ class LLMProcessor(Processor):
                     tc.name, result.output, call_id=tc.id, error=result.error
                 )
 
+                # Persist action to memory (fire-and-forget)
+                asyncio.create_task(
+                    self._save_action(
+                        tc.name, tc.arguments, result.output, result.error
+                    )
+                )
+
                 # Add tool result to messages for the next LLM call
                 messages.append(
                     {
@@ -273,6 +280,21 @@ class LLMProcessor(Processor):
                 "I've done a lot of work on that. Let me know if you need more.",
                 role="assistant",
             )
+
+    async def _save_action(
+        self, tool_name: str, arguments: dict, output: str, error: bool
+    ) -> None:
+        """Persist a tool action to memory (fire-and-forget)."""
+        try:
+            await self.store.add_action(
+                tool_name=tool_name,
+                arguments=arguments,
+                output=output,
+                error=error,
+                session_id=getattr(self, "session_id", None),
+            )
+        except Exception as e:
+            logger.error(f"Failed to store action: {e}")
 
     def _build_messages(self, user_text: str) -> list[dict]:
         """Build the messages list for the LLM call."""

@@ -1,12 +1,13 @@
 """
-Aether v0.06 — The Demo.
+Aether v0.07 — Memory That Matters.
 
-Changes from v0.05:
-- Voice acknowledgments: status frames synthesized as TTS during tool execution
-- Upgraded web client: two-column layout with activity panel, tool spinners, result previews
-- TUI client: Rich-based terminal UI with prompt_toolkit input and tool panels
-- Workspace endpoint: GET /workspace/ for browsing files Aether creates
-- Clean logging: color formatter, pipeline timing, httpx suppression
+Changes from v0.06:
+- Four-tier memory: conversations, facts, actions, sessions
+- Action memory: tool calls stored with embeddings for semantic search
+- Session summaries: generated on disconnect, loaded into greeting on reconnect
+- Action compaction: old actions summarized into facts on startup
+- Enhanced fact extraction: expanded prompt for preferences and tool patterns
+- Cross-session continuity: returning users get context from previous sessions
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -17,6 +18,7 @@ import asyncio
 import base64
 import json
 import logging
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -104,7 +106,7 @@ async def startup():
     await llm_provider.start()
     await tts_provider.start()
     logger.info(
-        "Aether v0.06 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
+        "Aether v0.07 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
         config.stt.provider,
         config.llm.provider,
         config.tts.provider,
@@ -126,7 +128,7 @@ async def root():
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return HTMLResponse(index_path.read_text())
-    return HTMLResponse("<h1>Aether v0.06</h1><p>Client files not found.</p>")
+    return HTMLResponse("<h1>Aether v0.07</h1><p>Client files not found.</p>")
 
 
 @app.get("/workspace")
@@ -247,6 +249,71 @@ async def _speak_status(ws: WebSocket, tts: TTSProcessor, text: str):
                 )
     except Exception as e:
         logger.debug(f"Status TTS skipped: {e}")
+
+
+SESSION_SUMMARY_PROMPT = """Summarize this conversation session in 2-3 sentences.
+Focus on what was accomplished (files created, questions answered, tasks completed), not what was said.
+If tools were used, mention what they did.
+
+Conversation:
+{conversation}
+
+Summary:"""
+
+
+async def _summarize_session(
+    session_id: str,
+    started_at: float,
+    conversation_history: list[dict],
+    turn_count: int,
+) -> None:
+    """Summarize a session and store it for cross-session continuity."""
+    import time as _time
+
+    try:
+        # Build conversation text for the summary prompt
+        conv_lines = []
+        tools_used = set()
+        for msg in conversation_history[-20:]:  # Last 20 messages max
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                conv_lines.append(f"User: {content}")
+            elif role == "assistant" and content:
+                conv_lines.append(f"Aether: {content}")
+            elif role == "tool":
+                tools_used.add("tool")  # We don't have the name here
+
+        if not conv_lines:
+            return
+
+        conv_text = "\n".join(conv_lines)
+        prompt = SESSION_SUMMARY_PROMPT.format(conversation=conv_text)
+
+        # Generate summary
+        summary = ""
+        async for token in llm_provider.generate_stream(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0.3,
+        ):
+            summary += token
+
+        summary = summary.strip()
+        if not summary:
+            return
+
+        await memory_store.add_session_summary(
+            session_id=session_id,
+            summary=summary,
+            started_at=started_at,
+            ended_at=_time.time(),
+            turns=turn_count,
+            tools_used=list(tools_used),
+        )
+
+    except Exception as e:
+        logger.error(f"Session summary failed: {e}")
 
 
 async def _run_llm_tts_streaming(
@@ -376,6 +443,12 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     logger.info("Client connected")
 
+    # Session tracking
+    session_id = str(uuid.uuid4())[:8]
+    session_started_at = __import__("time").time()
+    turn_count = 0
+    tools_used_in_session: list[str] = []
+
     # Create per-connection processor instances (they hold conversation state)
     batch_stt = STTProcessor(stt_provider)
     memory_retriever = MemoryRetrieverProcessor(memory_store)
@@ -385,6 +458,7 @@ async def websocket_endpoint(ws: WebSocket):
         tool_registry=tool_registry,
         skill_loader=skill_loader,
     )
+    llm.session_id = session_id  # For action memory
     tts = TTSProcessor(tts_provider)
 
     await batch_stt.start()
@@ -402,12 +476,13 @@ async def websocket_endpoint(ws: WebSocket):
 
     async def _trigger_response(transcript: str):
         """Run the LLM/TTS pipeline for a complete utterance."""
-        nonlocal is_responding, pending_vision_frame
+        nonlocal is_responding, pending_vision_frame, turn_count
 
         is_responding = True
         await _send(ws, "status", "thinking...")
 
         try:
+            turn_count += 1
             logger.info(f'STT: "{transcript}"')
             await _send(ws, "transcript", transcript, interim=False)
 
@@ -636,6 +711,16 @@ async def websocket_endpoint(ws: WebSocket):
             except asyncio.CancelledError:
                 pass
         await stt_provider.disconnect_stream()
+
+        # Session summary BEFORE stopping providers — needs llm_provider.client
+        if turn_count > 0:
+            await _summarize_session(
+                session_id=session_id,
+                started_at=session_started_at,
+                conversation_history=llm.conversation_history,
+                turn_count=turn_count,
+            )
+
         await batch_stt.stop()
         await llm.stop()
         await tts.stop()

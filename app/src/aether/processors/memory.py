@@ -41,6 +41,16 @@ class MemoryRetrieverProcessor(Processor):
                 for r in results:
                     if r.get("type") == "fact":
                         memories.append(f"[Known fact] {r['fact']}")
+                    elif r.get("type") == "action":
+                        args = r.get("arguments", "{}")
+                        output_preview = r.get("output", "")[:100]
+                        status = "failed" if r.get("error") else "succeeded"
+                        memories.append(
+                            f"[Past action] Used {r['tool_name']}({args}) — "
+                            f"{status}: {output_preview}"
+                        )
+                    elif r.get("type") == "session":
+                        memories.append(f"[Previous session] {r['summary']}")
                     elif r.get("type") == "conversation":
                         memories.append(
                             f"[Previous conversation] User said: {r['user_message']} — "

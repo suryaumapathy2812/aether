@@ -1,12 +1,12 @@
 """
 Aether Memory Store — SQLite + OpenAI embeddings.
 
-v0.03: Two-tier memory:
+v0.03: Two-tier memory (conversations + facts)
+v0.07: Four-tier memory:
 1. conversations — raw exchanges (user said X, assistant said Y)
 2. facts — extracted knowledge ("user's name is Surya", "user prefers Python")
-
-Facts are extracted async after each conversation turn using a lightweight
-LLM call. This is what makes Aether feel like it *knows* you.
+3. actions — tool calls and results ("created hello-world/main.py at 3pm Tuesday")
+4. sessions — session summaries for cross-session continuity
 """
 
 from __future__ import annotations
@@ -30,12 +30,14 @@ FACT_EXTRACTION_PROMPT = """Extract key facts from this conversation turn. Focus
 - Preferences and opinions ("I like...", "I prefer...", "I hate...")
 - Plans and goals ("I'm working on...", "I want to...")
 - Relationships ("my wife...", "my friend...")
+- Workflow patterns ("User always asks for Python projects", "User prefers files in /rough")
+- Tool usage preferences ("User frequently checks directory contents")
 - Any specific factual information the user shared
 
 Return a JSON array of fact strings. Each fact should be a short, standalone statement.
 If no significant facts are present, return an empty array [].
 
-Example output: ["User's name is Alex", "User works at Google", "User prefers dark mode"]
+Example output: ["User's name is Alex", "User works at Google", "User prefers Python projects with src/ layout"]
 
 Conversation:
 User: {user_message}
@@ -64,7 +66,7 @@ class MemoryStore:
             )
         """)
 
-        # New: facts table
+        # Facts table
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS facts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +78,39 @@ class MemoryStore:
             )
         """)
 
+        # v0.07: Actions table — tool calls and results
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                arguments TEXT NOT NULL,
+                output TEXT NOT NULL,
+                error BOOLEAN DEFAULT FALSE,
+                embedding TEXT NOT NULL,
+                session_id TEXT,
+                timestamp REAL NOT NULL
+            )
+        """)
+
+        # v0.07: Sessions table — cross-session continuity
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                ended_at REAL NOT NULL,
+                turns INTEGER NOT NULL,
+                tools_used TEXT
+            )
+        """)
+
         await self._db.commit()
+
+        # Compact old actions on startup
+        await self._compact_old_actions()
+
         logger.info(f"Memory store initialized at {self.db_path}")
 
     async def stop(self) -> None:
@@ -132,6 +166,7 @@ class MemoryStore:
             else:
                 # Sometimes model wraps in markdown
                 import re
+
                 match = re.search(r"\[.*\]", content, re.DOTALL)
                 if match:
                     facts = json.loads(match.group())
@@ -187,13 +222,15 @@ class MemoryStore:
                 / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
             )
             if similarity > config.memory.similarity_threshold:
-                results.append({
-                    "type": "conversation",
-                    "user_message": row[1],
-                    "assistant_message": row[2],
-                    "similarity": similarity,
-                    "timestamp": row[4],
-                })
+                results.append(
+                    {
+                        "type": "conversation",
+                        "user_message": row[1],
+                        "assistant_message": row[2],
+                        "similarity": similarity,
+                        "timestamp": row[4],
+                    }
+                )
 
         # Search facts (these get boosted because they're distilled knowledge)
         cursor = await self._db.execute(
@@ -209,12 +246,62 @@ class MemoryStore:
             )
             # Facts get a 0.1 boost — they're more valuable than raw conversations
             if similarity > config.memory.similarity_threshold:
-                results.append({
-                    "type": "fact",
-                    "fact": row[1],
-                    "similarity": similarity + 0.1,
-                    "timestamp": row[3],
-                })
+                results.append(
+                    {
+                        "type": "fact",
+                        "fact": row[1],
+                        "similarity": similarity + 0.1,
+                        "timestamp": row[3],
+                    }
+                )
+
+        # Search actions (tool calls — what Aether *did*)
+        cursor = await self._db.execute(
+            "SELECT id, tool_name, arguments, output, error, embedding, timestamp FROM actions"
+        )
+        action_rows = await cursor.fetchall()
+
+        for row in action_rows:
+            stored_vec = np.array(json.loads(row[5]))
+            similarity = float(
+                np.dot(query_vec, stored_vec)
+                / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
+            )
+            if similarity > config.memory.similarity_threshold:
+                results.append(
+                    {
+                        "type": "action",
+                        "tool_name": row[1],
+                        "arguments": row[2],
+                        "output": row[3][:200],  # Preview only
+                        "error": bool(row[4]),
+                        "similarity": similarity
+                        + 0.05,  # Slight boost over conversations
+                        "timestamp": row[6],
+                    }
+                )
+
+        # Search session summaries
+        cursor = await self._db.execute(
+            "SELECT id, summary, embedding, ended_at FROM sessions"
+        )
+        session_rows = await cursor.fetchall()
+
+        for row in session_rows:
+            stored_vec = np.array(json.loads(row[2]))
+            similarity = float(
+                np.dot(query_vec, stored_vec)
+                / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
+            )
+            if similarity > config.memory.similarity_threshold:
+                results.append(
+                    {
+                        "type": "session",
+                        "summary": row[1],
+                        "similarity": similarity + 0.05,
+                        "timestamp": row[3],
+                    }
+                )
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:limit]
@@ -241,9 +328,199 @@ class MemoryStore:
         )
         rows = await cursor.fetchall()
         return [
-            {"id": r[0], "user_message": r[1], "assistant_message": r[2], "timestamp": r[3]}
+            {
+                "id": r[0],
+                "user_message": r[1],
+                "assistant_message": r[2],
+                "timestamp": r[3],
+            }
             for r in rows
         ]
+
+    # --- Action memory (v0.07) ---
+
+    async def add_action(
+        self,
+        tool_name: str,
+        arguments: dict,
+        output: str,
+        error: bool = False,
+        session_id: str | None = None,
+    ) -> None:
+        """Store a tool call and its result."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        # Truncate output to keep DB manageable
+        max_chars = config.memory.action_output_max_chars
+        truncated_output = output[:max_chars]
+
+        # Embed a human-readable summary for search
+        args_summary = ", ".join(f"{k}={v}" for k, v in arguments.items())
+        embed_text = f"Used {tool_name}({args_summary}): {truncated_output[:200]}"
+        embedding = await self._embed(embed_text)
+
+        await self._db.execute(
+            """INSERT INTO actions
+               (tool_name, arguments, output, error, embedding, session_id, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tool_name,
+                json.dumps(arguments),
+                truncated_output,
+                error,
+                json.dumps(embedding),
+                session_id,
+                time.time(),
+            ),
+        )
+        await self._db.commit()
+        logger.info(f"Stored action: {tool_name}({args_summary[:60]})")
+
+    # --- Session summaries (v0.07) ---
+
+    async def add_session_summary(
+        self,
+        session_id: str,
+        summary: str,
+        started_at: float,
+        ended_at: float,
+        turns: int,
+        tools_used: list[str] | None = None,
+    ) -> None:
+        """Store a session summary for cross-session continuity."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        embedding = await self._embed(summary)
+
+        await self._db.execute(
+            """INSERT INTO sessions
+               (session_id, summary, embedding, started_at, ended_at, turns, tools_used)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id,
+                summary,
+                json.dumps(embedding),
+                started_at,
+                ended_at,
+                turns,
+                json.dumps(tools_used or []),
+            ),
+        )
+        await self._db.commit()
+        logger.info(f"Stored session summary: {summary[:80]}...")
+
+    async def get_session_summaries(self, limit: int | None = None) -> list[dict]:
+        """Get the most recent session summaries."""
+        if not self._db:
+            return []
+
+        limit = limit or config.memory.session_summary_limit
+        cursor = await self._db.execute(
+            "SELECT session_id, summary, started_at, ended_at, turns, tools_used "
+            "FROM sessions ORDER BY ended_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "session_id": r[0],
+                "summary": r[1],
+                "started_at": r[2],
+                "ended_at": r[3],
+                "turns": r[4],
+                "tools_used": json.loads(r[5]) if r[5] else [],
+            }
+            for r in rows
+        ]
+
+    # --- Action compaction (v0.07) ---
+
+    async def _compact_old_actions(self) -> None:
+        """Summarize old actions into facts and delete the raw rows.
+
+        Runs on startup. Actions older than action_retention_days get
+        summarized by the LLM and stored as facts.
+        """
+        if not self._db:
+            return
+
+        cutoff = time.time() - (config.memory.action_retention_days * 86400)
+
+        cursor = await self._db.execute(
+            "SELECT id, tool_name, arguments, output, error, timestamp FROM actions WHERE timestamp < ?",
+            (cutoff,),
+        )
+        old_actions = await cursor.fetchall()
+
+        if not old_actions:
+            return
+
+        logger.info(f"Compacting {len(old_actions)} old actions into facts")
+
+        # Build a summary of old actions for the LLM
+        action_lines = []
+        action_ids = []
+        for row in old_actions:
+            action_ids.append(row[0])
+            args = json.loads(row[2])
+            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            status = "failed" if row[4] else "succeeded"
+            action_lines.append(f"- {row[1]}({args_str}) → {status}: {row[3][:100]}")
+
+        if not action_lines:
+            return
+
+        actions_text = "\n".join(action_lines[:50])  # Cap at 50 for prompt size
+
+        try:
+            response = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Summarize these past tool actions into 2-5 key facts about what was accomplished. "
+                            "Focus on what was created, modified, or discovered. "
+                            "Return a JSON array of fact strings.\n\n"
+                            f"Actions:\n{actions_text}\n\nFacts (JSON array):"
+                        ),
+                    }
+                ],
+                max_tokens=300,
+                temperature=0.0,
+            )
+
+            content = response.choices[0].message.content
+            if content:
+                content = content.strip()
+                if content.startswith("["):
+                    facts = json.loads(content)
+                else:
+                    import re
+
+                    match = re.search(r"\[.*\]", content, re.DOTALL)
+                    facts = json.loads(match.group()) if match else []
+
+                for fact in facts:
+                    if isinstance(fact, str) and fact.strip():
+                        await self._store_fact(fact.strip(), 0)
+
+                logger.info(
+                    f"Compacted {len(old_actions)} actions into {len(facts)} facts"
+                )
+
+            # Delete the old action rows
+            placeholders = ",".join("?" * len(action_ids))
+            await self._db.execute(
+                f"DELETE FROM actions WHERE id IN ({placeholders})",
+                action_ids,
+            )
+            await self._db.commit()
+
+        except Exception as e:
+            logger.error(f"Action compaction failed: {e}")
 
     async def _embed(self, text: str) -> list[float]:
         """Get embedding vector for text."""

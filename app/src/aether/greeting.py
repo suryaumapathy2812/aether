@@ -19,13 +19,14 @@ GREETING_PROMPT_FIRST_TIME = """You are Aether, a voice assistant. First time me
 
 Greeting:"""
 
-GREETING_PROMPT_RETURNING = """You are Aether, a voice assistant. Greet this returning user in 3-5 words MAX. Use their name if you know it. Keep it snappy — they want to start talking immediately.
+GREETING_PROMPT_RETURNING = """You are Aether, a voice assistant. Greet this returning user in 3-8 words MAX. Use their name if you know it. If you know what they did last time, you can briefly reference it. Keep it snappy.
 
-Examples: "Hey Surya!", "Welcome back!", "Hi again, Surya!"
+Examples: "Hey Surya!", "Welcome back!", "Hi again — ready to continue?"
 
 Known facts:
 {facts}
 
+{sessions_context}
 Greeting:"""
 
 
@@ -41,9 +42,21 @@ async def generate_greeting(
             # First time user
             prompt = GREETING_PROMPT_FIRST_TIME
         else:
-            # Returning user
+            # Returning user — include session summaries for continuity
             facts_text = "\n".join(f"- {f}" for f in facts[:5])
-            prompt = GREETING_PROMPT_RETURNING.format(facts=facts_text)
+
+            sessions_context = ""
+            try:
+                sessions = await memory.get_session_summaries(limit=2)
+                if sessions:
+                    session_lines = [f"- {s['summary']}" for s in sessions]
+                    sessions_context = "Recent sessions:\n" + "\n".join(session_lines)
+            except Exception:
+                pass
+
+            prompt = GREETING_PROMPT_RETURNING.format(
+                facts=facts_text, sessions_context=sessions_context
+            )
 
         # Generate greeting — collect all tokens
         greeting = ""
