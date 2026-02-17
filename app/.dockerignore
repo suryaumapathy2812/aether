@@ -1,0 +1,11 @@
+.venv
+.env
+.git
+.gitignore
+.cursor
+.claude
+.agents
+__pycache__
+*.pyc
+*.db
+tests/

@@ -1,0 +1,78 @@
+services:
+  # --- Postgres (shared by dashboard + orchestrator) ---
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aether_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aether"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Aether Agent (FastAPI) ---
+  agent:
+    build: ./app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      - AETHER_DB_PATH=/data/aether_memory.db
+      - AETHER_WORKING_DIR=/workspace
+      - AETHER_HOST=0.0.0.0
+      - AETHER_PORT=8000
+      # Orchestrator registration
+      - ORCHESTRATOR_URL=http://orchestrator:9000
+    volumes:
+      - agent_memory:/data
+      - agent_workspace:/workspace
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Orchestrator (FastAPI / Python) ---
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
+      - JWT_SECRET=${JWT_SECRET:-change_me_in_production}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+      - AETHER_HOST=0.0.0.0
+      - AETHER_PORT=9000
+    ports:
+      - "9000:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # For container management
+
+  # --- Dashboard (Next.js + Bun) ---
+  dashboard:
+    build: ./dashboard
+    environment:
+      - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change_me_in_production}
+      - ORCHESTRATOR_URL=http://orchestrator:9000
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:9000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  agent_memory:
+  agent_workspace:

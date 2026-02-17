@@ -1,0 +1,21 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+# OpenSSL for Prisma
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency + prisma files (prisma generate runs in postinstall)
+COPY package.json ./
+COPY prisma/ prisma/
+
+# Install all deps (including devDependencies for next dev)
+RUN npm install
+
+# Copy source (will be overridden by volume mount for hot-reload)
+COPY . .
+
+EXPOSE 3000
+
+# Next.js dev server with hot-reload
+CMD ["npm", "run", "dev"]

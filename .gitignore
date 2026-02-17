@@ -1,0 +1,52 @@
+# Environment
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+
+# iOS
+xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.xcuserstate
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
+
+# Agent tooling
+.agents/
+.agent/
+.claude/
+.cursor/
+app/skills/
+
+# Database
+*.db
+
+# IDE
+.idea/
+.vscode/
+
+# Reference projects (large, not our code)
+reference_projects/
+
+# Temp/workspace
+workspace/
+.tmp/

@@ -1,0 +1,13 @@
+[project]
+name = "aether-tui"
+version = "0.0.6"
+description = "Aether TUI — terminal client for the Aether voice AI assistant"
+requires-python = ">=3.10"
+dependencies = [
+    "websockets>=14.0",
+    "rich>=13.0",
+    "prompt-toolkit>=3.0",
+]
+
+[project.scripts]
+aether-tui = "aether_tui:main"

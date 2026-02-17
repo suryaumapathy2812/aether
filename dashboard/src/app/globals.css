@@ -1,0 +1,163 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #111111;
+  --color-surface: #191919;
+  --color-surface-hover: #1f1f1f;
+  --color-border: #2a2a2a;
+  --color-border-hover: #444444;
+  --color-text: #e8e8e8;
+  --color-text-secondary: #999999;
+  --color-text-muted: #555555;
+  --color-accent: #e8e8e8;
+  --font-sans: "Inter", "Helvetica Neue", sans-serif;
+}
+
+/* ── Reset ── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+/* ── Scrollbar — minimal ── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-hover);
+}
+
+/* ── Input — bottom-border only ── */
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: 0.9375rem;
+  padding: 0.625rem 0;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.3s ease;
+  letter-spacing: 0.01em;
+}
+
+input:focus {
+  border-bottom-color: var(--color-text-secondary);
+}
+
+input::placeholder {
+  color: var(--color-text-muted);
+  font-weight: 300;
+}
+
+/* ── Inline input — no border, for use inside containers ── */
+.input-inline,
+.input-inline[type="text"] {
+  border: none !important;
+  border-bottom: none !important;
+  padding: 0 !important;
+  background: transparent !important;
+  font-size: 13px;
+  font-weight: 300;
+}
+
+.input-inline:focus {
+  border-bottom-color: transparent !important;
+}
+
+/* ── Button — ghost style ── */
+.btn {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  padding: 0.6875rem 1.75rem;
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn:hover {
+  border-color: var(--color-border-hover);
+  color: var(--color-text);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+/* ── Menu item — stacked bordered list ── */
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 0.875rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  transition: all 0.3s ease;
+}
+
+.menu-item:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.menu-item:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+/* ── Orb animation keyframes ── */
+@keyframes orb-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.04); opacity: 0.9; }
+}
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(255,255,255,0.03); }
+  50% { transform: scale(1.02); box-shadow: 0 0 60px rgba(255,255,255,0.06); }
+}
+
+@keyframes orb-glow {
+  0%, 100% { box-shadow: 0 0 40px rgba(255,255,255,0.05); }
+  50% { box-shadow: 0 0 80px rgba(255,255,255,0.12); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Selection ── */
+::selection {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text);
+}

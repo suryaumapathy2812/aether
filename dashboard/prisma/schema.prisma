@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Auth (better-auth managed) ──
+
+model user {
+  id        String   @id
+  email     String   @unique
+  name      String?
+  password  String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  devices  device[]
+  agent    agent?
+  apiKeys  apiKey[]
+  sessions session[]
+
+  @@map("users")
+}
+
+model session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+
+  user user @relation(fields: [userId], references: [id])
+
+  @@map("sessions")
+}
+
+// ── Devices ──
+
+model device {
+  id         String   @id
+  userId     String   @map("user_id")
+  name       String   @default("Unknown Device")
+  deviceType String   @default("ios") @map("device_type")
+  token      String   @unique
+  pairedAt   DateTime @default(now()) @map("paired_at")
+  lastSeen   DateTime? @map("last_seen")
+
+  user user @relation(fields: [userId], references: [id])
+
+  @@map("devices")
+}
+
+// ── Agents ──
+
+model agent {
+  id           String   @id
+  userId       String?  @unique @map("user_id")
+  containerId  String?  @map("container_id")
+  host         String
+  port         Int
+  status       String   @default("running")
+  registeredAt DateTime @default(now()) @map("registered_at")
+  lastHealth   DateTime? @map("last_health")
+
+  user user? @relation(fields: [userId], references: [id])
+
+  @@map("agents")
+}
+
+// ── API Keys (per-user provider keys) ──
+
+model apiKey {
+  id       String @id
+  userId   String @map("user_id")
+  provider String
+  keyValue String @map("key_value")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user user @relation(fields: [userId], references: [id])
+
+  @@unique([userId, provider])
+  @@map("api_keys")
+}
+
+// ── Pairing ──
+
+model pairRequest {
+  code       String   @id
+  deviceType String   @default("ios") @map("device_type")
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @default(dbgenerated("now() + interval '10 minutes'")) @map("expires_at")
+  claimedBy  String?  @map("claimed_by")
+
+  @@map("pair_requests")
+}
