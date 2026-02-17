@@ -1,12 +1,12 @@
 """
-Aether v0.05 — Hands.
+Aether v0.06 — The Demo.
 
-Changes from v0.04:
-- Tool system: 5 core tools (read_file, write_file, list_directory, run_command, web_search)
-- Agentic loop: LLM can call tools, get results, continue
-- Status/acknowledge: each tool has status_text for UI spinners / voice acknowledgment
-- Skill system: SKILL.md discovery + description-matching trigger
-- Background tasks: simple sub-agents (max 3 concurrent, 60s timeout)
+Changes from v0.05:
+- Voice acknowledgments: status frames synthesized as TTS during tool execution
+- Upgraded web client: two-column layout with activity panel, tool spinners, result previews
+- TUI client: Rich-based terminal UI with prompt_toolkit input and tool panels
+- Workspace endpoint: GET /workspace/ for browsing files Aether creates
+- Clean logging: color formatter, pipeline timing, httpx suppression
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -55,9 +55,13 @@ setup_logging()
 logger = logging.getLogger("aether")
 
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.5")
+app = FastAPI(title="Aether", version="0.0.6")
 
-STATIC_DIR = Path(__file__).parent / "static"
+# Static files: serve from client/web/ (new structure) or fallback to legacy static/
+CLIENT_WEB_DIR = Path(__file__).parent.parent.parent.parent.parent / "client" / "web"
+STATIC_DIR = (
+    CLIENT_WEB_DIR if CLIENT_WEB_DIR.exists() else Path(__file__).parent / "static"
+)
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -100,7 +104,7 @@ async def startup():
     await llm_provider.start()
     await tts_provider.start()
     logger.info(
-        "Aether v0.05 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
+        "Aether v0.06 ready (providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
         config.stt.provider,
         config.llm.provider,
         config.tts.provider,
@@ -122,7 +126,62 @@ async def root():
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return HTMLResponse(index_path.read_text())
-    return HTMLResponse("<h1>Aether v0.03</h1><p>Static files not found.</p>")
+    return HTMLResponse("<h1>Aether v0.06</h1><p>Client files not found.</p>")
+
+
+@app.get("/workspace")
+@app.get("/workspace/{path:path}")
+async def browse_workspace(path: str = ""):
+    """Browse the workspace directory. Returns file listing as JSON."""
+    import os
+
+    workspace = Path(WORKING_DIR)
+    target = workspace / path
+
+    # Safety: don't escape workspace
+    try:
+        target.resolve().relative_to(workspace.resolve())
+    except ValueError:
+        return JSONResponse({"error": "Path outside workspace"}, status_code=403)
+
+    if not target.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    if target.is_file():
+        # Return file contents (text only, max 100KB)
+        if target.stat().st_size > 100_000:
+            return JSONResponse({"error": "File too large"}, status_code=413)
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+            return JSONResponse(
+                {
+                    "type": "file",
+                    "path": str(path),
+                    "content": content,
+                    "size": target.stat().st_size,
+                }
+            )
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Directory listing
+    entries = []
+    for item in sorted(target.iterdir()):
+        entries.append(
+            {
+                "name": item.name,
+                "type": "dir" if item.is_dir() else "file",
+                "size": item.stat().st_size if item.is_file() else 0,
+            }
+        )
+
+    return JSONResponse(
+        {
+            "type": "directory",
+            "path": str(path) or ".",
+            "entries": entries,
+        }
+    )
 
 
 @app.get("/health")
@@ -139,7 +198,7 @@ async def health():
     return JSONResponse(
         {
             "status": "ok",
-            "version": "0.0.5",
+            "version": "0.0.6",
             "providers": {
                 "stt": stt_health,
                 "llm": llm_health,
@@ -166,6 +225,28 @@ async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
         logger.warning(f"WebSocket send timeout ({msg_type})")
     except Exception as e:
         logger.error(f"WebSocket send error ({msg_type}): {e}")
+
+
+async def _speak_status(ws: WebSocket, tts: TTSProcessor, text: str):
+    """Fire-and-forget: synthesize status text as a short TTS clip.
+
+    Runs concurrently with tool execution so the user hears
+    "Reading that file..." while the tool is already working.
+    Uses index=-1 to tag as status audio — client inserts a pause after.
+    """
+    try:
+        status_frame = text_frame(text, role="assistant")
+        async for tts_out in tts.process(status_frame):
+            if tts_out.type == FrameType.AUDIO:
+                await _send(
+                    ws,
+                    "audio_chunk",
+                    base64.b64encode(tts_out.data).decode("utf-8"),
+                    index=-1,
+                    status_audio=True,
+                )
+    except Exception as e:
+        logger.debug(f"Status TTS skipped: {e}")
 
 
 async def _run_llm_tts_streaming(
@@ -230,19 +311,10 @@ async def _run_llm_tts_streaming(
                 sentence_index += 1
 
             elif llm_frame.type == FrameType.STATUS:
-                await _send(ws, "status", llm_frame.data.get("text", "Working..."))
-
-            elif llm_frame.type == FrameType.TOOL_CALL:
-                await _send(
-                    ws,
-                    "tool_call",
-                    json.dumps(
-                        {
-                            "name": llm_frame.data["tool_name"],
-                            "call_id": llm_frame.data.get("call_id", ""),
-                        }
-                    ),
-                )
+                status = llm_frame.data.get("text", "Working...")
+                await _send(ws, "status", status)
+                # Voice acknowledgment — fire-and-forget TTS while tool executes
+                asyncio.create_task(_speak_status(ws, tts, status))
 
             elif llm_frame.type == FrameType.TOOL_RESULT:
                 await _send(
