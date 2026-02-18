@@ -499,17 +499,82 @@ async def receive_plugin_event(request: Request):
 
     decision = await event_processor.process(event)
 
+    # Send structured notification to connected clients
     if decision.action in ("surface", "action_required"):
+        level = "speak" if decision.action == "action_required" else "nudge"
         for client_ws in _connected_clients:
             try:
-                await _send(client_ws, "text_chunk", decision.notification, index=0)
-                await _send(client_ws, "stream_end")
+                await _send(
+                    client_ws,
+                    "notification",
+                    json.dumps(
+                        {
+                            "event_id": event.id,
+                            "plugin": event.plugin,
+                            "level": level,
+                            "text": decision.notification,
+                            "actions": event.available_actions,
+                        }
+                    ),
+                )
             except Exception as e:
                 logger.debug(f"Plugin notification send failed: {e}")
+
+    # Report decision back to orchestrator for persistence
+    if ORCHESTRATOR_URL and body.get("event_id"):
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(
+                    f"{ORCHESTRATOR_URL}/api/internal/events/{body['event_id']}/decision",
+                    json={
+                        "decision": decision.action,
+                        "notification": decision.notification,
+                    },
+                    headers=_agent_auth_headers(),
+                )
+        except Exception as e:
+            logger.warning(f"Decision callback failed: {e}")
 
     return JSONResponse(
         {"action": decision.action, "notification": decision.notification}
     )
+
+
+@app.post("/plugin_event/batch")
+async def receive_batch_notification(request: Request):
+    """Receive a batch of deferred plugin events for flushing."""
+    body = await request.json()
+    items = body.get("events", [])
+    if not items:
+        return JSONResponse({"status": "empty"})
+
+    # Compose batch text
+    count = len(items)
+    summaries = [e.get("notification", e.get("summary", "")) for e in items[:5]]
+    batch_text = (
+        f"While you were away, {count} thing{'s' if count > 1 else ''} happened. "
+    )
+    batch_text += " ".join(summaries)
+
+    for client_ws in _connected_clients:
+        try:
+            await _send(
+                client_ws,
+                "notification",
+                json.dumps(
+                    {
+                        "level": "batch",
+                        "text": batch_text,
+                        "items": items,
+                    }
+                ),
+            )
+        except Exception:
+            pass
+
+    return JSONResponse({"status": "delivered", "count": count})
 
 
 async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
@@ -521,8 +586,10 @@ async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
     try:
         if ws.client_state.name != "CONNECTED":
             return
+        msg = json.dumps({"type": msg_type, "data": data, **extra})
+        logger.info(f"→ WS OUT: {msg[:200]}...")  # Log outgoing message
         await asyncio.wait_for(
-            ws.send_text(json.dumps({"type": msg_type, "data": data, **extra})),
+            ws.send_text(msg),
             timeout=config.server.ws_send_timeout,
         )
     except asyncio.TimeoutError:
@@ -922,6 +989,7 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_text()
+            logger.info(f"← WS IN: {raw[:200]}...")  # Log incoming message
             msg = json.loads(raw)
             msg_type = msg.get("type")
 
@@ -1002,6 +1070,34 @@ async def websocket_endpoint(ws: WebSocket):
                 mime = msg.get("mime", "image/jpeg")
                 pending_vision_frame = vision_frame(image_data, mime_type=mime)
                 await _send(ws, "status", "Image received, listening...")
+
+            elif msg_type == "notification_feedback":
+                # Handle user feedback on notifications (engaged, dismissed, muted)
+                data = msg.get("data", {})
+                event_id = data.get("event_id", "")
+                feedback = data.get("action", "")  # "engaged" | "dismissed" | "muted"
+                plugin = data.get("plugin", "unknown")
+                sender = data.get("sender", "")
+
+                fact = ""
+                if feedback == "engaged":
+                    fact = (
+                        f"User immediately reads {plugin} notifications from {sender}"
+                    )
+                elif feedback == "dismissed":
+                    fact = f"User dismisses {plugin} notifications from {sender}"
+                elif feedback == "muted":
+                    fact = (
+                        f"User wants to mute all {plugin} notifications from {sender}"
+                    )
+
+                if fact:
+                    await memory_store.store_preference(fact)
+                    logger.info(f"Preference stored: {fact}")
+
+            elif msg_type == "pong":
+                # Keep-alive response from client — no action needed
+                pass
 
             else:
                 logger.warning(f"Unknown message type: {msg_type}")

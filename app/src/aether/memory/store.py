@@ -317,6 +317,10 @@ class MemoryStore:
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
 
+    async def store_preference(self, fact: str) -> None:
+        """Store a notification preference as a searchable fact."""
+        await self._store_fact(fact, conv_id=0)
+
     async def get_recent(self, limit: int = 10) -> list[dict]:
         """Get the most recent conversations."""
         if not self._db:

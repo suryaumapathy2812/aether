@@ -98,6 +98,7 @@ async def startup():
     pool = await get_pool()
     await reconcile_containers(pool)
     asyncio.create_task(_idle_reaper())
+    asyncio.create_task(_deferred_flusher())
     log.info(f"Orchestrator ready (idle timeout={IDLE_TIMEOUT_MINUTES}m)")
 
 
@@ -126,6 +127,70 @@ async def _idle_reaper():
                 )
         except Exception as e:
             log.error(f"Idle reaper error: {e}")
+
+
+async def _deferred_flusher():
+    """Flush deferred plugin events when their schedule time arrives."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            pool = await get_pool()
+            # Find all ready-to-flush events, grouped by user
+            ready = await pool.fetch(
+                """SELECT id, user_id, plugin_name, event_type, summary,
+                          batch_notification, payload
+                   FROM plugin_events
+                   WHERE decision = 'deferred' AND scheduled_for < now()
+                   ORDER BY user_id, created_at""",
+            )
+            if not ready:
+                continue
+
+            # Group by user
+            from itertools import groupby
+            from operator import itemgetter
+
+            for user_id, events in groupby(ready, key=itemgetter("user_id")):
+                batch = list(events)
+                agent = await pool.fetchrow(
+                    "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+                    user_id,
+                )
+                if not agent:
+                    continue
+
+                items = [
+                    {
+                        "event_id": e["id"],
+                        "plugin": e["plugin_name"],
+                        "summary": e["summary"],
+                        "notification": e["batch_notification"] or e["summary"],
+                        "actions": json.loads(e["payload"]).get(
+                            "available_actions", []
+                        ),
+                    }
+                    for e in batch
+                ]
+
+                import httpx
+
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(
+                            f"http://{agent['host']}:{agent['port']}/plugin_event/batch",
+                            json={"events": items},
+                        )
+                    # Mark as flushed
+                    ids = [e["id"] for e in batch]
+                    await pool.execute(
+                        f"UPDATE plugin_events SET decision = 'flushed' WHERE id = ANY($1::text[])",
+                        ids,
+                    )
+                except Exception as e:
+                    log.warning(f"Deferred flush failed for user {user_id}: {e}")
+
+        except Exception as e:
+            log.error(f"Deferred flusher error: {e}")
 
 
 # ── Models ─────────────────────────────────────────────────
@@ -1603,6 +1668,39 @@ async def list_plugin_events(
         limit,
     )
     return [dict(r) for r in rows]
+
+
+@app.post(
+    "/api/internal/events/{event_id}/decision",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def report_event_decision(event_id: str, request: Request):
+    """Receive decision from agent and persist to DB."""
+    body = await request.json()
+    decision = body.get("decision", "archive")
+    notification = body.get("notification", "")
+
+    pool = await get_pool()
+
+    if decision == "deferred":
+        # Schedule for 30 minutes from now
+        await pool.execute(
+            """UPDATE plugin_events
+               SET decision = $1, batch_notification = $2,
+                   scheduled_for = now() + interval '30 minutes'
+               WHERE id = $3""",
+            decision,
+            notification,
+            event_id,
+        )
+    else:
+        await pool.execute(
+            "UPDATE plugin_events SET decision = $1, batch_notification = $2 WHERE id = $3",
+            decision,
+            notification,
+            event_id,
+        )
+    return {"status": "ok"}
 
 
 # ── Health ─────────────────────────────────────────────────

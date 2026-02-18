@@ -34,16 +34,18 @@ USER PREFERENCES (from memory):
 {preferences}
 
 RULES:
-- "surface" = tell the user about this (speak it)
-- "archive" = store silently, don't interrupt
-- "action_required" = tell the user AND suggest they take action
+- "surface" = tell the user about this (speak it) — for things worth mentioning now
+- "archive" = store silently, don't interrupt — for things you can check later
+- "action_required" = tell the user AND suggest they take action — for things needing immediate response
+- "deferred" = worth telling the user, but not right now — batch with others and notify later
 
 If the user has said to ignore this type of event or sender, choose "archive".
 If the sender is someone important to the user (family, close contacts), lean toward "surface".
 If urgency is "high" or requires_action is true, lean toward "action_required".
-Marketing emails, automated notifications, and newsletters should default to "archive".
+Low-urgency, non-actionable content (newsletters, social updates, FYI emails) → "deferred".
+If the event is informational but not time-sensitive, prefer "deferred" over "surface".
 
-Respond with ONLY one word: surface, archive, or action_required"""
+Respond with ONLY one word: surface, archive, action_required, or deferred"""
 
 
 NOTIFICATION_PROMPT = """You are Aether, a personal AI assistant. Compose a brief, natural spoken notification for the user based on this event. Keep it under 2 sentences. Be warm and concise — like a thoughtful assistant whispering in your ear.
@@ -64,7 +66,7 @@ Notification:"""
 class EventDecision:
     """Result of the decision engine processing an event."""
 
-    action: str  # "surface" | "archive" | "action_required"
+    action: str  # "surface" | "archive" | "action_required" | "deferred"
     notification: str  # Natural language notification (empty if archived)
     event: PluginEvent
 
@@ -97,9 +99,10 @@ class EventProcessor:
         action = await self._classify(event, preferences)
         log.info(f"Event decision: {event.plugin}/{event.event_type} → {action}")
 
-        # 3. Generate notification if surfacing
+        # 3. Generate notification if surfacing or deferred
+        # (deferred notifications are used at flush time)
         notification = ""
-        if action in ("surface", "action_required"):
+        if action in ("surface", "action_required", "deferred"):
             notification = await self._generate_notification(event)
 
         return EventDecision(action=action, notification=notification, event=event)
@@ -144,15 +147,19 @@ class EventProcessor:
         try:
             messages = [{"role": "user", "content": prompt}]
             response = ""
-            async for event_chunk in self.llm.generate_stream(messages, max_tokens=10, temperature=0.1):
+            async for event_chunk in self.llm.generate_stream(
+                messages, max_tokens=10, temperature=0.1
+            ):
                 if hasattr(event_chunk, "content"):
                     response += event_chunk.content
                 elif isinstance(event_chunk, str):
                     response += event_chunk
 
-            decision = response.strip().lower().split()[0] if response.strip() else "archive"
+            decision = (
+                response.strip().lower().split()[0] if response.strip() else "archive"
+            )
 
-            if decision in ("surface", "archive", "action_required"):
+            if decision in ("surface", "archive", "action_required", "deferred"):
                 return decision
             return "archive"  # Default to not interrupting
 
@@ -176,7 +183,9 @@ class EventProcessor:
         try:
             messages = [{"role": "user", "content": prompt}]
             response = ""
-            async for event_chunk in self.llm.generate_stream(messages, max_tokens=60, temperature=0.7):
+            async for event_chunk in self.llm.generate_stream(
+                messages, max_tokens=60, temperature=0.7
+            ):
                 if hasattr(event_chunk, "content"):
                     response += event_chunk.content
                 elif isinstance(event_chunk, str):

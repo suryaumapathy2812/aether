@@ -263,6 +263,20 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
         }
     }
+    
+    private func sendNotificationFeedback(eventId: String, action: String) {
+        let feedback: [String: Any] = [
+            "type": "notification_feedback",
+            "data": [
+                "event_id": eventId,
+                "action": action,
+                "plugin": "unknown",
+                "sender": ""
+            ]
+        ]
+        sendJSON(feedback)
+        print("[AudioService] Sent notification feedback: \(action)")
+    }
 
     // MARK: - Toggle Streaming (tap orb)
 
@@ -560,6 +574,45 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             print("[AudioService] Error: \(payload)")
             DispatchQueue.main.async {
                 self.statusText = payload
+            }
+
+        case "notification":
+            // Handle plugin event notifications
+            // For voice-first iOS: TTS the notification for "speak" level, haptic for others
+            if let notificationData = json["data"] as? [String: Any],
+               let level = notificationData["level"] as? String,
+               let text = notificationData["text"] as? String {
+                print("[AudioService] Notification (\(level)): \(text)")
+                
+                switch level {
+                case "speak":
+                    // Urgent — TTS the notification immediately
+                    DispatchQueue.main.async {
+                        self.state = .speaking
+                        self.statusText = "notification"
+                        self.lastResponse = text
+                    }
+                    // The text will be spoken via TTS as part of normal response flow
+                case "nudge":
+                    // Soft notification — just haptic, let user tap orb to hear
+                    DispatchQueue.main.async {
+                        self.state = .idle
+                        self.statusText = "tap orb for update"
+                    }
+                    // Could add haptic feedback here
+                case "batch":
+                    // Batched notification — summarize
+                    let itemCount = (notificationData["items"] as? [[String: Any]])?.count ?? 0
+                    DispatchQueue.main.async {
+                        self.state = .idle
+                        self.statusText = "\(itemCount) updates — tap orb"
+                    }
+                default:
+                    break
+                }
+                
+                // Send feedback back to agent (could be extended for user actions)
+                sendNotificationFeedback(eventId: notificationData["event_id"] as? String ?? "", action: "received")
             }
 
         default:

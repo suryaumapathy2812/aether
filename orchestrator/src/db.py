@@ -176,10 +176,20 @@ async def bootstrap_schema():
                 source_id   TEXT,
                 summary     TEXT,
                 decision    TEXT DEFAULT 'pending',
+                scheduled_for TIMESTAMPTZ,
+                batch_notification TEXT,
                 payload     JSONB DEFAULT '{}',
                 created_at  TIMESTAMPTZ DEFAULT now()
             );
 
+            -- Migration: add columns if they don't exist (for existing tables)
+            ALTER TABLE plugin_events ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
+            ALTER TABLE plugin_events ADD COLUMN IF NOT EXISTS batch_notification TEXT;
+
             CREATE INDEX IF NOT EXISTS idx_plugin_events_user
                 ON plugin_events(user_id, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_deferred_flush
+                ON plugin_events(user_id, scheduled_for)
+                WHERE decision = 'deferred' AND scheduled_for IS NOT NULL;
         """)
