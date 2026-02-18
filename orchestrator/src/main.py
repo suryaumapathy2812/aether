@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
 from .auth import get_user_id, get_user_id_from_ws
+from .crypto import encrypt_value, decrypt_value
 
 # ── Agent registration secret ─────────────────────────────
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
@@ -208,11 +209,11 @@ async def _ensure_agent(user_id: str) -> None:
             f"Agent {existing['id']} marked running but container is {container_status}"
         )
 
-    # Fetch user's API keys for injection into the container
+    # Fetch user's API keys for injection into the container (decrypt from DB)
     rows = await pool.fetch(
         "SELECT provider, key_value FROM api_keys WHERE user_id = $1", user_id
     )
-    user_keys = {r["provider"]: r["key_value"] for r in rows}
+    user_keys = {r["provider"]: decrypt_value(r["key_value"]) for r in rows}
 
     # Provision (or restart) the agent container
     result = await provision_agent(user_id, user_keys)
@@ -418,6 +419,7 @@ async def list_devices(user_id: str = Depends(get_user_id)):
 async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     key_id = uuid.uuid4().hex[:12]
+    encrypted = encrypt_value(body.key_value)
     await pool.execute(
         """
         INSERT INTO api_keys (id, user_id, provider, key_value)
@@ -427,7 +429,7 @@ async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
         key_id,
         user_id,
         body.provider,
-        body.key_value,
+        encrypted,
     )
     return {"status": "saved"}
 
@@ -436,10 +438,17 @@ async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
 async def list_api_keys(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT provider, substring(key_value, 1, 8) || '...' as preview FROM api_keys WHERE user_id = $1",
+        "SELECT provider, key_value FROM api_keys WHERE user_id = $1",
         user_id,
     )
-    return [dict(r) for r in rows]
+    # Decrypt then preview — can't use SQL substring on ciphertext
+    return [
+        {
+            "provider": r["provider"],
+            "preview": decrypt_value(r["key_value"])[:8] + "...",
+        }
+        for r in rows
+    ]
 
 
 @app.delete("/services/keys/{provider}")

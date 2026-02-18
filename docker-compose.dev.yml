@@ -63,6 +63,7 @@ services:
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
       - AGENT_SECRET=${AGENT_SECRET:-dev_agent_secret_change_in_production}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change_me_in_production_use_openssl_rand}
     volumes:
       # Hot-reload: mount source code
       - ./orchestrator/src:/app/src

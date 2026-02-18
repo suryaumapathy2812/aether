@@ -35,6 +35,7 @@ services:
       - AGENT_NETWORK=${AGENT_NETWORK:-core-ai_default}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys (used when user hasn't set their own)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
