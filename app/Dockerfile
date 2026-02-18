@@ -5,17 +5,26 @@ WORKDIR /app
 # Install UV
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# System deps for numpy/aiosqlite
+# System deps for numpy/aiosqlite + aiortc/av (WebRTC)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    libavcodec-dev \
+    libavformat-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libopus-dev \
+    libvpx-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (cache layer)
 COPY pyproject.toml uv.lock .python-version README.md ./
 
-# Install dependencies to system Python
+# Install dependencies to system Python (including webrtc optional group)
 ENV UV_SYSTEM_PYTHON=1
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --extra webrtc
 
 # Copy application code
 COPY src/ src/
@@ -23,7 +32,7 @@ COPY skills/ skills/
 COPY plugins/ plugins/
 
 # Install the project itself to system Python
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra webrtc
 
 # Create directories for runtime
 RUN mkdir -p /data /workspace

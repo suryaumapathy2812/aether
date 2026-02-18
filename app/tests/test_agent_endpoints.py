@@ -2,7 +2,7 @@
 
 Covers:
 - _agent_auth_headers() — Bearer header construction
-- _send() — WebSocket send with client_state check and timeout
+- WebSocketTransport._send_ws() — WebSocket send with client_state check and timeout
 - Memory REST endpoints (/memory/facts, /memory/sessions, /memory/conversations)
 - _register_with_orchestrator() — registration call
 """
@@ -12,10 +12,15 @@ from __future__ import annotations
 import asyncio
 import json
 from enum import Enum
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+
+from aether.core.frames import text_frame
+from aether.transport.core_msg import CoreMsg
+from aether.transport.websocket import WebSocketTransport
 
 
 # ── _agent_auth_headers ────────────────────────────────────
@@ -39,15 +44,14 @@ class TestAgentAuthHeaders:
             assert headers == {}
 
 
-# ── _send ──────────────────────────────────────────────────
+# ── WebSocketTransport._send_ws ────────────────────────────
+#
+# These tests cover the same behavior as the old _send() tests:
+# client_state check, timeout handling, exception handling.
+# The send logic now lives in WebSocketTransport._send_ws().
 
 
-class _ClientState(Enum):
-    CONNECTED = "CONNECTED"
-    DISCONNECTED = "DISCONNECTED"
-
-
-class TestSend:
+class TestSendWs:
     def _make_ws(self, state: str = "CONNECTED"):
         """Create a mock WebSocket with configurable client_state."""
         ws = MagicMock()
@@ -56,14 +60,24 @@ class TestSend:
         ws.send_text = AsyncMock()
         return ws
 
+    def _make_transport(self):
+        return WebSocketTransport()
+
     @pytest.mark.asyncio
     async def test_send_connected(self):
         """Sends JSON message when client is connected."""
         ws = self._make_ws("CONNECTED")
+        transport = self._make_transport()
 
-        from aether.main import _send
-
-        await _send(ws, "text_chunk", "hello", index=0)
+        msg = CoreMsg.text(
+            text="hello",
+            user_id="u1",
+            session_id="s1",
+            role="assistant",
+            transport="text_chunk",
+            sentence_index=0,
+        )
+        await transport._send_ws(ws, msg)
 
         ws.send_text.assert_called_once()
         sent = json.loads(ws.send_text.call_args[0][0])
@@ -75,10 +89,16 @@ class TestSend:
     async def test_send_disconnected_drops_silently(self):
         """Drops message silently when client is disconnected."""
         ws = self._make_ws("DISCONNECTED")
+        transport = self._make_transport()
 
-        from aether.main import _send
-
-        await _send(ws, "text_chunk", "hello")
+        msg = CoreMsg.text(
+            text="hello",
+            user_id="u1",
+            session_id="s1",
+            role="assistant",
+            transport="text_chunk",
+        )
+        await transport._send_ws(ws, msg)
 
         ws.send_text.assert_not_called()
 
@@ -91,37 +111,58 @@ class TestSend:
             await asyncio.sleep(100)
 
         ws.send_text = slow_send
+        transport = self._make_transport()
 
-        from aether.main import _send
+        msg = CoreMsg.text(
+            text="hello",
+            user_id="u1",
+            session_id="s1",
+            role="assistant",
+            transport="text_chunk",
+        )
 
         # Patch config to have a very short timeout
-        with patch("aether.main.config") as mock_config:
+        with patch("aether.transport.websocket.config") as mock_config:
             mock_config.server.ws_send_timeout = 0.01
             # Should not raise
-            await _send(ws, "text_chunk", "hello")
+            await transport._send_ws(ws, msg)
 
     @pytest.mark.asyncio
     async def test_send_exception_handled(self):
         """Handles send exceptions gracefully (no exception raised)."""
         ws = self._make_ws("CONNECTED")
         ws.send_text = AsyncMock(side_effect=RuntimeError("connection reset"))
+        transport = self._make_transport()
 
-        from aether.main import _send
+        msg = CoreMsg.text(
+            text="hello",
+            user_id="u1",
+            session_id="s1",
+            role="assistant",
+            transport="text_chunk",
+        )
 
         # Should not raise
-        await _send(ws, "text_chunk", "hello")
+        await transport._send_ws(ws, msg)
 
     @pytest.mark.asyncio
-    async def test_send_default_data_empty_string(self):
-        """Default data parameter is empty string."""
+    async def test_send_status_message(self):
+        """Status messages serialize correctly."""
         ws = self._make_ws("CONNECTED")
+        transport = self._make_transport()
 
-        from aether.main import _send
-
-        await _send(ws, "status")
+        msg = CoreMsg.text(
+            text="listening...",
+            user_id="u1",
+            session_id="s1",
+            role="system",
+            transport="status",
+        )
+        await transport._send_ws(ws, msg)
 
         sent = json.loads(ws.send_text.call_args[0][0])
-        assert sent["data"] == ""
+        assert sent["type"] == "status"
+        assert sent["data"] == "listening..."
 
 
 # ── Memory REST endpoints ──────────────────────────────────
@@ -205,6 +246,93 @@ class TestMemoryEndpoints:
         resp = client.get("/memory/conversations?limit=5")
         assert resp.status_code == 200
         store.get_recent.assert_called_once_with(limit=5)
+
+
+# ── Chat streaming endpoint ────────────────────────────────
+
+
+class TestChatEndpoint:
+    @pytest.fixture
+    def chat_app_and_core(self):
+        """App + mocked transport manager/core for /chat endpoint."""
+
+        class DummyLLM:
+            async def process(self, _frame):
+                yield text_frame("Hi ", role="assistant")
+                yield text_frame("there", role="assistant")
+
+        session = SimpleNamespace(llm=DummyLLM(), turn_count=0)
+        mock_core = MagicMock()
+        mock_core._get_session = MagicMock(return_value=session)
+        mock_core._ensure_session_started = AsyncMock()
+        mock_core._gather_pre_frames = AsyncMock(return_value=[text_frame("hello")])
+
+        mock_tm = MagicMock()
+        mock_tm.core = mock_core
+
+        with (
+            patch("aether.main.transport_manager", mock_tm),
+        ):
+            from aether.main import app
+
+            yield app, mock_core
+
+    @pytest.mark.asyncio
+    async def test_chat_streams_plain_text_for_parts_messages(self, chat_app_and_core):
+        app, core = chat_app_and_core
+        import httpx
+
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": "hello"}],
+                }
+            ]
+        }
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post("/chat", json=payload)
+            body = resp.text
+
+        assert resp.status_code == 200
+        assert body == "Hi there"
+        core._gather_pre_frames.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_chat_supports_legacy_content_messages(self, chat_app_and_core):
+        app, core = chat_app_and_core
+        import httpx
+
+        payload = {"messages": [{"role": "user", "content": "hello"}]}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post("/chat", json=payload)
+
+        assert resp.status_code == 200
+        core._gather_pre_frames.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_chat_returns_400_without_user_message(self, chat_app_and_core):
+        app, _ = chat_app_and_core
+        import httpx
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/chat",
+                json={"messages": [{"role": "assistant", "content": "x"}]},
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "No user message found"
 
 
 # ── Registration ───────────────────────────────────────────

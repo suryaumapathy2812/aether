@@ -1,9 +1,12 @@
 import SwiftUI
 import AVFoundation
+import WebRTC
 
-/// Voice orb screen — continuous conversation mode.
+/// Voice orb screen — continuous conversation mode via WebRTC.
 /// Tap orb to start listening, tap again to stop. Mute button to pause mic.
-/// Matches the web client protocol exactly.
+///
+/// Audio flows natively via WebRTC audio tracks (no more base64 over WebSocket).
+/// Text/events flow via the WebRTC data channel (same JSON protocol as before).
 struct VoiceOrbView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var audio = AudioService()
@@ -153,14 +156,17 @@ enum OrbState: Equatable {
     case idle, connecting, listening, thinking, speaking, muted
 }
 
-// MARK: - Audio Service
-// Continuous conversation mode matching web client protocol:
-//   Tap orb → stream_start + mic open → audio_chunk (base64 JSON) flows continuously
-//   Tap orb again → stream_stop + mic close
-//   Mute → mute/unmute messages, mic stays open but audio not sent
-//   Agent handles silence detection via Deepgram utterance_end + debounce
+// MARK: - Audio Service (WebRTC)
+//
+// Voice-to-voice via WebRTC:
+//   - Audio in:  local mic → WebRTC audio track → server (STT)
+//   - Audio out: server (TTS) → WebRTC audio track → speaker (automatic)
+//   - Events:    data channel carries status, transcript, text_chunk, stream_end, etc.
+//
+// The server's SmallWebRTCTransport + CoreHandler handle STT/LLM/TTS.
+// This client just manages the WebRTC connection and UI state.
 
-class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
+class AudioService: NSObject, ObservableObject {
     @Published var state: OrbState = .connecting
     @Published var statusText: String = "connecting..."
     @Published var lastResponse: String = ""
@@ -168,20 +174,9 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var isStreaming: Bool = false
     @Published var isMuted: Bool = false
 
-    private var ws: URLSessionWebSocketTask?
-    private let engine = AVAudioEngine()
+    private let webrtc = WebRTCService()
     private var token = ""
     private var baseURL = "http://localhost:9000"
-    private var isConnected = false
-
-    /// Echo cancellation: suppress mic while agent is speaking
-    private var isSpeaking = false
-    /// Audio playback queue
-    private var audioQueue: [Data] = []
-    private var audioPlayer: AVAudioPlayer?
-    private var isPlaying = false
-    /// Whether we received stream_end (response complete)
-    private var streamEnded = false
 
     /// Reconnection state
     private var reconnectAttempts = 0
@@ -192,37 +187,66 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func configure(token: String, orchestratorURL: String) {
         self.token = token
         self.baseURL = orchestratorURL
-        connectWebSocket()
+
+        webrtc.configure(token: token, orchestratorURL: orchestratorURL)
+        webrtc.onMessage = { [weak self] json in
+            self?.handleServerMessage(json)
+        }
+        webrtc.onConnectionStateChange = { [weak self] state in
+            self?.handleConnectionStateChange(state)
+        }
+
+        connectWebRTC()
     }
 
-    // MARK: - WebSocket
+    // MARK: - WebRTC Connection
 
-    private func connectWebSocket() {
-        ws?.cancel(with: .goingAway, reason: nil)
-
-        let wsURL = baseURL
-            .replacingOccurrences(of: "http://", with: "ws://")
-            .replacingOccurrences(of: "https://", with: "wss://")
-            + "/api/ws?token=\(token)"
-        print("[AudioService] Connecting to: \(wsURL.prefix(80))...")
-        guard let url = URL(string: wsURL) else {
-            print("[AudioService] Invalid URL!")
-            return
-        }
-
-        let session = URLSession(configuration: .default)
-        ws = session.webSocketTask(with: url)
-        ws?.resume()
-        isConnected = true
-        reconnectAttempts = 0
-        print("[AudioService] WebSocket resumed")
-
+    private func connectWebRTC() {
         DispatchQueue.main.async {
-            self.state = .idle
-            self.statusText = "tap the orb to speak"
+            self.state = .connecting
+            self.statusText = "connecting..."
         }
 
-        listenForMessages()
+        Task {
+            do {
+                try await webrtc.connect()
+                print("[AudioService] WebRTC connected")
+                reconnectAttempts = 0
+                // Connection state callback will update UI when ICE connects
+            } catch {
+                print("[AudioService] WebRTC connect failed: \(error)")
+                scheduleReconnect(wasStreaming: isStreaming)
+            }
+        }
+    }
+
+    private func handleConnectionStateChange(_ iceState: RTCIceConnectionState) {
+        switch iceState {
+        case .connected, .completed:
+            DispatchQueue.main.async {
+                if !self.isStreaming {
+                    self.state = .idle
+                    self.statusText = "tap the orb to speak"
+                }
+            }
+
+        case .disconnected, .failed:
+            let wasStreaming = isStreaming
+            DispatchQueue.main.async {
+                self.isStreaming = false
+                self.isMuted = false
+            }
+            scheduleReconnect(wasStreaming: wasStreaming)
+
+        case .closed:
+            DispatchQueue.main.async {
+                self.state = .idle
+                self.statusText = "disconnected"
+            }
+
+        default:
+            break
+        }
     }
 
     private func scheduleReconnect(wasStreaming: Bool) {
@@ -245,37 +269,14 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.connectWebSocket()
+            self?.webrtc.disconnect()
+            self?.connectWebRTC()
             if wasStreaming {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self?.startStreaming()
                 }
             }
         }
-    }
-
-    private func sendJSON(_ dict: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict),
-              let text = String(data: data, encoding: .utf8) else { return }
-        ws?.send(.string(text)) { error in
-            if let error = error {
-                print("[AudioService] Send error: \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    private func sendNotificationFeedback(eventId: String, action: String) {
-        let feedback: [String: Any] = [
-            "type": "notification_feedback",
-            "data": [
-                "event_id": eventId,
-                "action": action,
-                "plugin": "unknown",
-                "sender": ""
-            ]
-        ]
-        sendJSON(feedback)
-        print("[AudioService] Sent notification feedback: \(action)")
     }
 
     // MARK: - Toggle Streaming (tap orb)
@@ -293,90 +294,27 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func startStreaming() {
-        print("[AudioService] startStreaming")
-
-        // Clean up any existing tap before installing a new one
-        // (prevents crash if called twice, e.g. after reconnect)
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        guard webrtc.isConnected else {
+            print("[AudioService] Not connected, can't start streaming")
+            return
         }
 
-        // Send stream_start to agent (opens Deepgram STT connection)
-        sendJSON(["type": "stream_start"])
+        print("[AudioService] startStreaming")
 
-        // Setup audio session
+        // Setup audio session for playback + recording
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker])
             try audioSession.setActive(true)
         } catch {
             print("[AudioService] Audio session error: \(error)")
         }
 
-        // Install mic tap — continuously send audio chunks
-        // Deepgram expects 16kHz mono linear16. The Simulator mic is 48kHz.
-        // We use AVAudioConverter to resample properly.
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        print("[AudioService] Input: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
+        // Enable mic track
+        webrtc.setMicEnabled(true)
 
-        let targetSampleRate: Double = 16000
-        guard let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: 1, interleaved: false) else {
-            print("[AudioService] Failed to create target format")
-            return
-        }
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
-            print("[AudioService] Failed to create converter")
-            return
-        }
-
-        var chunkCount = 0
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self, !self.isMuted, !self.isSpeaking else { return }
-
-            // Resample to 16kHz
-            let ratio = targetSampleRate / inputFormat.sampleRate
-            let outputFrames = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrames) else { return }
-
-            var error: NSError?
-            let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                outStatus.pointee = .haveData
-                return buffer
-            }
-            guard status != .error, error == nil else {
-                print("[AudioService] Convert error: \(error?.localizedDescription ?? "unknown")")
-                return
-            }
-
-            // Convert float32 → PCM16 little-endian
-            guard let channelData = outputBuffer.floatChannelData?[0] else { return }
-            let frames = Int(outputBuffer.frameLength)
-            var pcm16 = Data(capacity: frames * 2)
-            for i in 0..<frames {
-                let sample = Int16(max(-1, min(1, channelData[i])) * 32767)
-                var le = sample.littleEndian
-                pcm16.append(Data(bytes: &le, count: 2))
-            }
-
-            // Send as base64 JSON text message
-            let b64 = pcm16.base64EncodedString()
-            self.sendJSON(["type": "audio_chunk", "data": b64])
-
-            chunkCount += 1
-            if chunkCount <= 3 || chunkCount % 100 == 0 {
-                print("[AudioService] Audio chunk #\(chunkCount) (\(pcm16.count) bytes, 16kHz)")
-            }
-        }
-
-        do {
-            try engine.start()
-            print("[AudioService] Engine started")
-        } catch {
-            print("[AudioService] Engine start error: \(error)")
-            return
-        }
+        // Tell server to start voice session (opens STT, etc.)
+        webrtc.send(["type": "stream_start"])
 
         DispatchQueue.main.async {
             self.isStreaming = true
@@ -391,14 +329,11 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func stopStreaming() {
         print("[AudioService] stopStreaming")
 
-        // Stop mic safely
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+        // Disable mic track
+        webrtc.setMicEnabled(false)
 
-        // Tell agent to close STT stream
-        sendJSON(["type": "stream_stop"])
+        // Tell server to stop
+        webrtc.send(["type": "stream_stop"])
 
         DispatchQueue.main.async {
             self.isStreaming = false
@@ -416,7 +351,8 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isMuted.toggle()
 
         if isMuted {
-            sendJSON(["type": "mute"])
+            webrtc.setMicEnabled(false)
+            webrtc.send(["type": "mute"])
             DispatchQueue.main.async {
                 self.state = .muted
                 self.statusText = "muted"
@@ -424,7 +360,8 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
             print("[AudioService] Muted")
         } else {
-            sendJSON(["type": "unmute"])
+            webrtc.setMicEnabled(true)
+            webrtc.send(["type": "unmute"])
             DispatchQueue.main.async {
                 self.state = .listening
                 self.statusText = "listening..."
@@ -433,74 +370,16 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Receive
+    // MARK: - Handle Server Messages (via data channel)
 
-    private func listenForMessages() {
-        ws?.receive { [weak self] result in
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self?.handleServerMessage(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self?.handleServerMessage(text)
-                    }
-                @unknown default:
-                    break
-                }
-                self?.listenForMessages()
-
-            case .failure(let error):
-                print("[AudioService] WS error: \(error.localizedDescription)")
-                let wasStreaming = self?.isStreaming ?? false
-
-                // Check for auth errors (don't reconnect on 4001/4002)
-                let errorDesc = error.localizedDescription.lowercased()
-                let isAuthError = errorDesc.contains("4001") || errorDesc.contains("invalid token")
-                if isAuthError {
-                    print("[AudioService] Auth error — not reconnecting")
-                    DispatchQueue.main.async {
-                        self?.isConnected = false
-                        self?.state = .idle
-                        self?.statusText = "auth failed — re-pair device"
-                    }
-                    return
-                }
-
-                DispatchQueue.main.async {
-                    self?.isConnected = false
-                    // Stop engine safely during reconnect
-                    if self?.engine.isRunning == true {
-                        self?.engine.inputNode.removeTap(onBus: 0)
-                        self?.engine.stop()
-                    }
-                    self?.isStreaming = false
-                    self?.isSpeaking = false
-                    self?.audioQueue.removeAll()
-                    self?.isPlaying = false
-                }
-                self?.scheduleReconnect(wasStreaming: wasStreaming)
-            }
-        }
-    }
-
-    private func handleServerMessage(_ text: String) {
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String
-        else {
-            print("[AudioService] Unparseable: \(text.prefix(80))")
-            return
-        }
-
+    private func handleServerMessage(_ json: [String: Any]) {
+        guard let type = json["type"] as? String else { return }
         let payload = json["data"] as? String ?? ""
 
         switch type {
         case "status":
             print("[AudioService] Status: \(payload)")
             DispatchQueue.main.async {
-                // Only update state if we're streaming — don't override idle
                 if self.isStreaming {
                     switch payload {
                     case "listening...":
@@ -525,7 +404,6 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 if interim {
                     self.liveTranscript = payload
                 } else {
-                    // Final transcript — user's utterance confirmed
                     self.liveTranscript = ""
                     self.state = .thinking
                     self.statusText = "thinking..."
@@ -535,10 +413,6 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         case "text_chunk":
             let index = json["index"] as? Int ?? 0
             print("[AudioService] Text chunk [\(index)]: \(payload.prefix(60))")
-            isSpeaking = true  // Suppress mic to prevent echo
-            if index == 0 {
-                streamEnded = false  // New response starting
-            }
             DispatchQueue.main.async {
                 self.state = .speaking
                 self.statusText = "speaking..."
@@ -550,24 +424,25 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
 
         case "audio_chunk":
-            if let audioData = Data(base64Encoded: payload) {
-                print("[AudioService] Audio chunk: \(audioData.count) bytes")
-                DispatchQueue.main.async {
-                    self.state = .speaking
-                    self.statusText = "speaking..."
-                }
-                queueAudio(data: audioData)
+            // With WebRTC, TTS audio arrives via the audio track automatically.
+            // This message type is only for data-channel fallback (shouldn't happen
+            // in normal WebRTC mode, but handle gracefully).
+            print("[AudioService] Audio chunk via data channel (unexpected in WebRTC mode)")
+            DispatchQueue.main.async {
+                self.state = .speaking
+                self.statusText = "speaking..."
             }
 
         case "stream_end":
             print("[AudioService] Stream end")
             DispatchQueue.main.async {
-                self.streamEnded = true
-                // If nothing is playing, resume mic now
-                if !self.isPlaying {
-                    self.resumeListening()
+                // Resume listening after agent finishes speaking
+                // With WebRTC, audio playback is handled by the audio track,
+                // so we just need to update the UI state.
+                if self.isStreaming && !self.isMuted {
+                    self.state = .listening
+                    self.statusText = "listening..."
                 }
-                // Otherwise, resumeListening will be called when playback finishes
             }
 
         case "error":
@@ -577,31 +452,24 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
 
         case "notification":
-            // Handle plugin event notifications
-            // For voice-first iOS: TTS the notification for "speak" level, haptic for others
             if let notificationData = json["data"] as? [String: Any],
                let level = notificationData["level"] as? String,
                let text = notificationData["text"] as? String {
                 print("[AudioService] Notification (\(level)): \(text)")
-                
+
                 switch level {
                 case "speak":
-                    // Urgent — TTS the notification immediately
                     DispatchQueue.main.async {
                         self.state = .speaking
                         self.statusText = "notification"
                         self.lastResponse = text
                     }
-                    // The text will be spoken via TTS as part of normal response flow
                 case "nudge":
-                    // Soft notification — just haptic, let user tap orb to hear
                     DispatchQueue.main.async {
                         self.state = .idle
                         self.statusText = "tap orb for update"
                     }
-                    // Could add haptic feedback here
                 case "batch":
-                    // Batched notification — summarize
                     let itemCount = (notificationData["items"] as? [[String: Any]])?.count ?? 0
                     DispatchQueue.main.async {
                         self.state = .idle
@@ -610,62 +478,21 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 default:
                     break
                 }
-                
-                // Send feedback back to agent (could be extended for user actions)
-                sendNotificationFeedback(eventId: notificationData["event_id"] as? String ?? "", action: "received")
+
+                // Send feedback
+                webrtc.send([
+                    "type": "notification_feedback",
+                    "data": [
+                        "event_id": notificationData["event_id"] as? String ?? "",
+                        "action": "received",
+                        "plugin": "unknown",
+                        "sender": ""
+                    ] as [String: Any]
+                ])
             }
 
         default:
             print("[AudioService] Unknown type: \(type)")
-        }
-    }
-
-    // MARK: - Playback Queue
-
-    private func queueAudio(data: Data) {
-        audioQueue.append(data)
-        if !isPlaying {
-            playNext()
-        }
-    }
-
-    private func playNext() {
-        guard !audioQueue.isEmpty else {
-            isPlaying = false
-            // All audio finished playing — if stream also ended, resume mic
-            if streamEnded {
-                resumeListening()
-            }
-            return
-        }
-
-        isPlaying = true
-        let data = audioQueue.removeFirst()
-        do {
-            audioPlayer = try AVAudioPlayer(data: data)
-            audioPlayer?.delegate = self
-            audioPlayer?.play()
-        } catch {
-            print("[AudioService] Playback error: \(error)")
-            playNext()  // Skip failed chunk
-        }
-    }
-
-    // AVAudioPlayerDelegate — called when a chunk finishes playing
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        playNext()
-    }
-
-    /// Resume mic after agent finishes speaking
-    private func resumeListening() {
-        print("[AudioService] Resuming listening (playback done)")
-        isSpeaking = false
-        streamEnded = false
-        DispatchQueue.main.async {
-            if self.isStreaming && !self.isMuted {
-                self.state = .listening
-                self.statusText = "listening..."
-            }
         }
     }
 }

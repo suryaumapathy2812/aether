@@ -700,6 +700,105 @@ async def proxy_memory_conversations(
         return resp.json()
 
 
+# ── WebRTC Signaling Proxy ─────────────────────────────────
+
+
+@app.post("/api/webrtc/offer")
+async def proxy_webrtc_offer(request: Request, user_id: str = Depends(get_user_id)):
+    """Proxy WebRTC SDP offer to the user's agent."""
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        raise HTTPException(404, "No agent assigned")
+
+    body = await request.json()
+    # Inject user_id so the agent knows who's connecting
+    body["user_id"] = user_id
+
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"http://{agent['host']}:{agent['port']}/webrtc/offer",
+            json=body,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(
+                resp.status_code, resp.json().get("error", "Offer failed")
+            )
+        return resp.json()
+
+
+@app.patch("/api/webrtc/ice")
+async def proxy_webrtc_ice(request: Request, user_id: str = Depends(get_user_id)):
+    """Proxy WebRTC ICE candidates to the user's agent."""
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        raise HTTPException(404, "No agent assigned")
+
+    body = await request.json()
+
+    import httpx
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"http://{agent['host']}:{agent['port']}/webrtc/ice",
+            json=body,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(
+                resp.status_code, resp.json().get("error", "ICE failed")
+            )
+        return resp.json()
+
+
+# ── Chat Streaming Proxy (Vercel AI SDK) ───────────────────
+
+
+@app.post("/api/chat")
+async def proxy_chat(request: Request, user_id: str = Depends(get_user_id)):
+    """
+    Proxy streaming chat to the user's agent.
+
+    Passes through plain text streaming chunks from the agent directly
+    to the dashboard TextStreamChatTransport.
+    """
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        raise HTTPException(404, "No agent assigned")
+
+    body = await request.json()
+    body["user_id"] = user_id
+
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    async def stream_from_agent():
+        """Forward plain text streaming chunks from the agent."""
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0, connect=10.0)
+        ) as client:
+            async with client.stream(
+                "POST",
+                f"http://{agent['host']}:{agent['port']}/chat",
+                json=body,
+            ) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    yield f"[chat proxy error {resp.status_code}] {error_body.decode()}"
+                    return
+                async for chunk in resp.aiter_text():
+                    yield chunk
+
+    return StreamingResponse(
+        stream_from_agent(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 # ── WebSocket Proxy ────────────────────────────────────────
 
 
