@@ -183,6 +183,12 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// Whether we received stream_end (response complete)
     private var streamEnded = false
 
+    /// Reconnection state
+    private var reconnectAttempts = 0
+    private let maxReconnectAttempts = 10
+    private let baseReconnectDelay: TimeInterval = 3.0
+    private let maxReconnectDelay: TimeInterval = 30.0
+
     func configure(token: String, orchestratorURL: String) {
         self.token = token
         self.baseURL = orchestratorURL
@@ -208,6 +214,7 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         ws = session.webSocketTask(with: url)
         ws?.resume()
         isConnected = true
+        reconnectAttempts = 0
         print("[AudioService] WebSocket resumed")
 
         DispatchQueue.main.async {
@@ -216,6 +223,35 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
 
         listenForMessages()
+    }
+
+    private func scheduleReconnect(wasStreaming: Bool) {
+        guard reconnectAttempts < maxReconnectAttempts else {
+            print("[AudioService] Max reconnect attempts reached")
+            DispatchQueue.main.async {
+                self.state = .idle
+                self.statusText = "connection lost — restart app"
+            }
+            return
+        }
+
+        reconnectAttempts += 1
+        let delay = min(baseReconnectDelay * pow(2.0, Double(reconnectAttempts - 1)), maxReconnectDelay)
+        print("[AudioService] Reconnecting in \(delay)s (attempt \(reconnectAttempts)/\(maxReconnectAttempts))...")
+
+        DispatchQueue.main.async {
+            self.state = .connecting
+            self.statusText = "reconnecting (\(self.reconnectAttempts)/\(self.maxReconnectAttempts))..."
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.connectWebSocket()
+            if wasStreaming {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self?.startStreaming()
+                }
+            }
+        }
     }
 
     private func sendJSON(_ dict: [String: Any]) {
@@ -404,6 +440,20 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             case .failure(let error):
                 print("[AudioService] WS error: \(error.localizedDescription)")
                 let wasStreaming = self?.isStreaming ?? false
+
+                // Check for auth errors (don't reconnect on 4001/4002)
+                let errorDesc = error.localizedDescription.lowercased()
+                let isAuthError = errorDesc.contains("4001") || errorDesc.contains("invalid token")
+                if isAuthError {
+                    print("[AudioService] Auth error — not reconnecting")
+                    DispatchQueue.main.async {
+                        self?.isConnected = false
+                        self?.state = .idle
+                        self?.statusText = "auth failed — re-pair device"
+                    }
+                    return
+                }
+
                 DispatchQueue.main.async {
                     self?.isConnected = false
                     // Stop engine safely during reconnect
@@ -413,19 +463,10 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     }
                     self?.isStreaming = false
                     self?.isSpeaking = false
-                    self?.state = .connecting
-                    self?.statusText = "reconnecting..."
+                    self?.audioQueue.removeAll()
+                    self?.isPlaying = false
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    print("[AudioService] Reconnecting...")
-                    self?.connectWebSocket()
-                    // Resume streaming if we were streaming before disconnect
-                    if wasStreaming {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            self?.startStreaming()
-                        }
-                    }
-                }
+                self?.scheduleReconnect(wasStreaming: wasStreaming)
             }
         }
     }

@@ -593,10 +593,14 @@ async def ws_proxy(ws: WebSocket, token: str = Query(...)):
     # Connect to the agent
     import websockets as ws_lib
 
+    client_disconnected = False
+    agent_disconnected = False
+
     try:
         async with ws_lib.connect(agent_url) as agent_ws:
-            # Bidirectional proxy
+
             async def client_to_agent():
+                nonlocal client_disconnected
                 try:
                     while True:
                         msg = await ws.receive()
@@ -605,38 +609,73 @@ async def ws_proxy(ws: WebSocket, token: str = Query(...)):
                         elif msg.get("bytes"):
                             await agent_ws.send(msg["bytes"])
                 except WebSocketDisconnect:
-                    pass
-                except Exception:
-                    pass
+                    client_disconnected = True
+                    log.debug(f"Client disconnected (user={user_id})")
+                except Exception as e:
+                    client_disconnected = True
+                    log.debug(f"Client→agent error (user={user_id}): {e}")
 
             async def agent_to_client():
+                nonlocal agent_disconnected
                 try:
                     async for msg in agent_ws:
                         if isinstance(msg, bytes):
                             await ws.send_bytes(msg)
                         else:
                             await ws.send_text(msg)
-                except Exception:
-                    pass
+                    # Iterator exhausted = agent closed connection
+                    agent_disconnected = True
+                    log.info(f"Agent closed connection (user={user_id})")
+                except Exception as e:
+                    agent_disconnected = True
+                    log.debug(f"Agent→client error (user={user_id}): {e}")
 
-            # Run both directions concurrently
+            async def ping_client():
+                """Periodic ping to detect zombie client connections."""
+                try:
+                    while True:
+                        await asyncio.sleep(25)
+                        await ws.send_json({"type": "ping"})
+                except Exception:
+                    pass  # Connection already dead, other tasks will handle it
+
+            # Run all directions concurrently
             done, pending = await asyncio.wait(
                 [
                     asyncio.create_task(client_to_agent()),
                     asyncio.create_task(agent_to_client()),
+                    asyncio.create_task(ping_client()),
                 ],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
+            # Await cancellation to ensure clean shutdown
+            await asyncio.gather(*pending, return_exceptions=True)
 
     except Exception as e:
-        log.error(f"WS proxy error: {e}")
+        agent_disconnected = True
+        log.error(f"WS proxy error (user={user_id}): {e}")
+
+    # ── Clean close ──
+    # Notify client if agent died (client may still be connected)
+    if agent_disconnected and not client_disconnected:
         try:
-            await ws.send_json({"type": "error", "message": "Agent connection failed"})
+            await ws.send_json(
+                {"type": "error", "message": "Agent disconnected — reconnecting..."}
+            )
+            await ws.close(code=4003, reason="Agent disconnected")
+        except Exception:
+            pass
+    else:
+        try:
             await ws.close()
         except Exception:
             pass
+
+    log.info(
+        f"WS proxy closed (user={user_id}, client_dc={client_disconnected}, agent_dc={agent_disconnected})"
+    )
 
 
 # ── Health ─────────────────────────────────────────────────

@@ -291,8 +291,14 @@ async def memory_conversations(limit: int = 20):
 
 
 async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
-    """Send a JSON message over WebSocket with timeout protection."""
+    """Send a JSON message over WebSocket with timeout protection.
+
+    Silently drops messages if the connection is already dead,
+    preventing wasted work in the LLM/TTS pipeline.
+    """
     try:
+        if ws.client_state.name != "CONNECTED":
+            return
         await asyncio.wait_for(
             ws.send_text(json.dumps({"type": msg_type, "data": data, **extra})),
             timeout=config.server.ws_send_timeout,
@@ -300,7 +306,7 @@ async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
     except asyncio.TimeoutError:
         logger.warning(f"WebSocket send timeout ({msg_type})")
     except Exception as e:
-        logger.error(f"WebSocket send error ({msg_type}): {e}")
+        logger.debug(f"WebSocket send skipped ({msg_type}): {e}")
 
 
 async def _speak_status(ws: WebSocket, tts: TTSProcessor, text: str):
@@ -516,6 +522,9 @@ async def websocket_endpoint(ws: WebSocket):
     """
     await ws.accept()
     logger.info("Client connected")
+
+    # Client liveness — set to False on disconnect to short-circuit sends
+    client_alive = True
 
     # Session tracking
     session_id = str(uuid.uuid4())[:8]
@@ -774,10 +783,18 @@ async def websocket_endpoint(ws: WebSocket):
                 logger.warning(f"Unknown message type: {msg_type}")
 
     except WebSocketDisconnect:
+        client_alive = False
         logger.info("Client disconnected")
     except Exception as e:
+        client_alive = False
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        client_alive = False
+
+        # Cancel pending debounce (could fire after cleanup otherwise)
+        if debounce_task and not debounce_task.done():
+            debounce_task.cancel()
+
         if stt_event_task:
             stt_event_task.cancel()
             try:

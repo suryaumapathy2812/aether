@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { isLoggedIn, getWsUrl } from "@/lib/api";
 
 /**
  * Chat — text conversation with Aether.
  * Header, scrollable messages, input pinned at bottom.
+ * Reconnects automatically with exponential backoff on disconnect.
  */
+
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY = 1000; // 1 second
+const MAX_RECONNECT_DELAY = 30000; // 30 seconds
+
 export default function ChatPage() {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempts = useRef(0);
+  const unmounted = useRef(false);
   const [messages, setMessages] = useState<{ role: string; text: string }[]>(
     []
   );
@@ -22,18 +31,53 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  useEffect(() => {
-    if (!isLoggedIn()) {
-      router.push("/");
-      return;
+  const connect = useCallback(() => {
+    if (unmounted.current) return;
+
+    // Clean up previous connection
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onmessage = null;
+      try { wsRef.current.close(); } catch { /* ignore */ }
     }
 
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
 
-    ws.onopen = () => setStatus("connected");
-    ws.onclose = () => setStatus("disconnected");
-    ws.onerror = () => setStatus("connection failed");
+    ws.onopen = () => {
+      reconnectAttempts.current = 0;
+      setStatus("connected");
+    };
+
+    ws.onclose = (e) => {
+      if (unmounted.current) return;
+
+      // Auth errors — don't reconnect
+      if (e.code === 4001) {
+        setStatus("auth failed");
+        router.push("/");
+        return;
+      }
+
+      // Schedule reconnect with exponential backoff
+      if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts.current++;
+        const delay = Math.min(
+          BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts.current - 1),
+          MAX_RECONNECT_DELAY
+        );
+        setStatus(`reconnecting (${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})...`);
+        reconnectTimer.current = setTimeout(connect, delay);
+      } else {
+        setStatus("disconnected — refresh to retry");
+      }
+    };
+
+    ws.onerror = () => {
+      // onclose will fire after this, which handles reconnection
+    };
 
     ws.onmessage = (e) => {
       try {
@@ -53,17 +97,37 @@ export default function ChatPage() {
           setStatus(msg.data || "");
         } else if (msg.type === "stream_end") {
           setStatus("connected");
+        } else if (msg.type === "error") {
+          setStatus(msg.message || "error");
+        } else if (msg.type === "ping") {
+          // Respond to orchestrator ping (keep-alive)
+          ws.send(JSON.stringify({ type: "pong" }));
         }
       } catch {
-        /* ignore */
+        /* ignore non-JSON messages */
       }
     };
-
-    return () => ws.close();
   }, [router]);
+
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      router.push("/");
+      return;
+    }
+
+    unmounted.current = false;
+    connect();
+
+    return () => {
+      unmounted.current = true;
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [router, connect]);
 
   function sendText() {
     if (!input.trim() || !wsRef.current) return;
+    if (wsRef.current.readyState !== WebSocket.OPEN) return;
     const text = input.trim();
     setInput("");
     setMessages((prev) => [...prev, { role: "user", text }]);
@@ -97,8 +161,20 @@ export default function ChatPage() {
           Chat
         </span>
         {/* Status indicator */}
-        <span className="text-[9px] text-[var(--color-text-muted)] tracking-wider w-8 text-right">
-          {status === "connected" ? "·" : status === "thinking..." ? "···" : ""}
+        <span className={`text-[9px] tracking-wider text-right ${
+          status.startsWith("reconnecting") || status.startsWith("disconnected")
+            ? "text-[var(--color-text-secondary)] w-auto ml-2"
+            : "text-[var(--color-text-muted)] w-8"
+        }`}>
+          {status === "connected"
+            ? "·"
+            : status === "thinking..."
+            ? "···"
+            : status.startsWith("reconnecting")
+            ? "reconnecting..."
+            : status.startsWith("disconnected")
+            ? "offline"
+            : ""}
         </span>
       </header>
 
