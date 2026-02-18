@@ -135,7 +135,7 @@ input::placeholder {
   background: var(--color-surface);
 }
 
-/* ── Orb animation keyframes ── */
+/* ── Orb animation keyframes (large — iOS-style) ── */
 @keyframes orb-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.04); opacity: 0.9; }
@@ -149,6 +149,22 @@ input::placeholder {
 @keyframes orb-glow {
   0%, 100% { box-shadow: 0 0 40px rgba(255,255,255,0.05); }
   50% { box-shadow: 0 0 80px rgba(255,255,255,0.12); }
+}
+
+/* ── Status orb keyframes (small — header indicator) ── */
+@keyframes status-orb-breathe {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+@keyframes status-orb-pulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@keyframes status-orb-think {
+  0%, 100% { opacity: 0.7; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.25); }
 }
 
 @keyframes fade-in {

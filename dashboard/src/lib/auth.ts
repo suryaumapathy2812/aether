@@ -37,6 +37,8 @@ export const auth = betterAuth({
     "http://localhost:3000",
     "http://localhost:9000",
     process.env.BETTER_AUTH_URL || "",
+    // Additional trusted origins (comma-separated) for OrbStack, tunnels, etc.
+    ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map(s => s.trim()) || []),
   ].filter(Boolean),
 });
 

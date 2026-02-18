@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 import { getWsUrl } from "@/lib/api";
+import StatusOrb from "@/components/StatusOrb";
+import type { AgentStatus } from "@/hooks/useAgentStatus";
 
 /**
  * Chat — text conversation with Aether.
@@ -14,6 +16,16 @@ import { getWsUrl } from "@/lib/api";
 const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_RECONNECT_DELAY = 1000; // 1 second
 const MAX_RECONNECT_DELAY = 30000; // 30 seconds
+
+/** Map the chat page's WS status string to an AgentStatus for the orb. */
+function wsStatusToOrb(status: string): AgentStatus {
+  if (status === "connected") return "connected";
+  if (status === "listening...") return "listening";
+  if (status === "thinking...") return "thinking";
+  if (status.startsWith("reconnecting") || status.startsWith("connecting")) return "unknown";
+  if (status.startsWith("disconnected") || status === "auth failed") return "disconnected";
+  return "connected";
+}
 
 export default function ChatPage() {
   const router = useRouter();
@@ -165,22 +177,10 @@ export default function ChatPage() {
         <span className="text-[11px] tracking-[0.18em] uppercase text-[var(--color-text-secondary)] font-normal">
           Chat
         </span>
-        {/* Status indicator */}
-        <span className={`text-[9px] tracking-wider text-right ${
-          status.startsWith("reconnecting") || status.startsWith("disconnected")
-            ? "text-[var(--color-text-secondary)] w-auto ml-2"
-            : "text-[var(--color-text-muted)] w-8"
-        }`}>
-          {status === "connected"
-            ? "·"
-            : status === "thinking..."
-            ? "···"
-            : status.startsWith("reconnecting")
-            ? "reconnecting..."
-            : status.startsWith("disconnected")
-            ? "offline"
-            : ""}
-        </span>
+        {/* Status orb */}
+        <div className="w-8 flex items-center justify-center">
+          <StatusOrb status={wsStatusToOrb(status)} />
+        </div>
       </header>
 
       <div className="mx-6 h-px bg-[var(--color-border)] shrink-0" />

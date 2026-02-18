@@ -1,6 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import StatusOrb from "@/components/StatusOrb";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
 
 /**
  * Page shell — consistent layout for all inner pages.
@@ -20,6 +22,7 @@ export default function PageShell({
   centered?: boolean;
 }) {
   const router = useRouter();
+  const agentStatus = useAgentStatus();
 
   return (
     <div className="min-h-screen flex flex-col w-full px-6">
@@ -54,7 +57,9 @@ export default function PageShell({
             </svg>
           </button>
         ) : (
-          <div className="w-8" />
+          <div className="w-8 flex items-center justify-center">
+            <StatusOrb status={agentStatus} />
+          </div>
         )}
       </header>
 

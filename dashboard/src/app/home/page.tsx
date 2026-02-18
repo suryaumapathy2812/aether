@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import MenuList from "@/components/MenuList";
 import { useSession } from "@/lib/auth-client";
+import StatusOrb from "@/components/StatusOrb";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
 
 /**
  * Home — navigation hub. User greeting + menu items.
@@ -17,6 +19,8 @@ export default function HomePage() {
       router.push("/");
     }
   }, [session, isPending, router]);
+
+  const agentStatus = useAgentStatus();
 
   if (isPending || !session) return null;
 
@@ -43,11 +47,12 @@ export default function HomePage() {
         ]}
       />
 
-      {/* Brand */}
-      <div className="mt-14">
+      {/* Brand + status */}
+      <div className="mt-14 flex items-center gap-2">
         <span className="text-[10px] tracking-[0.3em] text-[var(--color-text-muted)] italic font-light">
           aether
         </span>
+        <StatusOrb status={agentStatus} size={6} />
       </div>
     </div>
   );

@@ -59,7 +59,7 @@ services:
     build: ./orchestrator
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000,https://dashboard.core-ai.orb.local,https://agent.core-ai.orb.local
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
       - AGENT_SECRET=${AGENT_SECRET:-dev_agent_secret_change_in_production}
@@ -86,7 +86,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change_me_in_production_use_openssl_rand}
-      - BETTER_AUTH_URL=http://localhost:3000
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:3000}
+      - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:9000}
     volumes:
