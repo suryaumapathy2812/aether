@@ -40,8 +40,10 @@ export default function HomePage() {
       <MenuList
         items={[
           { label: "Chat", href: "/chat" },
+          { label: "Agent", href: "/agent" },
           { label: "Devices", href: "/devices" },
           { label: "Services", href: "/services" },
+          { label: "Plugins", href: "/plugins" },
           { label: "Memory", href: "/memory" },
           { label: "Account", href: "/account" },
         ]}

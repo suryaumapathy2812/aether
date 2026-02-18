@@ -38,7 +38,7 @@ class PairingService: ObservableObject {
         self.status = "waiting for pairing..."
 
         // Register the code with orchestrator
-        let url = URL(string: "\(orchestratorURL)/pair/request")!
+        let url = URL(string: "\(orchestratorURL)/api/pair/request")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -71,7 +71,7 @@ class PairingService: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
-            let url = URL(string: "\(self.orchestratorURL)/pair/status/\(code)")!
+            let url = URL(string: "\(self.orchestratorURL)/api/pair/status/\(code)")!
             URLSession.shared.dataTask(with: url) { data, _, _ in
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

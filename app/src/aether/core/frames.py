@@ -23,6 +23,7 @@ class FrameType(str, Enum):
     TOOL_CALL = "tool_call"      # LLM wants to call a tool
     TOOL_RESULT = "tool_result"  # Tool execution result
     STATUS = "status"            # Status/acknowledge for UI/voice
+    PLUGIN_EVENT = "plugin_event"  # Inbound event from a plugin sensor
 
 
 @dataclass
@@ -93,4 +94,12 @@ def status_frame(text: str, tool_name: str = "") -> Frame:
     return Frame(
         type=FrameType.STATUS,
         data={"text": text, "tool_name": tool_name},
+    )
+
+
+def plugin_event_frame(event_data: dict) -> Frame:
+    """Inbound event from a plugin sensor (email, slack, etc.)."""
+    return Frame(
+        type=FrameType.PLUGIN_EVENT,
+        data=event_data,
     )

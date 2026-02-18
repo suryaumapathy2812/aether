@@ -45,7 +45,7 @@ export function useAgentStatus(): AgentStatus {
       }
 
       try {
-        const res = await fetch(`${ORCHESTRATOR_URL}/health`, {
+        const res = await fetch(`${ORCHESTRATOR_URL}/api/health`, {
           signal: AbortSignal.timeout(5000),
         });
         if (!cancelled) {

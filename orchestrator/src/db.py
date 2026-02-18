@@ -129,4 +129,57 @@ async def bootstrap_schema():
                 created_at  TIMESTAMPTZ DEFAULT now(),
                 UNIQUE(user_id, provider)
             );
+
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id         TEXT PRIMARY KEY REFERENCES "user"(id),
+                -- Voice pipeline
+                stt_provider    TEXT DEFAULT 'deepgram',
+                stt_model       TEXT DEFAULT 'nova-3',
+                stt_language    TEXT DEFAULT 'en',
+                llm_provider    TEXT DEFAULT 'openai',
+                llm_model       TEXT DEFAULT 'gpt-4o',
+                tts_provider    TEXT DEFAULT 'openai',
+                tts_model       TEXT DEFAULT 'tts-1',
+                tts_voice       TEXT DEFAULT 'nova',
+                -- Personality
+                base_style      TEXT DEFAULT 'default',
+                custom_instructions TEXT DEFAULT '',
+                -- Timestamps
+                updated_at      TIMESTAMPTZ DEFAULT now()
+            );
+
+            -- ── Plugin tables ──
+
+            CREATE TABLE IF NOT EXISTS plugins (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL REFERENCES "user"(id),
+                name        TEXT NOT NULL,
+                enabled     BOOLEAN DEFAULT false,
+                installed_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(user_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_configs (
+                id          TEXT PRIMARY KEY,
+                plugin_id   TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
+                key         TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                updated_at  TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(plugin_id, key)
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_events (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL REFERENCES "user"(id),
+                plugin_name TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                source_id   TEXT,
+                summary     TEXT,
+                decision    TEXT DEFAULT 'pending',
+                payload     JSONB DEFAULT '{}',
+                created_at  TIMESTAMPTZ DEFAULT now()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plugin_events_user
+                ON plugin_events(user_id, created_at DESC);
         """)

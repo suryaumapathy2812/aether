@@ -24,11 +24,12 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from aether.core.config import config
+import aether.core.config as _config_mod
+from aether.core.config import config, reload_config
 from aether.core.frames import (
     Frame,
     FrameType,
@@ -54,6 +55,9 @@ from aether.tools.web_search import WebSearchTool
 from aether.tools.run_task import RunTaskTool
 from aether.skills.loader import SkillLoader
 from aether.agents.task_runner import TaskRunner
+from aether.plugins.loader import PluginLoader
+from aether.plugins.event import PluginEvent
+from aether.processors.event import EventProcessor
 
 # --- Setup ---
 setup_logging()
@@ -107,6 +111,19 @@ SKILLS_DIRS = [
 skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
 
+# --- Plugin Loader ---
+PLUGINS_DIR = str(APP_ROOT.parent / "plugins")  # app/plugins/
+plugin_loader = PluginLoader(PLUGINS_DIR)
+loaded_plugins = plugin_loader.discover()
+for tool in plugin_loader.all_tools():
+    tool_registry.register(tool)
+
+# --- Event Processor (decision engine for plugin events) ---
+event_processor = EventProcessor(llm_provider, memory_store)
+
+# Track connected WebSocket clients for plugin event forwarding
+_connected_clients: list[WebSocket] = []
+
 
 def _agent_auth_headers() -> dict[str, str]:
     """Build auth headers for orchestrator calls (agent secret)."""
@@ -131,7 +148,7 @@ async def _register_with_orchestrator():
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
-                f"{ORCHESTRATOR_URL}/agents/register",
+                f"{ORCHESTRATOR_URL}/api/agents/register",
                 json={
                     "agent_id": AGENT_ID,
                     "host": os.getenv("AETHER_AGENT_HOST", socket.gethostname()),
@@ -155,7 +172,7 @@ async def _heartbeat_loop():
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(
-                    f"{ORCHESTRATOR_URL}/agents/{AGENT_ID}/heartbeat",
+                    f"{ORCHESTRATOR_URL}/api/agents/{AGENT_ID}/heartbeat",
                     headers=_agent_auth_headers(),
                 )
         except Exception:
@@ -305,6 +322,124 @@ async def memory_conversations(limit: int = 20):
     """Return recent conversations."""
     conversations = await memory_store.get_recent(limit=limit)
     return JSONResponse({"conversations": conversations})
+
+
+# ── Config endpoints ───────────────────────────────────────
+
+
+@app.get("/config")
+async def get_config():
+    """Return the agent's current configuration (for dashboard display)."""
+    cfg = _config_mod.config  # Always read the latest (survives reload)
+    return JSONResponse(
+        {
+            "stt": {
+                "provider": cfg.stt.provider,
+                "model": cfg.stt.model,
+                "language": cfg.stt.language,
+            },
+            "llm": {
+                "provider": cfg.llm.provider,
+                "model": cfg.llm.model,
+            },
+            "tts": {
+                "provider": cfg.tts.provider,
+                "model": cfg.tts.model,
+                "voice": cfg.tts.voice,
+            },
+            "personality": {
+                "base_style": cfg.personality.base_style,
+                "custom_instructions": cfg.personality.custom_instructions,
+            },
+        }
+    )
+
+
+@app.post("/config/reload")
+async def config_reload(request_body: dict | None = None):
+    """Hot-reload config from env vars (or from provided overrides).
+
+    Called by the orchestrator when a user changes preferences in dev mode.
+    In multi-user mode, the container is restarted instead.
+    """
+    if request_body:
+        # Apply overrides to os.environ so reload_config() picks them up
+        for key, value in request_body.items():
+            os.environ[key] = str(value)
+
+    new_config = reload_config()
+
+    logger.info(
+        "Config reloaded (STT=%s/%s, LLM=%s/%s, TTS=%s/%s/%s, style=%s)",
+        new_config.stt.provider,
+        new_config.stt.model,
+        new_config.llm.provider,
+        new_config.llm.model,
+        new_config.tts.provider,
+        new_config.tts.model,
+        new_config.tts.voice,
+        new_config.personality.base_style,
+    )
+
+    return JSONResponse({"status": "reloaded"})
+
+
+@app.get("/plugins")
+async def list_plugins_endpoint():
+    """List loaded plugins and their tools."""
+    return JSONResponse(
+        {
+            "plugins": [
+                {
+                    "name": p.manifest.name,
+                    "display_name": p.manifest.display_name,
+                    "description": p.manifest.description,
+                    "tools": [t.name for t in p.tools],
+                    "has_skill": bool(p.skill_content),
+                }
+                for p in loaded_plugins
+            ]
+        }
+    )
+
+
+@app.post("/plugin_event")
+async def receive_plugin_event(request: Request):
+    """
+    Receive a plugin event forwarded from orchestrator webhook receiver.
+    Runs through EventProcessor → surfaces to connected clients if needed.
+    """
+    body = await request.json()
+
+    event = PluginEvent(
+        id=body.get("event_id", str(uuid.uuid4())),
+        plugin=body.get("plugin", "unknown"),
+        event_type=body.get("event_type", "unknown"),
+        source_id=body.get("source_id", ""),
+        timestamp=time.time(),
+        summary=body.get("summary", ""),
+        content=body.get("payload", {}).get("content", ""),
+        sender=body.get("payload", {}).get("sender", {}),
+        urgency=body.get("payload", {}).get("urgency", "medium"),
+        category=body.get("payload", {}).get("category", ""),
+        requires_action=body.get("payload", {}).get("requires_action", False),
+        available_actions=body.get("payload", {}).get("available_actions", []),
+        metadata=body.get("payload", {}).get("metadata", {}),
+    )
+
+    decision = await event_processor.process(event)
+
+    if decision.action in ("surface", "action_required"):
+        for client_ws in _connected_clients:
+            try:
+                await _send(client_ws, "text_chunk", decision.notification, index=0)
+                await _send(client_ws, "stream_end")
+            except Exception as e:
+                logger.debug(f"Plugin notification send failed: {e}")
+
+    return JSONResponse(
+        {"action": decision.action, "notification": decision.notification}
+    )
 
 
 async def _send(ws: WebSocket, msg_type: str, data: str = "", **extra):
@@ -538,6 +673,7 @@ async def websocket_endpoint(ws: WebSocket):
         {"type": "status", "data": "..."}                         — status updates
     """
     await ws.accept()
+    _connected_clients.append(ws)
     logger.info("Client connected")
 
     # Client liveness — set to False on disconnect to short-circuit sends
@@ -807,6 +943,8 @@ async def websocket_endpoint(ws: WebSocket):
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
         client_alive = False
+        if ws in _connected_clients:
+            _connected_clients.remove(ws)
 
         # Cancel pending debounce (could fire after cleanup otherwise)
         if debounce_task and not debounce_task.done():

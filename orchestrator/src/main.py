@@ -10,6 +10,7 @@ The orchestrator validates sessions by reading the shared Postgres session table
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import uuid
 import asyncio
@@ -155,6 +156,19 @@ class ApiKeyBody(BaseModel):
     key_value: str
 
 
+class PreferencesBody(BaseModel):
+    stt_provider: str | None = None
+    stt_model: str | None = None
+    stt_language: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    tts_provider: str | None = None
+    tts_model: str | None = None
+    tts_voice: str | None = None
+    base_style: str | None = None
+    custom_instructions: str | None = None
+
+
 # ── Agent Provisioning ─────────────────────────────────────
 
 
@@ -215,8 +229,19 @@ async def _ensure_agent(user_id: str) -> None:
     )
     user_keys = {r["provider"]: decrypt_value(r["key_value"]) for r in rows}
 
+    # Fetch user preferences for injection as env vars
+    pref_row = await pool.fetchrow(
+        "SELECT * FROM user_preferences WHERE user_id = $1", user_id
+    )
+    user_prefs = {}
+    if pref_row:
+        for col, env_name in PREF_TO_ENV.items():
+            val = pref_row.get(col)
+            if val:
+                user_prefs[env_name] = val
+
     # Provision (or restart) the agent container
-    result = await provision_agent(user_id, user_keys)
+    result = await provision_agent(user_id, user_keys, user_prefs)
 
     # Upsert agent record (agent will also self-register, but we pre-create the row)
     await pool.execute(
@@ -251,7 +276,7 @@ async def _ensure_agent(user_id: str) -> None:
 # ── Auth (user info) ───────────────────────────────────────
 
 
-@app.get("/auth/me")
+@app.get("/api/auth/me")
 async def me(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     row = await pool.fetchrow(
@@ -265,7 +290,7 @@ async def me(user_id: str = Depends(get_user_id)):
 # ── Agent Registry ─────────────────────────────────────────
 
 
-@app.post("/agents/register", dependencies=[Depends(verify_agent_secret)])
+@app.post("/api/agents/register", dependencies=[Depends(verify_agent_secret)])
 async def register_agent(body: AgentRegisterRequest):
     """Called by an Aether agent on startup. Requires AGENT_SECRET."""
     pool = await get_pool()
@@ -290,7 +315,7 @@ async def register_agent(body: AgentRegisterRequest):
     return {"status": "registered"}
 
 
-@app.post("/agents/{agent_id}/assign", dependencies=[Depends(verify_agent_secret)])
+@app.post("/api/agents/{agent_id}/assign", dependencies=[Depends(verify_agent_secret)])
 async def assign_agent(agent_id: str, user_id: str = Query(...)):
     """Assign an agent to a user. Requires AGENT_SECRET."""
     pool = await get_pool()
@@ -300,7 +325,7 @@ async def assign_agent(agent_id: str, user_id: str = Query(...)):
     return {"status": "assigned"}
 
 
-@app.get("/agents/health")
+@app.get("/api/agents/health")
 async def list_agents():
     pool = await get_pool()
     rows = await pool.fetch(
@@ -309,7 +334,9 @@ async def list_agents():
     return [dict(r) for r in rows]
 
 
-@app.post("/agents/{agent_id}/heartbeat", dependencies=[Depends(verify_agent_secret)])
+@app.post(
+    "/api/agents/{agent_id}/heartbeat", dependencies=[Depends(verify_agent_secret)]
+)
 async def heartbeat(agent_id: str):
     pool = await get_pool()
     await pool.execute(
@@ -322,7 +349,7 @@ async def heartbeat(agent_id: str):
 # ── Device Pairing ─────────────────────────────────────────
 
 
-@app.post("/pair/request")
+@app.post("/api/pair/request")
 async def pair_request(body: PairRequestBody):
     """iOS app calls this with the code it's displaying."""
     pool = await get_pool()
@@ -338,7 +365,7 @@ async def pair_request(body: PairRequestBody):
     return {"status": "waiting", "expires_in": 600}
 
 
-@app.post("/pair/confirm")
+@app.post("/api/pair/confirm")
 async def pair_confirm(body: PairConfirmBody, user_id: str = Depends(get_user_id)):
     """Dashboard calls this when user enters the code."""
     pool = await get_pool()
@@ -378,7 +405,7 @@ async def pair_confirm(body: PairConfirmBody, user_id: str = Depends(get_user_id
     return {"device_id": device_id, "device_token": device_token}
 
 
-@app.get("/pair/status/{code}")
+@app.get("/api/pair/status/{code}")
 async def pair_status(code: str):
     """iOS app polls this to check if code was confirmed."""
     pool = await get_pool()
@@ -402,7 +429,7 @@ async def pair_status(code: str):
     return {"status": "waiting"}
 
 
-@app.get("/devices")
+@app.get("/api/devices")
 async def list_devices(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
@@ -415,7 +442,7 @@ async def list_devices(user_id: str = Depends(get_user_id)):
 # ── API Key Management ─────────────────────────────────────
 
 
-@app.post("/services/keys")
+@app.post("/api/services/keys")
 async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     key_id = uuid.uuid4().hex[:12]
@@ -434,7 +461,7 @@ async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     return {"status": "saved"}
 
 
-@app.get("/services/keys")
+@app.get("/api/services/keys")
 async def list_api_keys(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
@@ -451,7 +478,7 @@ async def list_api_keys(user_id: str = Depends(get_user_id)):
     ]
 
 
-@app.delete("/services/keys/{provider}")
+@app.delete("/api/services/keys/{provider}")
 async def delete_api_key(provider: str, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     await pool.execute(
@@ -460,6 +487,111 @@ async def delete_api_key(provider: str, user_id: str = Depends(get_user_id)):
         provider,
     )
     return {"status": "deleted"}
+
+
+# ── User Preferences ───────────────────────────────────────
+
+PREFERENCE_COLUMNS = [
+    "stt_provider",
+    "stt_model",
+    "stt_language",
+    "llm_provider",
+    "llm_model",
+    "tts_provider",
+    "tts_model",
+    "tts_voice",
+    "base_style",
+    "custom_instructions",
+]
+
+# Map preference fields to agent env vars
+PREF_TO_ENV = {
+    "stt_provider": "AETHER_STT_PROVIDER",
+    "stt_model": "AETHER_STT_MODEL",
+    "stt_language": "AETHER_STT_LANGUAGE",
+    "llm_provider": "AETHER_LLM_PROVIDER",
+    "llm_model": "AETHER_LLM_MODEL",
+    "tts_provider": "AETHER_TTS_PROVIDER",
+    "tts_model": "AETHER_TTS_MODEL",
+    "tts_voice": "AETHER_TTS_VOICE",
+    "base_style": "AETHER_BASE_STYLE",
+    "custom_instructions": "AETHER_CUSTOM_INSTRUCTIONS",
+}
+
+
+@app.get("/api/preferences")
+async def get_preferences(user_id: str = Depends(get_user_id)):
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM user_preferences WHERE user_id = $1", user_id
+    )
+    if not row:
+        # Return defaults (no row yet — user hasn't customized anything)
+        return {col: None for col in PREFERENCE_COLUMNS}
+    return {col: row[col] for col in PREFERENCE_COLUMNS}
+
+
+@app.put("/api/preferences")
+async def update_preferences(
+    body: PreferencesBody, user_id: str = Depends(get_user_id)
+):
+    pool = await get_pool()
+
+    # Build the set of fields that were actually sent (non-None)
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        return {"status": "no changes"}
+
+    # Upsert: insert with provided values, or update on conflict
+    columns = ["user_id"] + list(updates.keys())
+    placeholders = ", ".join(f"${i + 1}" for i in range(len(columns)))
+    set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(updates.keys()))
+    values = [user_id] + list(updates.values())
+
+    await pool.execute(
+        f"""
+        INSERT INTO user_preferences ({", ".join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT (user_id) DO UPDATE SET {set_clause}, updated_at = now()
+        """,
+        *values,
+    )
+
+    # Signal the running agent to reload config via HTTP
+    # Works in both dev mode (shared agent) and multi-user mode (per-user container)
+    await _signal_agent_reload(user_id, updates)
+
+    return {"status": "saved"}
+
+
+async def _signal_agent_reload(user_id: str, updates: dict) -> None:
+    """Tell the running agent to reload its config after a preference change.
+
+    POSTs the new config directly to the agent's /config/reload endpoint.
+    Works in both dev mode (shared agent) and multi-user mode (per-user container).
+    """
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        return
+
+    import httpx
+
+    # Convert preference keys to env var names for the agent
+    env_updates = {}
+    for k, v in updates.items():
+        env_name = PREF_TO_ENV.get(k)
+        if env_name and v:
+            env_updates[env_name] = v
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"http://{agent['host']}:{agent['port']}/config/reload",
+                json=env_updates,
+            )
+            log.info(f"Signaled agent config reload for user {user_id}")
+    except Exception as e:
+        log.warning(f"Failed to signal agent reload: {e}")
 
 
 # ── Memory Proxy ───────────────────────────────────────────
@@ -491,7 +623,7 @@ async def _get_agent_for_user(user_id: str) -> dict | None:
     return None
 
 
-@app.get("/memory/facts")
+@app.get("/api/memory/facts")
 async def proxy_memory_facts(user_id: str = Depends(get_user_id)):
     agent = await _get_agent_for_user(user_id)
     if not agent:
@@ -503,7 +635,7 @@ async def proxy_memory_facts(user_id: str = Depends(get_user_id)):
         return resp.json()
 
 
-@app.get("/memory/sessions")
+@app.get("/api/memory/sessions")
 async def proxy_memory_sessions(user_id: str = Depends(get_user_id)):
     agent = await _get_agent_for_user(user_id)
     if not agent:
@@ -517,7 +649,7 @@ async def proxy_memory_sessions(user_id: str = Depends(get_user_id)):
         return resp.json()
 
 
-@app.get("/memory/conversations")
+@app.get("/api/memory/conversations")
 async def proxy_memory_conversations(
     user_id: str = Depends(get_user_id), limit: int = 20
 ):
@@ -537,7 +669,7 @@ async def proxy_memory_conversations(
 # ── WebSocket Proxy ────────────────────────────────────────
 
 
-@app.websocket("/ws")
+@app.websocket("/api/ws")
 async def ws_proxy(ws: WebSocket):
     """
     Proxy WebSocket between client and the user's Aether agent.
@@ -666,10 +798,266 @@ async def ws_proxy(ws: WebSocket):
     )
 
 
+# ── Plugin Management ─────────────────────────────────────
+
+# Available plugins — matches agent's app/plugins/ directory.
+AVAILABLE_PLUGINS = {
+    "gmail": {
+        "name": "gmail",
+        "display_name": "Gmail",
+        "description": "Monitor and respond to Gmail emails",
+        "auth_type": "oauth2",
+        "auth_provider": "google",
+        "config_fields": [
+            {
+                "key": "account_email",
+                "label": "Gmail Address",
+                "type": "text",
+                "required": True,
+            },
+        ],
+    },
+}
+
+
+class PluginConfigBody(BaseModel):
+    config: dict[str, str]
+
+
+@app.get("/api/plugins")
+async def list_plugins(user_id: str = Depends(get_user_id)):
+    """List all available plugins with user's install/enable status."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT id, name, enabled FROM plugins WHERE user_id = $1", user_id
+    )
+    installed = {r["name"]: {"id": r["id"], "enabled": r["enabled"]} for r in rows}
+
+    result = []
+    for name, meta in AVAILABLE_PLUGINS.items():
+        entry = {**meta}
+        if name in installed:
+            entry["installed"] = True
+            entry["plugin_id"] = installed[name]["id"]
+            entry["enabled"] = installed[name]["enabled"]
+        else:
+            entry["installed"] = False
+            entry["plugin_id"] = None
+            entry["enabled"] = False
+        result.append(entry)
+    return result
+
+
+@app.post("/api/plugins/{plugin_name}/install")
+async def install_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
+    """Install a plugin for the user."""
+    if plugin_name not in AVAILABLE_PLUGINS:
+        raise HTTPException(404, f"Unknown plugin: {plugin_name}")
+
+    pool = await get_pool()
+    plugin_id = uuid.uuid4().hex[:12]
+    await pool.execute(
+        """
+        INSERT INTO plugins (id, user_id, name, enabled)
+        VALUES ($1, $2, $3, false)
+        ON CONFLICT (user_id, name) DO NOTHING
+        """,
+        plugin_id,
+        user_id,
+        plugin_name,
+    )
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    return {"plugin_id": row["id"], "status": "installed"}
+
+
+@app.post("/api/plugins/{plugin_name}/enable")
+async def enable_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE plugins SET enabled = true WHERE user_id = $1 AND name = $2",
+        user_id,
+        plugin_name,
+    )
+    return {"status": "enabled"}
+
+
+@app.post("/api/plugins/{plugin_name}/disable")
+async def disable_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE plugins SET enabled = false WHERE user_id = $1 AND name = $2",
+        user_id,
+        plugin_name,
+    )
+    return {"status": "disabled"}
+
+
+@app.post("/api/plugins/{plugin_name}/config")
+async def save_plugin_config(
+    plugin_name: str, body: PluginConfigBody, user_id: str = Depends(get_user_id)
+):
+    """Save plugin configuration (encrypted at rest)."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    if not row:
+        raise HTTPException(404, "Plugin not installed")
+    plugin_id = row["id"]
+
+    for key, value in body.config.items():
+        config_id = uuid.uuid4().hex[:12]
+        encrypted = encrypt_value(value)
+        await pool.execute(
+            """
+            INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
+            VALUES ($1, $2, $3, $4, now())
+            ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
+            """,
+            config_id,
+            plugin_id,
+            key,
+            encrypted,
+        )
+    return {"status": "saved"}
+
+
+@app.get("/api/plugins/{plugin_name}/config")
+async def get_plugin_config(plugin_name: str, user_id: str = Depends(get_user_id)):
+    """Get plugin config (values masked)."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    if not row:
+        raise HTTPException(404, "Plugin not installed")
+
+    configs = await pool.fetch(
+        "SELECT key, value FROM plugin_configs WHERE plugin_id = $1", row["id"]
+    )
+    result = {}
+    for c in configs:
+        decrypted = decrypt_value(c["value"])
+        if len(decrypted) > 8:
+            result[c["key"]] = decrypted[:4] + "..." + decrypted[-4:]
+        else:
+            result[c["key"]] = decrypted
+    return result
+
+
+@app.delete("/api/plugins/{plugin_name}")
+async def uninstall_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
+    """Uninstall a plugin (cascades to configs)."""
+    pool = await get_pool()
+    await pool.execute(
+        "DELETE FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    return {"status": "uninstalled"}
+
+
+# ── Webhook Receiver ──────────────────────────────────────
+
+
+@app.post("/api/hooks/{plugin_name}/{user_id}")
+async def webhook_receiver(plugin_name: str, user_id: str, request: Request):
+    """
+    Receive webhook events from third-party services.
+
+    1. Verify plugin is installed and enabled
+    2. Store raw event in plugin_events
+    3. Forward to user's agent as a plugin_event
+    """
+    pool = await get_pool()
+
+    plugin = await pool.fetchrow(
+        "SELECT id, enabled FROM plugins WHERE user_id = $1 AND name = $2",
+        user_id,
+        plugin_name,
+    )
+    if not plugin:
+        raise HTTPException(404, "Plugin not found for user")
+    if not plugin["enabled"]:
+        return {"status": "plugin_disabled"}
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {"raw": (await request.body()).decode("utf-8", errors="replace")}
+
+    event_id = uuid.uuid4().hex
+    event_type = payload.get("event_type", payload.get("type", "unknown"))
+    summary = payload.get("summary", "")
+    source_id = payload.get("source_id", payload.get("message_id", ""))
+
+    await pool.execute(
+        """
+        INSERT INTO plugin_events (id, user_id, plugin_name, event_type, source_id, summary, payload)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+        """,
+        event_id,
+        user_id,
+        plugin_name,
+        event_type,
+        source_id,
+        summary,
+        json.dumps(payload),
+    )
+
+    # Forward to agent via HTTP
+    agent = await pool.fetchrow(
+        "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+        user_id,
+    )
+    if agent:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(
+                    f"http://{agent['host']}:{agent['port']}/plugin_event",
+                    json={
+                        "event_id": event_id,
+                        "plugin": plugin_name,
+                        "event_type": event_type,
+                        "source_id": source_id,
+                        "summary": summary,
+                        "payload": payload,
+                    },
+                )
+        except Exception as e:
+            log.warning(f"Failed to forward plugin event to agent: {e}")
+
+    log.info(f"Webhook: {plugin_name}/{event_type} for user {user_id}")
+    return {"status": "received", "event_id": event_id}
+
+
+@app.get("/api/plugins/{plugin_name}/events")
+async def list_plugin_events(
+    plugin_name: str,
+    user_id: str = Depends(get_user_id),
+    limit: int = 20,
+):
+    """List recent events for a plugin."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT id, event_type, source_id, summary, decision, created_at
+        FROM plugin_events WHERE user_id = $1 AND plugin_name = $2
+        ORDER BY created_at DESC LIMIT $3
+        """,
+        user_id,
+        plugin_name,
+        limit,
+    )
+    return [dict(r) for r in rows]
+
+
 # ── Health ─────────────────────────────────────────────────
 
 
-@app.get("/health")
+@app.get("/api/health")
 async def health():
     try:
         pool = await get_pool()

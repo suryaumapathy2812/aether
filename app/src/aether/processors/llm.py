@@ -20,7 +20,7 @@ import logging
 import re
 from typing import AsyncGenerator
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.core.frames import (
     Frame,
     FrameType,
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 10  # Safety limit on agentic loops
 
-SYSTEM_PROMPT = """You are Aether — a warm, thoughtful personal assistant. You speak naturally and conversationally, like a close friend who happens to be incredibly knowledgeable.
+SYSTEM_PROMPT_BASE = """You are Aether — a warm, thoughtful personal assistant. You speak naturally and conversationally, like a close friend who happens to be incredibly knowledgeable.
 
 Key behaviors:
 - Be concise. Respond in 1-3 sentences for casual conversation. Go longer only when depth is needed.
@@ -56,6 +56,34 @@ Tools:
 - You can call multiple tools if needed to complete a task.
 - If a tool fails, explain what happened and suggest alternatives.
 """
+
+# Style modifiers — appended to system prompt based on user preference
+STYLE_MODIFIERS = {
+    "default": "",
+    "concise": "\nStyle: Be extremely concise. Use short sentences. Avoid filler words. Get to the point fast.",
+    "detailed": "\nStyle: Be thorough and detailed. Explain your reasoning. Provide context and examples when helpful.",
+    "friendly": "\nStyle: Be extra warm and casual. Use conversational language, light humor, and encouraging tone.",
+    "professional": "\nStyle: Be polished and professional. Clear, structured responses. Minimal casual language.",
+}
+
+
+def _build_system_prompt() -> str:
+    """Build the full system prompt with personality config applied."""
+    prompt = SYSTEM_PROMPT_BASE
+
+    style = config_module.config.personality.base_style.lower()
+    modifier = STYLE_MODIFIERS.get(style, "")
+    if modifier:
+        prompt += modifier
+
+    instructions = config_module.config.personality.custom_instructions.strip()
+    if instructions:
+        prompt += (
+            f"\n\nUser's custom instructions (always follow these):\n{instructions}"
+        )
+
+    return prompt
+
 
 # Sentence boundary pattern
 SENTENCE_BOUNDARY = re.compile(
@@ -160,7 +188,7 @@ class LLMProcessor(Processor):
         The core agentic loop: LLM → tool calls → execute → feed back → repeat.
         Runs until the LLM stops calling tools or we hit the iteration limit.
         """
-        cfg = config.llm
+        cfg = config_module.config.llm
         tools_schema = (
             self.tool_registry.to_openai_tools() if self.tool_registry else None
         )
@@ -298,7 +326,7 @@ class LLMProcessor(Processor):
 
     def _build_messages(self, user_text: str) -> list[dict]:
         """Build the messages list for the LLM call."""
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = _build_system_prompt()
 
         # Skill injection — match user query, inject skill body into system prompt
         if self.skill_loader:
@@ -330,7 +358,7 @@ class LLMProcessor(Processor):
             self._pending_memory = None
 
         # Conversation history
-        max_turns = config.llm.max_history_turns
+        max_turns = config_module.config.llm.max_history_turns
         messages.extend(self.conversation_history[-max_turns * 2 :])
 
         # User message (with optional vision)

@@ -2,43 +2,26 @@
 #
 # Single origin: all services behind one domain.
 # Dashboard (Next.js) is the default backend.
-# /api/* and /ws are proxied to the orchestrator.
+# /api/* routes go to the orchestrator (except /api/auth/* which is Next.js/better-auth).
 #
 # Dev:  localhost:3000 (HTTP, auto-HTTPS disabled)
 # Prod: {$DOMAIN:localhost} (auto-HTTPS via Let's Encrypt)
 
 {$DOMAIN:localhost:3000} {
-	# ── Orchestrator API ──
-	# All /api/* paths EXCEPT /api/auth/* (which is handled by Next.js/better-auth)
-	handle /agents/* {
-		reverse_proxy orchestrator:9000
-	}
-	handle /pair/* {
-		reverse_proxy orchestrator:9000
-	}
-	handle /devices* {
-		reverse_proxy orchestrator:9000
-	}
-	handle /services/* {
-		reverse_proxy orchestrator:9000
-	}
-	handle /memory/* {
-		reverse_proxy orchestrator:9000
-	}
-	handle /health {
-		reverse_proxy orchestrator:9000
-	}
-	handle /auth/me {
-		reverse_proxy orchestrator:9000
+	# ── Next.js better-auth ──
+	# Must come before the /api/* catch-all so /api/auth/* stays with Next.js
+	handle /api/auth/* {
+		reverse_proxy dashboard:3000
 	}
 
-	# ── WebSocket proxy ──
-	handle /ws {
+	# ── Orchestrator API ──
+	# All other /api/* paths go to the orchestrator
+	handle /api/* {
 		reverse_proxy orchestrator:9000
 	}
 
 	# ── Dashboard (default) ──
-	# Everything else goes to Next.js (including /api/auth/*)
+	# Everything else goes to Next.js (pages, static assets, etc.)
 	handle {
 		reverse_proxy dashboard:3000
 	}

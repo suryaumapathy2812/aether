@@ -59,7 +59,9 @@ def _provider_to_env(provider: str) -> str | None:
 
 
 async def provision_agent(
-    user_id: str, user_api_keys: dict[str, str] | None = None
+    user_id: str,
+    user_api_keys: dict[str, str] | None = None,
+    user_preferences: dict[str, str] | None = None,
 ) -> dict:
     """
     Create and start an agent container for a user.
@@ -82,6 +84,7 @@ async def provision_agent(
 
     environment = {
         **env_keys,
+        **(user_preferences or {}),
         "AETHER_AGENT_ID": agent_id,
         "AETHER_USER_ID": user_id,
         "AETHER_DB_PATH": "/data/aether_memory.db",

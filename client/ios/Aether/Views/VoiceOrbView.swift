@@ -203,7 +203,7 @@ class AudioService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let wsURL = baseURL
             .replacingOccurrences(of: "http://", with: "ws://")
             .replacingOccurrences(of: "https://", with: "wss://")
-            + "/ws?token=\(token)"
+            + "/api/ws?token=\(token)"
         print("[AudioService] Connecting to: \(wsURL.prefix(80))...")
         guard let url = URL(string: wsURL) else {
             print("[AudioService] Invalid URL!")

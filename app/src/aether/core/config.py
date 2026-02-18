@@ -148,6 +148,21 @@ class TTSConfig:
 
 
 @dataclass(frozen=True)
+class PersonalityConfig:
+    """User personality / style settings."""
+
+    base_style: str = "default"  # default, concise, detailed, friendly, professional
+    custom_instructions: str = ""
+
+    @classmethod
+    def from_env(cls) -> PersonalityConfig:
+        return cls(
+            base_style=os.getenv("AETHER_BASE_STYLE", "default"),
+            custom_instructions=os.getenv("AETHER_CUSTOM_INSTRUCTIONS", ""),
+        )
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     """Server settings."""
 
@@ -176,6 +191,7 @@ class AetherConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
     @classmethod
@@ -185,9 +201,21 @@ class AetherConfig:
             llm=LLMConfig.from_env(),
             tts=TTSConfig.from_env(),
             memory=MemoryConfig.from_env(),
+            personality=PersonalityConfig.from_env(),
             server=ServerConfig.from_env(),
         )
 
 
 # Singleton — import this wherever you need config
 config = AetherConfig.from_env()
+
+
+def reload_config() -> AetherConfig:
+    """Reload config from environment. Returns the new config.
+
+    Used when the orchestrator signals a preference change.
+    Since dataclasses are frozen, we replace the global singleton.
+    """
+    global config
+    config = AetherConfig.from_env()
+    return config
