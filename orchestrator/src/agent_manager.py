@@ -20,6 +20,7 @@ MULTI_USER_MODE = os.getenv("MULTI_USER_MODE", "false").lower() == "true"
 AGENT_IMAGE = os.getenv("AGENT_IMAGE", "core-ai-agent:latest")
 AGENT_NETWORK = os.getenv("AGENT_NETWORK", "core-ai_default")
 IDLE_TIMEOUT_MINUTES = int(os.getenv("AGENT_IDLE_TIMEOUT", "30"))
+AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
 # System-wide fallback API keys (from orchestrator's own env)
 SYSTEM_API_KEYS = {
@@ -88,6 +89,7 @@ async def provision_agent(
         "AETHER_HOST": "0.0.0.0",
         "AETHER_PORT": "8000",
         "ORCHESTRATOR_URL": "http://orchestrator:9000",
+        **({"AGENT_SECRET": AGENT_SECRET} if AGENT_SECRET else {}),
     }
 
     docker_client = _get_docker()

@@ -63,6 +63,7 @@ logger = logging.getLogger("aether")
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "")
 AGENT_ID = os.getenv("AETHER_AGENT_ID", f"agent-{socket.gethostname()}")
 AGENT_USER_ID = os.getenv("AETHER_USER_ID", "")
+AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
 # --- App ---
 app = FastAPI(title="Aether", version="0.0.7")
@@ -107,11 +108,23 @@ skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
 
 
+def _agent_auth_headers() -> dict[str, str]:
+    """Build auth headers for orchestrator calls (agent secret)."""
+    if AGENT_SECRET:
+        return {"Authorization": f"Bearer {AGENT_SECRET}"}
+    return {}
+
+
 async def _register_with_orchestrator():
     """Register this agent with the orchestrator on startup."""
     if not ORCHESTRATOR_URL:
         logger.info("No ORCHESTRATOR_URL — skipping registration")
         return
+
+    if not AGENT_SECRET:
+        logger.warning(
+            "⚠ AGENT_SECRET not set — registration calls are unauthenticated"
+        )
 
     import httpx
 
@@ -126,6 +139,7 @@ async def _register_with_orchestrator():
                     "container_id": os.getenv("HOSTNAME", ""),
                     "user_id": AGENT_USER_ID or None,
                 },
+                headers=_agent_auth_headers(),
             )
             logger.info(f"Registered with orchestrator: {resp.status_code}")
     except Exception as e:
@@ -140,7 +154,10 @@ async def _heartbeat_loop():
         await asyncio.sleep(30)
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                await client.post(f"{ORCHESTRATOR_URL}/agents/{AGENT_ID}/heartbeat")
+                await client.post(
+                    f"{ORCHESTRATOR_URL}/agents/{AGENT_ID}/heartbeat",
+                    headers=_agent_auth_headers(),
+                )
         except Exception:
             logger.warning("Heartbeat to orchestrator failed")
 

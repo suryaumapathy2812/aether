@@ -9,6 +9,7 @@ The orchestrator validates sessions by reading the shared Postgres session table
 
 from __future__ import annotations
 
+import hmac
 import os
 import uuid
 import asyncio
@@ -28,6 +29,31 @@ from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
 from .auth import get_user_id, get_user_id_from_ws
+
+# ── Agent registration secret ─────────────────────────────
+AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+
+
+async def verify_agent_secret(request: Request) -> None:
+    """
+    Dependency: verify the shared agent secret on internal agent endpoints.
+
+    Agents send `Authorization: Bearer <AGENT_SECRET>` on registration
+    and heartbeat calls. Uses constant-time comparison.
+    """
+    if not AGENT_SECRET:
+        # No secret configured — skip validation (dev convenience, logged once at startup)
+        return
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing agent authorization")
+
+    token = auth_header[7:]
+    if not hmac.compare_digest(token, AGENT_SECRET):
+        raise HTTPException(403, "Invalid agent secret")
+
+
 from .agent_manager import (
     MULTI_USER_MODE,
     IDLE_TIMEOUT_MINUTES,
@@ -59,6 +85,11 @@ async def startup():
     await bootstrap_schema()
 
     # Reconcile orphaned containers on startup
+    if not AGENT_SECRET:
+        log.warning(
+            "⚠ AGENT_SECRET not set — agent registration endpoints are UNPROTECTED"
+        )
+
     if MULTI_USER_MODE:
         pool = await get_pool()
         await reconcile_containers(pool)
@@ -233,9 +264,9 @@ async def me(user_id: str = Depends(get_user_id)):
 # ── Agent Registry ─────────────────────────────────────────
 
 
-@app.post("/agents/register")
+@app.post("/agents/register", dependencies=[Depends(verify_agent_secret)])
 async def register_agent(body: AgentRegisterRequest):
-    """Called by an Aether agent on startup."""
+    """Called by an Aether agent on startup. Requires AGENT_SECRET."""
     pool = await get_pool()
     await pool.execute(
         """
@@ -258,9 +289,9 @@ async def register_agent(body: AgentRegisterRequest):
     return {"status": "registered"}
 
 
-@app.post("/agents/{agent_id}/assign")
+@app.post("/agents/{agent_id}/assign", dependencies=[Depends(verify_agent_secret)])
 async def assign_agent(agent_id: str, user_id: str = Query(...)):
-    """Assign an agent to a user."""
+    """Assign an agent to a user. Requires AGENT_SECRET."""
     pool = await get_pool()
     await pool.execute(
         "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, agent_id
@@ -277,7 +308,7 @@ async def list_agents():
     return [dict(r) for r in rows]
 
 
-@app.post("/agents/{agent_id}/heartbeat")
+@app.post("/agents/{agent_id}/heartbeat", dependencies=[Depends(verify_agent_secret)])
 async def heartbeat(agent_id: str):
     pool = await get_pool()
     await pool.execute(
