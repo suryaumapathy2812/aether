@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import { listDevices, confirmPairing } from "@/lib/api";
 
@@ -55,16 +57,20 @@ export default function DevicesPage() {
     <PageShell title="Devices" back="/home" centered={showCentered}>
       {devices.length === 0 && !pairing ? (
         <div className="text-center">
-          <p className="text-[var(--color-text-muted)] text-xs mb-8">
+          <p className="text-muted-foreground text-xs mb-8">
             no devices yet
           </p>
-          <button onClick={() => setPairing(true)} className="btn">
+          <Button
+            variant="aether"
+            size="aether"
+            onClick={() => setPairing(true)}
+          >
             pair a device
-          </button>
+          </Button>
         </div>
       ) : pairing ? (
         <div className="w-full max-w-[280px]">
-          <p className="text-[var(--color-text-muted)] text-xs mb-8 text-center tracking-wider">
+          <p className="text-muted-foreground text-xs mb-8 text-center tracking-wider">
             Enter the code shown on your device
           </p>
           <MinimalInput
@@ -74,49 +80,55 @@ export default function DevicesPage() {
             placeholder="AETHER-XXXX-XXXX"
           />
           {status && (
-            <p className="text-[var(--color-text-muted)] text-xs mb-4 text-center animate-[fade-in_0.2s_ease]">
+            <p className="text-muted-foreground text-xs mb-4 text-center animate-[fade-in_0.2s_ease]">
               {status}
             </p>
           )}
-          <button
+          <Button
+            variant="aether"
+            size="aether"
             onClick={handlePair}
             disabled={loading || !code.trim()}
-            className="btn w-full disabled:opacity-30 disabled:cursor-not-allowed"
+            className="w-full"
           >
             {loading ? "..." : "pair"}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="aether-link"
+            size="aether-link"
             onClick={() => {
               setPairing(false);
               setCode("");
               setStatus("");
             }}
-            className="w-full text-center text-xs text-[var(--color-text-muted)] mt-6 hover:text-[var(--color-text-secondary)] transition-colors duration-300"
+            className="w-full text-center mt-6"
           >
             cancel
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="w-full max-sm">
-          {devices.map((d) => (
-            <div
-              key={d.id}
-              className="flex items-center justify-between py-4 border-b border-[var(--color-border)] last:border-b-0"
-            >
-              <span className="text-sm text-[var(--color-text-secondary)] font-light">
-                {d.name}
-              </span>
-              <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider">
-                {d.device_type}
-              </span>
+          {devices.map((d, index) => (
+            <div key={d.id}>
+              <div className="flex items-center justify-between py-4">
+                <span className="text-sm text-secondary-foreground font-light">
+                  {d.name}
+                </span>
+                <span className="text-[10px] text-muted-foreground tracking-wider">
+                  {d.device_type}
+                </span>
+              </div>
+              {index < devices.length - 1 && <Separator />}
             </div>
           ))}
-          <button
+          <Button
+            variant="aether-link"
+            size="aether-link"
             onClick={() => setPairing(true)}
-            className="w-full text-center text-xs text-[var(--color-text-muted)] mt-8 hover:text-[var(--color-text-secondary)] transition-colors duration-300"
+            className="w-full text-center mt-8"
           >
             pair another device
-          </button>
+          </Button>
         </div>
       )}
     </PageShell>

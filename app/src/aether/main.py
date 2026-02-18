@@ -685,6 +685,83 @@ async def _summarize_session(
         logger.error(f"Session summary failed: {e}")
 
 
+async def _run_llm_text_streaming(
+    ws: WebSocket,
+    user_text: str,
+    memory_retriever: MemoryRetrieverProcessor,
+    llm: LLMProcessor,
+    pending_vision: Frame | None = None,
+):
+    """
+    Text-only pipeline: Memory → LLM → text_chunk.
+    No TTS, no audio. Used when client connects in text mode.
+    """
+    timer = PipelineTimer()
+
+    # Phase 1: Memory retrieval
+    pre_frames: list[Frame] = []
+    user_frame = text_frame(user_text, role="user")
+
+    if pending_vision:
+        async for f in VisionProcessor().process(pending_vision):
+            pre_frames.append(f)
+
+    async for f in memory_retriever.process(user_frame):
+        pre_frames.append(f)
+
+    timer.mark("Memory")
+
+    # Phase 2: Stream LLM → text only
+    sentence_index = 0
+    total_chars = 0
+    llm_marked = False
+
+    for pf in pre_frames:
+        async for llm_frame in llm.process(pf):
+            if (
+                llm_frame.type == FrameType.TEXT
+                and llm_frame.metadata.get("role") == "assistant"
+            ):
+                if not llm_marked:
+                    timer.mark("LLM")
+                    llm_marked = True
+
+                sentence_text = llm_frame.data
+                total_chars += len(sentence_text)
+                await _send(ws, "text_chunk", sentence_text, index=sentence_index)
+                sentence_index += 1
+
+            elif llm_frame.type == FrameType.STATUS:
+                status = llm_frame.data.get("text", "Working...")
+                await _send(ws, "status", status)
+
+            elif llm_frame.type == FrameType.TOOL_RESULT:
+                await _send(
+                    ws,
+                    "tool_result",
+                    json.dumps(
+                        {
+                            "name": llm_frame.data["tool_name"],
+                            "output": llm_frame.data["output"][:500],
+                            "error": llm_frame.data.get("error", False),
+                        }
+                    ),
+                )
+
+            elif llm_frame.type == FrameType.CONTROL:
+                if llm_frame.data.get("action") == "llm_done":
+                    await _send(ws, "stream_end")
+
+    timer.mark("Done")
+
+    llm_time = timer.elapsed("LLM")
+    llm_str = f"{llm_time:.1f}s" if llm_time else "?"
+    logger.info(
+        f"[text] LLM: {sentence_index} sentences, {total_chars} chars ({llm_str}) | "
+        f"{timer.summary()}"
+    )
+
+
 async def _run_llm_tts_streaming(
     ws: WebSocket,
     user_text: str,
@@ -816,6 +893,10 @@ async def websocket_endpoint(ws: WebSocket):
     # Client liveness — set to False on disconnect to short-circuit sends
     client_alive = True
 
+    # Connection mode: "voice" (full STT→LLM→TTS) or "text" (LLM only)
+    # Defaults to "voice" for backward compatibility with existing clients.
+    connection_mode = "voice"
+
     # Session tracking
     session_id = str(uuid.uuid4())[:8]
     session_started_at = __import__("time").time()
@@ -823,7 +904,6 @@ async def websocket_endpoint(ws: WebSocket):
     tools_used_in_session: list[str] = []
 
     # Create per-connection processor instances (they hold conversation state)
-    batch_stt = STTProcessor(stt_provider)
     memory_retriever = MemoryRetrieverProcessor(memory_store)
     llm = LLMProcessor(
         llm_provider,
@@ -833,11 +913,27 @@ async def websocket_endpoint(ws: WebSocket):
         plugin_context=plugin_context_store,
     )
     llm.session_id = session_id  # For action memory
-    tts = TTSProcessor(tts_provider)
 
-    await batch_stt.start()
+    # STT/TTS created lazily — only when connection_mode is "voice"
+    batch_stt: STTProcessor | None = None
+    tts: TTSProcessor | None = None
+
+    async def _ensure_voice_processors():
+        """Lazily initialize STT and TTS processors on first voice use."""
+        nonlocal batch_stt, tts
+        if batch_stt is None:
+            batch_stt = STTProcessor(stt_provider)
+            await batch_stt.start()
+        if tts is None:
+            tts = TTSProcessor(tts_provider)
+            await tts.start()
+
+    # In voice mode, start STT/TTS immediately
+    # In text mode, skip — they'll be created if mode switches later
+    if connection_mode == "voice":
+        await _ensure_voice_processors()
+
     await llm.start()
-    await tts.start()
 
     pending_vision_frame: Frame | None = None
     stt_event_task: asyncio.Task | None = None
@@ -862,6 +958,7 @@ async def websocket_endpoint(ws: WebSocket):
 
             vision = pending_vision_frame
             pending_vision_frame = None
+            assert tts is not None  # _trigger_response only called in voice mode
             await _run_llm_tts_streaming(
                 ws,
                 transcript,
@@ -993,12 +1090,25 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(raw)
             msg_type = msg.get("type")
 
-            if msg_type == "stream_start":
+            if msg_type == "session_config":
+                # Client declares connection mode: "text" or "voice"
+                new_mode = msg.get("mode", "voice")
+                if new_mode in ("text", "voice"):
+                    connection_mode = new_mode
+                    logger.info(f"Session mode set to: {connection_mode}")
+                    if connection_mode == "voice":
+                        await _ensure_voice_processors()
+                    await _send(ws, "status", "connected")
+
+            elif msg_type == "stream_start":
+                await _ensure_voice_processors()
+                connection_mode = "voice"  # Implicit voice mode
                 await stt_provider.connect_stream()
                 stt_event_task = asyncio.create_task(_handle_stt_events())
                 await _send(ws, "status", "listening...")
 
                 # Session greeting — Aether says hello when you "pick up"
+                assert tts is not None
                 asyncio.create_task(
                     _session_greeting(ws, tts, is_reconnect=msg.get("reconnect", False))
                 )
@@ -1033,7 +1143,9 @@ async def websocket_endpoint(ws: WebSocket):
                     await stt_provider.send_audio(audio_data)
 
             elif msg_type == "audio":
-                # Batch mode fallback
+                # Batch mode fallback — always voice
+                await _ensure_voice_processors()
+                assert batch_stt is not None and tts is not None
                 audio_data = base64.b64decode(msg["data"])
                 user_text = await stt_provider.transcribe(audio_data)
 
@@ -1056,14 +1168,24 @@ async def websocket_endpoint(ws: WebSocket):
                 user_text = msg["data"]
                 vision = pending_vision_frame
                 pending_vision_frame = None
-                await _run_llm_tts_streaming(
-                    ws,
-                    user_text,
-                    memory_retriever,
-                    llm,
-                    tts,
-                    pending_vision=vision,
-                )
+                if connection_mode == "text":
+                    await _run_llm_text_streaming(
+                        ws,
+                        user_text,
+                        memory_retriever,
+                        llm,
+                        pending_vision=vision,
+                    )
+                else:
+                    assert tts is not None
+                    await _run_llm_tts_streaming(
+                        ws,
+                        user_text,
+                        memory_retriever,
+                        llm,
+                        tts,
+                        pending_vision=vision,
+                    )
 
             elif msg_type == "image":
                 image_data = base64.b64decode(msg["data"])
@@ -1134,6 +1256,8 @@ async def websocket_endpoint(ws: WebSocket):
                 turn_count=turn_count,
             )
 
-        await batch_stt.stop()
+        if batch_stt is not None:
+            await batch_stt.stop()
         await llm.stop()
-        await tts.stop()
+        if tts is not None:
+            await tts.stop()

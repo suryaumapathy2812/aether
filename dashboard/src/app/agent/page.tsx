@@ -3,10 +3,19 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSession } from "@/lib/auth-client";
 import { getPreferences, updatePreferences, type UserPreferences } from "@/lib/api";
 
-// ── Types for config JSONs ──
+// -- Types for config JSONs --
 
 interface STTModel {
   description: string;
@@ -54,7 +63,7 @@ interface TTSConfig {
   providers: Record<string, TTSProvider>;
 }
 
-// System defaults — what the agent runs with when user hasn't customized
+// System defaults
 const DEFAULTS: UserPreferences = {
   stt_provider: "deepgram",
   stt_model: "nova-3",
@@ -77,24 +86,21 @@ const STYLES = [
 ];
 
 /**
- * Agent — voice, model, and personality configuration.
+ * Agent -- voice, model, and personality configuration.
  * Auto-saves on every change. Shows system defaults until user customizes.
  */
 export default function AgentPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
 
-  // Config JSONs (static reference data)
   const [sttConfig, setSttConfig] = useState<STTConfig | null>(null);
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
   const [ttsConfig, setTtsConfig] = useState<TTSConfig | null>(null);
 
-  // User preferences — merged with defaults so nothing shows "not set"
   const [prefs, setPrefs] = useState<UserPreferences>({ ...DEFAULTS });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // Load config JSONs + user preferences
   useEffect(() => {
     if (isPending) return;
     if (!session) {
@@ -102,12 +108,10 @@ export default function AgentPage() {
       return;
     }
 
-    // Load static configs
     fetch("/stt.json").then((r) => r.json()).then(setSttConfig).catch(() => {});
     fetch("/llm.json").then((r) => r.json()).then(setLlmConfig).catch(() => {});
     fetch("/tts.json").then((r) => r.json()).then(setTtsConfig).catch(() => {});
 
-    // Load user preferences — merge with defaults (null values → default)
     getPreferences()
       .then((serverPrefs) => {
         const merged = { ...DEFAULTS };
@@ -121,7 +125,6 @@ export default function AgentPage() {
       .catch(() => {});
   }, [session, isPending, router]);
 
-  // Save handler — auto-saves on every change
   const save = useCallback(
     async (updates: Partial<UserPreferences>) => {
       const newPrefs = { ...prefs, ...updates };
@@ -143,7 +146,7 @@ export default function AgentPage() {
 
   if (isPending || !session) return null;
 
-  // ── Derived options from config JSONs ──
+  // -- Derived options from config JSONs --
 
   const sttProviders = sttConfig
     ? Object.entries(sttConfig.providers).map(([id, p]) => ({
@@ -196,21 +199,21 @@ export default function AgentPage() {
   return (
     <PageShell title="Agent" back="/home">
       <div className="space-y-8">
-        {/* ── Save status (sticky top) ── */}
+        {/* Save status */}
         <div className="h-4 flex items-center justify-end">
           {saving && (
-            <span className="text-[10px] tracking-[0.15em] text-[var(--color-text-muted)] animate-pulse">
+            <span className="text-[10px] tracking-[0.15em] text-muted-foreground animate-pulse">
               saving...
             </span>
           )}
           {saved && !saving && (
-            <span className="text-[10px] tracking-[0.15em] text-[var(--color-text-secondary)] animate-[fade-in_0.2s_ease]">
+            <span className="text-[10px] tracking-[0.15em] text-secondary-foreground animate-[fade-in_0.2s_ease]">
               saved
             </span>
           )}
         </div>
 
-        {/* ── Voice ── */}
+        {/* Voice */}
         <Section title="Voice">
           <Picker
             label="STT Provider"
@@ -252,7 +255,7 @@ export default function AgentPage() {
           )}
         </Section>
 
-        {/* ── Model ── */}
+        {/* Model */}
         <Section title="Model">
           <Picker
             label="LLM Provider"
@@ -270,7 +273,7 @@ export default function AgentPage() {
           )}
         </Section>
 
-        {/* ── Personality ── */}
+        {/* Personality */}
         <Section title="Personality">
           <Picker
             label="Base style and tone"
@@ -279,10 +282,10 @@ export default function AgentPage() {
             onChange={(v) => save({ base_style: v })}
           />
           <div className="mt-4">
-            <label className="block text-[10px] tracking-[0.15em] uppercase text-[var(--color-text-muted)] mb-2 font-normal">
+            <Label className="block text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-2 font-normal">
               Custom instructions
-            </label>
-            <textarea
+            </Label>
+            <Textarea
               value={prefs.custom_instructions || ""}
               onChange={(e) =>
                 setPrefs({ ...prefs, custom_instructions: e.target.value })
@@ -294,9 +297,9 @@ export default function AgentPage() {
               }}
               placeholder="Tell Aether how to behave..."
               rows={4}
-              className="w-full bg-transparent border-b border-[var(--color-border)] text-[var(--color-text)] font-light text-[15px] leading-relaxed outline-none resize-none py-2 placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-text-secondary)] transition-colors duration-300"
+              className="bg-transparent border-0 border-b border-border rounded-none shadow-none px-0 py-2 text-[15px] font-light leading-relaxed resize-none focus-visible:ring-0 focus-visible:border-secondary-foreground transition-colors duration-300"
             />
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1 font-light">
+            <p className="text-[10px] text-muted-foreground mt-1 font-light">
               saves when you tap outside
             </p>
           </div>
@@ -306,7 +309,7 @@ export default function AgentPage() {
   );
 }
 
-// ── Section ──
+// -- Section --
 
 function Section({
   title,
@@ -317,7 +320,7 @@ function Section({
 }) {
   return (
     <div>
-      <h2 className="text-[11px] tracking-[0.18em] uppercase text-[var(--color-text-secondary)] font-normal mb-4">
+      <h2 className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal mb-4">
         {title}
       </h2>
       <div className="space-y-1">{children}</div>
@@ -325,7 +328,7 @@ function Section({
   );
 }
 
-// ── Picker (dropdown row) ──
+// -- Picker (shadcn Select) --
 
 function Picker({
   label,
@@ -338,77 +341,37 @@ function Picker({
   options: { id: string; label: string; description?: string; recommended?: boolean }[];
   onChange: (value: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
-  const selected = options.find((o) => o.id === value);
-  const displayValue = selected?.label || value || "—";
-
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between py-3 border-b border-[var(--color-border)] group"
-      >
-        <span className="text-[13px] text-[var(--color-text-muted)] font-light">
-          {label}
-        </span>
-        <span className="text-[13px] text-[var(--color-text-secondary)] font-light group-hover:text-[var(--color-text)] transition-colors duration-300">
-          {displayValue}
-          <svg
-            className="inline-block ml-1.5 w-3 h-3 opacity-40"
-            viewBox="0 0 12 12"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          >
-            <path d={open ? "M3 7.5L6 4.5L9 7.5" : "M3 4.5L6 7.5L9 4.5"} />
-          </svg>
-        </span>
-      </button>
-
-      {open && (
-        <>
-          {/* Backdrop to close dropdown */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] max-h-[280px] overflow-y-auto bg-[var(--color-surface)] border border-[var(--color-border)] animate-[fade-in_0.15s_ease]">
-            {options.map((opt) => (
-              <button
-                key={opt.id}
-                onClick={() => {
-                  onChange(opt.id);
-                  setOpen(false);
-                }}
-                className={`w-full text-left px-4 py-2.5 text-[13px] font-light transition-colors duration-200 hover:bg-[var(--color-surface-hover)] ${
-                  opt.id === value
-                    ? "text-[var(--color-text)]"
-                    : "text-[var(--color-text-secondary)]"
-                }`}
-              >
-                <span>{opt.label}</span>
-                {opt.id === value && (
-                  <span className="ml-2 text-[9px] tracking-wider uppercase text-[var(--color-text-muted)]">
-                    current
-                  </span>
-                )}
-                {opt.recommended && opt.id !== value && (
-                  <span className="ml-2 text-[9px] tracking-wider uppercase text-[var(--color-text-muted)]">
-                    recommended
-                  </span>
-                )}
-                {opt.description && (
-                  <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
-                    {opt.description}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+    <div className="flex items-center justify-between py-3 border-b border-border">
+      <span className="text-[13px] text-muted-foreground font-light">
+        {label}
+      </span>
+      <Select value={value || undefined} onValueChange={onChange}>
+        <SelectTrigger className="w-auto h-auto gap-1.5 border-0 bg-transparent shadow-none px-0 py-0 text-[13px] text-secondary-foreground font-light hover:text-foreground focus:ring-0 focus-visible:ring-0 transition-colors duration-300">
+          <SelectValue placeholder="--" />
+        </SelectTrigger>
+        <SelectContent className="min-w-[220px] max-h-[280px] bg-card border-border">
+          {options.map((opt) => (
+            <SelectItem
+              key={opt.id}
+              value={opt.id}
+              className="text-[13px] font-light"
+            >
+              <span>{opt.label}</span>
+              {opt.id === value && (
+                <span className="ml-2 text-[9px] tracking-wider uppercase text-muted-foreground">
+                  current
+                </span>
+              )}
+              {opt.recommended && opt.id !== value && (
+                <span className="ml-2 text-[9px] tracking-wider uppercase text-muted-foreground">
+                  recommended
+                </span>
+              )}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import { listApiKeys, saveApiKey, deleteApiKey } from "@/lib/api";
 
@@ -65,63 +67,68 @@ export default function ServicesPage() {
   return (
     <PageShell title="Services" back="/home">
       <div>
-        {PROVIDERS.map((p) => (
-          <div
-            key={p.id}
-            className="py-4 border-b border-[var(--color-border)] last:border-b-0"
-          >
-            {editing === p.id ? (
-              <div className="animate-[fade-in_0.2s_ease]">
-                <MinimalInput
-                  label={p.label}
-                  type="password"
-                  value={keyValue}
-                  onChange={setKeyValue}
-                  placeholder={`${p.label} API Key`}
-                />
-                <div className="flex items-center gap-4 mt-1">
-                  <button
-                    onClick={() => handleSave(p.id)}
-                    disabled={saving || !keyValue.trim()}
-                    className="btn text-xs disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    {saving ? "..." : "save"}
-                  </button>
-                  {keys[p.id] && (
-                    <button
-                      onClick={() => handleDelete(p.id)}
-                      className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors duration-300"
+        {PROVIDERS.map((p, index) => (
+          <div key={p.id}>
+            <div className="py-4">
+              {editing === p.id ? (
+                <div className="animate-[fade-in_0.2s_ease]">
+                  <MinimalInput
+                    label={p.label}
+                    type="password"
+                    value={keyValue}
+                    onChange={setKeyValue}
+                    placeholder={`${p.label} API Key`}
+                  />
+                  <div className="flex items-center gap-4 mt-1">
+                    <Button
+                      variant="aether"
+                      size="aether"
+                      onClick={() => handleSave(p.id)}
+                      disabled={saving || !keyValue.trim()}
                     >
-                      remove
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      setEditing(null);
-                      setKeyValue("");
-                    }}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors duration-300"
-                  >
-                    cancel
-                  </button>
+                      {saving ? "..." : "save"}
+                    </Button>
+                    {keys[p.id] && (
+                      <Button
+                        variant="aether-link"
+                        size="aether-link"
+                        onClick={() => handleDelete(p.id)}
+                      >
+                        remove
+                      </Button>
+                    )}
+                    <Button
+                      variant="aether-link"
+                      size="aether-link"
+                      onClick={() => {
+                        setEditing(null);
+                        setKeyValue("");
+                      }}
+                    >
+                      cancel
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setEditing(p.id);
-                  setKeyValue("");
-                }}
-                className="w-full flex items-center justify-between group"
-              >
-                <span className="text-[14px] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text)] transition-colors duration-300 font-light">
-                  {p.label}
-                </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider">
-                  {keys[p.id] || "not set"}
-                </span>
-              </button>
-            )}
+              ) : (
+                <Button
+                  variant="aether-ghost"
+                  size="aether-link"
+                  onClick={() => {
+                    setEditing(p.id);
+                    setKeyValue("");
+                  }}
+                  className="w-full flex items-center justify-between group"
+                >
+                  <span className="text-[14px] text-secondary-foreground group-hover:text-foreground transition-colors duration-300 font-light">
+                    {p.label}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground tracking-wider">
+                    {keys[p.id] || "not set"}
+                  </span>
+                </Button>
+              )}
+            </div>
+            {index < PROVIDERS.length - 1 && <Separator />}
           </div>
         ))}
       </div>

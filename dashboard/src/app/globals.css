@@ -1,33 +1,120 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Aether — always dark, Light Phone aesthetic.
+ * Shadcn CSS variables in :root are the source of truth.
+ * Only font-sans is kept here for Tailwind's font-sans utility.
+ */
 @theme {
-  --color-bg: #111111;
-  --color-surface: #191919;
-  --color-surface-hover: #1f1f1f;
-  --color-border: #2a2a2a;
-  --color-border-hover: #444444;
-  --color-text: #e8e8e8;
-  --color-text-secondary: #999999;
-  --color-text-muted: #555555;
-  --color-accent: #e8e8e8;
   --font-sans: "Inter", "Helvetica Neue", sans-serif;
 }
 
-/* ── Reset ── */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/*
+ * Shadcn CSS variable bridge — maps shadcn's semantic tokens
+ * to our dark palette. No .dark class needed (always dark).
+ */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/*
+ * Map shadcn variables to our dark palette.
+ * Always dark — no light mode, no .dark class.
+ */
+:root {
+  --radius: 0.625rem;
+  /* bg / fg */
+  --background: #111111;
+  --foreground: #e8e8e8;
+  /* card */
+  --card: #191919;
+  --card-foreground: #e8e8e8;
+  /* popover */
+  --popover: #191919;
+  --popover-foreground: #e8e8e8;
+  /* primary — white-on-dark for this minimal aesthetic */
+  --primary: #e8e8e8;
+  --primary-foreground: #111111;
+  /* secondary */
+  --secondary: #1f1f1f;
+  --secondary-foreground: #999999;
+  /* muted */
+  --muted: #1f1f1f;
+  --muted-foreground: #555555;
+  /* accent */
+  --accent: #1f1f1f;
+  --accent-foreground: #e8e8e8;
+  /* destructive */
+  --destructive: #dc2626;
+  /* border / input / ring */
+  --border: #2a2a2a;
+  --input: #2a2a2a;
+  --ring: #444444;
+  /* charts */
+  --chart-1: #e8e8e8;
+  --chart-2: #999999;
+  --chart-3: #555555;
+  --chart-4: #2a2a2a;
+  --chart-5: #1f1f1f;
+  /* sidebar (unused but required by shadcn) */
+  --sidebar: #191919;
+  --sidebar-foreground: #e8e8e8;
+  --sidebar-primary: #e8e8e8;
+  --sidebar-primary-foreground: #111111;
+  --sidebar-accent: #1f1f1f;
+  --sidebar-accent-foreground: #e8e8e8;
+  --sidebar-border: #2a2a2a;
+  --sidebar-ring: #444444;
+}
+
+/* ── Base ── */
 html, body {
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
   font-weight: 300;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  min-height: 100vh;
 }
 
 /* ── Scrollbar — minimal ── */
@@ -38,101 +125,11 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--border);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-border-hover);
-}
-
-/* ── Input — bottom-border only ── */
-input[type="text"],
-input[type="email"],
-input[type="password"] {
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text);
-  font-family: var(--font-sans);
-  font-weight: 300;
-  font-size: 0.9375rem;
-  padding: 0.625rem 0;
-  width: 100%;
-  outline: none;
-  transition: border-color 0.3s ease;
-  letter-spacing: 0.01em;
-}
-
-input:focus {
-  border-bottom-color: var(--color-text-secondary);
-}
-
-input::placeholder {
-  color: var(--color-text-muted);
-  font-weight: 300;
-}
-
-/* ── Inline input — no border, for use inside containers ── */
-.input-inline,
-.input-inline[type="text"] {
-  border: none !important;
-  border-bottom: none !important;
-  padding: 0 !important;
-  background: transparent !important;
-  font-size: 13px;
-  font-weight: 300;
-}
-
-.input-inline:focus {
-  border-bottom-color: transparent !important;
-}
-
-/* ── Button — ghost style ── */
-.btn {
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-family: var(--font-sans);
-  font-weight: 400;
-  padding: 0.6875rem 1.75rem;
-  font-size: 0.8125rem;
-  letter-spacing: 0.08em;
-  text-transform: lowercase;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.btn:hover {
-  border-color: var(--color-border-hover);
-  color: var(--color-text);
-}
-
-.btn:active {
-  transform: scale(0.98);
-}
-
-/* ── Menu item — stacked bordered list ── */
-.menu-item {
-  display: flex;
-  align-items: center;
-  padding: 0.875rem 1.25rem;
-  border: 1px solid var(--color-border);
-  border-bottom: none;
-  color: var(--color-text-secondary);
-  text-decoration: none;
-  font-size: 0.9375rem;
-  font-weight: 300;
-  letter-spacing: 0.02em;
-  transition: all 0.3s ease;
-}
-
-.menu-item:last-child {
-  border-bottom: 1px solid var(--color-border);
-}
-
-.menu-item:hover {
-  color: var(--color-text);
-  background: var(--color-surface);
+  background: var(--ring);
 }
 
 /* ── Orb animation keyframes (large — iOS-style) ── */
@@ -175,5 +172,13 @@ input::placeholder {
 /* ── Selection ── */
 ::selection {
   background: rgba(255, 255, 255, 0.1);
-  color: var(--color-text);
+  color: var(--foreground);
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before {
+    border-color: var(--border);
+  }
 }

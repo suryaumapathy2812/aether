@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
+import { Button } from "@/components/ui/button";
 import { useSession, signOut } from "@/lib/auth-client";
 
 /**
@@ -45,13 +46,21 @@ export default function AccountPage() {
             value={email}
             onChange={setEmail}
           />
-          <button className="btn w-full mt-2">save</button>
-          <button
+          <Button
+            variant="aether"
+            size="aether"
+            className="w-full mt-2"
+          >
+            save
+          </Button>
+          <Button
+            variant="aether-link"
+            size="aether-link"
             onClick={() => setView("menu")}
-            className="w-full text-center text-xs text-[var(--color-text-muted)] mt-6 hover:text-[var(--color-text-secondary)] transition-colors duration-300"
+            className="w-full text-center mt-6"
           >
             cancel
-          </button>
+          </Button>
         </div>
       </PageShell>
     );
@@ -60,18 +69,22 @@ export default function AccountPage() {
   return (
     <PageShell title={name || "Account"} back="/home" centered>
       <div className="w-full max-w-[300px] mx-auto">
-        <button
+        <Button
+          variant="aether-menu"
+          size="aether-menu"
           onClick={() => setView("edit")}
-          className="w-full py-4 text-[15px] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors duration-300 font-light text-center border border-[var(--color-border)] border-b-0"
+          className="text-[15px] py-4"
         >
           Edit Account
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="aether-menu"
+          size="aether-menu"
           onClick={handleLogout}
-          className="w-full py-4 text-[15px] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors duration-300 font-light text-center border border-[var(--color-border)]"
+          className="text-[15px] py-4 border-b"
         >
           Log Out
-        </button>
+        </Button>
       </div>
     </PageShell>
   );

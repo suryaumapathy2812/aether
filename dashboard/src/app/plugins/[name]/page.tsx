@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useSession } from "@/lib/auth-client";
 import {
   listPlugins,
@@ -115,76 +119,91 @@ export default function PluginDetailPage() {
       centered={loading || !!error}
     >
       {loading ? (
-        <p className="text-[var(--color-text-muted)] text-xs tracking-wider">
+        <p className="text-muted-foreground text-xs tracking-wider">
           loading...
         </p>
       ) : error ? (
         <div>
-          <p className="text-[var(--color-text-muted)] text-xs mb-4">{error}</p>
-          <button onClick={loadPluginData} className="btn text-xs">
+          <p className="text-muted-foreground text-xs mb-4">{error}</p>
+          <Button
+            variant="aether"
+            size="aether"
+            onClick={loadPluginData}
+          >
             retry
-          </button>
+          </Button>
         </div>
       ) : !plugin ? (
-        <p className="text-[var(--color-text-muted)] text-xs">
+        <p className="text-muted-foreground text-xs">
           plugin not found
         </p>
       ) : (
         <div className="space-y-6">
           {/* Plugin description */}
           <div>
-            <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed font-light">
+            <p className="text-sm text-secondary-foreground leading-relaxed font-light">
               {plugin.description}
             </p>
           </div>
 
           {/* Just connected success message */}
           {justConnected && (
-            <div className="py-3 text-[12px] text-[var(--color-text-secondary)] tracking-wider animate-[fade-in_0.3s_ease]">
+            <div className="py-3 text-[12px] text-secondary-foreground tracking-wider animate-[fade-in_0.3s_ease]">
               connected successfully
             </div>
           )}
 
           {/* OAuth2 connect / connected status */}
           {plugin.auth_type === "oauth2" && plugin.installed && (
-            <div className="py-4 border-b border-[var(--color-border)]">
+            <div className="py-4">
               {plugin.connected ? (
                 <div className="flex items-center justify-between">
-                  <span className="text-[14px] text-[var(--color-text-secondary)] font-light">
+                  <span className="text-[14px] text-secondary-foreground font-light">
                     {config.account_email
                       ? `Connected as ${config.account_email}`
                       : "Connected"}
                   </span>
-                  <button
+                  <Button
+                    variant="aether-link"
+                    size="aether-link"
                     onClick={handleConnect}
-                    className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors duration-300 tracking-wider"
+                    className="text-[11px] tracking-wider"
                   >
                     reconnect
-                  </button>
+                  </Button>
                 </div>
               ) : (
-                <button onClick={handleConnect} className="btn text-xs">
+                <Button
+                  variant="aether"
+                  size="aether"
+                  onClick={handleConnect}
+                >
                   connect with {plugin.auth_provider}
-                </button>
+                </Button>
               )}
+              <Separator className="mt-4" />
             </div>
           )}
 
           {/* Enable/Disable toggle */}
           {plugin.installed && plugin.connected && (
-            <div className="py-4 border-b border-[var(--color-border)]">
-              <button
-                onClick={handleToggleEnable}
-                disabled={toggling}
-                className="w-full flex items-center justify-between group"
-              >
-                <span className="text-[14px] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text)] transition-colors duration-300 font-light">
+            <div className="py-4">
+              <div className="flex items-center justify-between">
+                <Label className="text-[14px] text-secondary-foreground font-light">
                   Status
-                </span>
-                <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider disabled:opacity-30">
-                  {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
-                </span>
-              </button>
+                </Label>
+                <div className="flex items-center gap-3">
+                  <span className="text-[12px] text-muted-foreground tracking-wider">
+                    {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
+                  </span>
+                  <Switch
+                    checked={plugin.enabled}
+                    onCheckedChange={handleToggleEnable}
+                    disabled={toggling}
+                  />
+                </div>
+              </div>
+              <Separator className="mt-4" />
             </div>
           )}
 
@@ -193,7 +212,7 @@ export default function PluginDetailPage() {
             plugin.config_fields &&
             plugin.config_fields.length > 0 && (
               <div>
-                <h2 className="text-xs tracking-widest text-[var(--color-text-muted)] uppercase mb-4 font-normal">
+                <h2 className="text-xs tracking-widest text-muted-foreground uppercase mb-4 font-normal">
                   Configuration
                 </h2>
                 <div>
@@ -211,13 +230,14 @@ export default function PluginDetailPage() {
                   ))}
                 </div>
 
-                <button
+                <Button
+                  variant="aether"
+                  size="aether"
                   onClick={handleSave}
                   disabled={saving}
-                  className="btn text-xs disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   {saving ? "..." : "save"}
-                </button>
+                </Button>
               </div>
             )}
         </div>

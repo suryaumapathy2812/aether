@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import MinimalInput from "@/components/MinimalInput";
+import { Button } from "@/components/ui/button";
 import { signIn, signUp, useSession } from "@/lib/auth-client";
 
 /**
@@ -59,7 +60,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6">
       {/* Brand */}
-      <h1 className="text-xs tracking-[0.35em] text-[var(--color-text-muted)] italic font-light mb-16">
+      <h1 className="text-xs tracking-[0.35em] text-muted-foreground italic font-light mb-16">
         aether
       </h1>
 
@@ -81,35 +82,39 @@ export default function LoginPage() {
         />
 
         {error && (
-          <p className="text-[var(--color-text-muted)] text-xs mb-4 animate-[fade-in_0.2s_ease]">
+          <p className="text-muted-foreground text-xs mb-4 animate-[fade-in_0.2s_ease]">
             {error}
           </p>
         )}
 
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="btn w-full mt-2 disabled:opacity-30 disabled:cursor-not-allowed"
+          variant="aether"
+          size="aether"
+          className="w-full mt-2"
         >
           {loading
             ? "..."
             : mode === "login"
               ? "sign in"
               : "create account"}
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
+          variant="aether-link"
+          size="aether-link"
           onClick={() => {
             setMode(mode === "login" ? "signup" : "login");
             setError("");
           }}
-          className="w-full text-center text-xs text-[var(--color-text-muted)] mt-8 hover:text-[var(--color-text-secondary)] transition-colors duration-300"
+          className="w-full text-center mt-8"
         >
           {mode === "login"
             ? "don't have an account?"
             : "already have an account?"}
-        </button>
+        </Button>
       </form>
     </div>
   );
