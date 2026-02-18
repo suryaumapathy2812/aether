@@ -1,0 +1,117 @@
+# Aether Production - Docker Compose
+#
+# Usage:
+#   Deploy as a stack in Portainer with external Traefik
+#   docker stack deploy -c docker-compose.prod.yml aether
+#
+# Prerequisites:
+#   1. Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets in GitHub
+#   2. Run GitHub workflows to build and push images to Docker Hub
+#   3. Update environment variables in Portainer or .env file
+#   4. Traefik labels are included for Portainer's Traefik to auto-discover
+
+services:
+  # --- Postgres (shared by dashboard + orchestrator) ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: aether-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aether"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aether_network
+
+  # --- Orchestrator (FastAPI / Python) ---
+  orchestrator:
+    image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
+    container_name: aether-orchestrator
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
+      - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
+      - AETHER_HOST=0.0.0.0
+      - AETHER_PORT=9000
+      # Agent provisioning (per-user containers via Docker SDK)
+      - AGENT_IMAGE=${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest
+      - AGENT_NETWORK=aether_network
+      - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
+      - AGENT_SECRET=${AGENT_SECRET}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      # System-wide fallback API keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      # Google OAuth2
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      # Spotify OAuth2
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - aether_network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.orchestrator.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+        - "traefik.http.routers.orchestrator.entrypoints=websecure"
+        - "traefik.http.routers.orchestrator.tls=true"
+        - "traefik.http.services.orchestrator.loadbalancer.server.port=9000"
+        - "traefik.http.middlewares.orchestrator.stripprefix.prefixes=/api"
+        - "traefik.http.routers.orchestrator.middlewares=orchestrator-stripprefix"
+
+  # --- Dashboard (Next.js) ---
+  dashboard:
+    image: ${DOCKERHUB_USERNAME:-yourusername}/aether-dashboard:latest
+    container_name: aether-dashboard
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_URL=https://${DOMAIN}
+      - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
+      - ORCHESTRATOR_URL=http://orchestrator:9000
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+    networks:
+      - aether_network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dashboard.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.dashboard.entrypoints=websecure"
+        - "traefik.http.routers.dashboard.tls=true"
+        - "traefik.http.services.dashboard.loadbalancer.server.port=3000"
+
+  # --- Aether Agent ---
+  # Agent containers are provisioned dynamically per user by the orchestrator
+  # via Docker SDK. No static agent service here.
+  # The agent image must be built and pushed to Docker Hub:
+  #   docker build -t ${DOCKERHUB_USERNAME}/aether-agent:latest ./app
+  #   docker push ${DOCKERHUB_USERNAME}/aether-agent:latest
+
+networks:
+  aether_network:
+    driver: overlay
+    attachable: true
+
+volumes:
+  postgres_data:

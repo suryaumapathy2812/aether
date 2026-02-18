@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy dependency files first (cache layer)
 COPY pyproject.toml uv.lock .python-version README.md ./
 
-# Install dependencies (no dev deps in prod)
+# Install dependencies to system Python
+ENV UV_SYSTEM_PYTHON=1
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
@@ -21,7 +22,7 @@ COPY src/ src/
 COPY skills/ skills/
 COPY plugins/ plugins/
 
-# Install the project itself
+# Install the project itself to system Python
 RUN uv sync --frozen --no-dev
 
 # Create directories for runtime
@@ -38,4 +39,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
+# Use uv run to activate the environment
 CMD ["uv", "run", "uvicorn", "aether.main:app", "--host", "0.0.0.0", "--port", "8000"]
