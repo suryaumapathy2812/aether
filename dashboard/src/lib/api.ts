@@ -1,21 +1,19 @@
 /**
  * Orchestrator API client.
  *
- * Auth is handled by better-auth (cookie-based sessions via /api/auth/*).
- * The session token is obtained from better-auth's useSession()/getSession()
- * and passed to the orchestrator as an Authorization: Bearer header.
+ * With Caddy reverse proxy, the orchestrator is on the same origin as the dashboard.
+ * Caddy routes /agents/*, /pair/*, /devices, /services/*, /memory/*, /health, /ws
+ * to the orchestrator. Everything else (including /api/auth/*) goes to Next.js.
  *
- * Why not cookies? Dashboard (localhost:3000) and orchestrator (localhost:9000)
- * are different origins — cross-origin cookies don't work without SameSite=None + Secure.
- * Instead, we read the session token from better-auth's client-side session data
- * and send it explicitly.
+ * Auth: session token from better-auth sent as Authorization: Bearer header.
+ * This works both same-origin (via Caddy) and cross-origin (direct access).
  */
 
 const ORCHESTRATOR_URL =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:9000";
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "";
 
 // ── Session token management ──
-// Set by components that have access to useSession() data.
+// Set by SessionSync component which reads from useSession().
 // All API calls read from here.
 
 let _sessionToken: string | null = null;
@@ -118,6 +116,17 @@ export async function getMemoryConversations(limit = 20) {
 
 export function getWsUrl(): string {
   const token = _sessionToken || "";
-  const base = ORCHESTRATOR_URL.replace("http", "ws");
-  return `${base}/ws?token=${token}`;
+  // Same-origin: use current page's protocol/host
+  // Cross-origin: use ORCHESTRATOR_URL
+  if (ORCHESTRATOR_URL) {
+    const base = ORCHESTRATOR_URL.replace("http", "ws");
+    return `${base}/ws?token=${token}`;
+  }
+  // Same-origin via Caddy — derive WS URL from current page
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}/ws?token=${token}`;
+  }
+  // SSR fallback
+  return `ws://localhost:3000/ws?token=${token}`;
 }

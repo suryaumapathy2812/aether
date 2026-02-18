@@ -20,7 +20,7 @@ export type AgentStatus =
   | "unknown";
 
 const ORCHESTRATOR_URL =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:9000";
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "";
 
 const POLL_INTERVAL = 10_000; // 10 seconds
 

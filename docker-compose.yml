@@ -1,4 +1,21 @@
 services:
+  # --- Caddy (reverse proxy + auto-HTTPS) ---
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - dashboard
+      - orchestrator
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    restart: unless-stopped
+
   # --- Postgres (shared by dashboard + orchestrator) ---
   postgres:
     image: postgres:16-alpine
@@ -8,13 +25,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aether_dev}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aether"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # --- Aether Agent ---
   # In multi-user mode, agent containers are provisioned dynamically
@@ -26,7 +42,7 @@ services:
     build: ./orchestrator
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+      - CORS_ORIGINS=https://${DOMAIN:-localhost},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
       # Multi-user agent provisioning
@@ -41,32 +57,32 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
-    ports:
-      - "9000:9000"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For container management
+    restart: unless-stopped
 
-  # --- Dashboard (Next.js + Bun) ---
+  # --- Dashboard (Next.js) ---
   dashboard:
     build: ./dashboard
     environment:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - BETTER_AUTH_URL=${BETTER_AUTH_URL}
+      - BETTER_AUTH_URL=https://${DOMAIN:-localhost}
       - ORCHESTRATOR_URL=http://orchestrator:9000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:9000}
-    ports:
-      - "3000:3000"
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=
     depends_on:
       postgres:
         condition: service_healthy
       orchestrator:
         condition: service_started
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
   # Per-user volumes (aether-memory-{user_id}, aether-workspace-{user_id})
   # are created dynamically by the orchestrator's agent_manager.

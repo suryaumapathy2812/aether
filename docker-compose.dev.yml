@@ -1,7 +1,25 @@
 # Development compose — hot-reload for all services.
 # Usage: docker compose -f docker-compose.dev.yml up --build
+#
+# Access: http://localhost:3000 (Caddy reverse proxy)
+# All services behind one origin — no CORS, cookies just work.
 
 services:
+  # --- Caddy (reverse proxy) ---
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - dashboard
+      - orchestrator
+    environment:
+      - DOMAIN=localhost:3000
+
   # --- Postgres (shared by orchestrator) ---
   postgres:
     image: postgres:16-alpine
@@ -43,8 +61,6 @@ services:
       - ./client/web:/app/client_web
       - agent_memory:/data
       - agent_workspace:/workspace
-    ports:
-      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,7 +75,7 @@ services:
     build: ./orchestrator
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+      - CORS_ORIGINS=http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
       - AGENT_SECRET=${AGENT_SECRET:-dev_agent_secret_change_in_production}
@@ -67,8 +83,6 @@ services:
     volumes:
       # Hot-reload: mount source code
       - ./orchestrator/src:/app/src
-    ports:
-      - "9000:9000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,13 +103,11 @@ services:
       - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:3000}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - ORCHESTRATOR_URL=http://orchestrator:9000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:9000}
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=
     volumes:
       # Hot-reload: mount source, exclude node_modules
       - ./dashboard/src:/app/src
       - ./dashboard/public:/app/public
-    ports:
-      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,3 +118,5 @@ volumes:
   postgres_data:
   agent_memory:
   agent_workspace:
+  caddy_data:
+  caddy_config:
