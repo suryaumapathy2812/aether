@@ -1,0 +1,29 @@
+{
+  "providers": {
+    "openai": {
+      "display_name": "OpenAI",
+      "models": {
+        "gpt-4o": {
+          "description": "Flagship model — fast, smart, multimodal",
+          "recommended": true
+        },
+        "gpt-4o-mini": {
+          "description": "Lightweight — faster and cheaper",
+          "recommended": false
+        },
+        "gpt-4.1": {
+          "description": "Latest — best for coding and instruction following",
+          "recommended": false
+        },
+        "gpt-4.1-mini": {
+          "description": "Latest mini — balanced speed and quality",
+          "recommended": false
+        },
+        "gpt-4.1-nano": {
+          "description": "Smallest — fastest responses, lowest cost",
+          "recommended": false
+        }
+      }
+    }
+  }
+}

@@ -1,10 +1,22 @@
+# Aether — Docker Compose
+#
+# Core services: Caddy, Postgres, Orchestrator, Dashboard.
+# Agent containers are provisioned dynamically per user by the orchestrator.
+#
+# Usage:
+#   docker compose up --build          (auto-loads docker-compose.override.yml for dev)
+#   docker compose up --build -f docker-compose.yml   (production only, no override)
+#
+# The agent image must be pre-built:
+#   docker build -t core-ai-agent:latest ./app
+
 services:
   # --- Caddy (reverse proxy + auto-HTTPS) ---
   caddy:
     image: caddy:2-alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -32,11 +44,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # --- Aether Agent ---
-  # In multi-user mode, agent containers are provisioned dynamically
-  # by the orchestrator via Docker SDK. No static agent service needed.
-  # The agent image must be pre-built: docker build -t core-ai-agent:latest ./app
-
   # --- Orchestrator (FastAPI / Python) ---
   orchestrator:
     build: ./orchestrator
@@ -45,8 +52,7 @@ services:
       - CORS_ORIGINS=https://${DOMAIN:-localhost},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
-      # Multi-user agent provisioning
-      - MULTI_USER_MODE=true
+      # Agent provisioning (per-user containers via Docker SDK)
       - AGENT_IMAGE=${AGENT_IMAGE:-core-ai-agent:latest}
       - AGENT_NETWORK=${AGENT_NETWORK:-core-ai_default}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
@@ -57,6 +63,12 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      # Google OAuth2 (Gmail plugin)
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      # Spotify OAuth2 (Spotify plugin)
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,6 +83,7 @@ services:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN:-localhost}
+      - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=
     depends_on:
@@ -79,6 +92,11 @@ services:
       orchestrator:
         condition: service_started
     restart: unless-stopped
+
+  # --- Aether Agent ---
+  # Agent containers are provisioned dynamically per user by the orchestrator
+  # via Docker SDK. No static agent service here.
+  # The agent image must be pre-built: docker build -t core-ai-agent:latest ./app
 
 volumes:
   postgres_data:

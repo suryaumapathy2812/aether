@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "deepgram": {
+      "display_name": "Deepgram",
+      "models": {
+        "nova-3": {
+          "description": "Latest, highest accuracy",
+          "streaming": true,
+          "recommended": true,
+          "languages": ["en", "en-IN", "hi", "bn", "ta", "te", "mr", "kn", "ur"]
+        },
+        "nova-2": {
+          "description": "Previous generation, stable",
+          "streaming": true,
+          "recommended": false,
+          "languages": ["en", "en-IN", "hi"]
+        }
+      }
+    }
+  }
+}

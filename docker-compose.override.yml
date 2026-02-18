@@ -1,0 +1,40 @@
+# Dev overrides — auto-loaded by `docker compose up`.
+#
+# Adds hot-reload volume mounts and dev server commands.
+# To run production without these overrides:
+#   docker compose -f docker-compose.yml up --build
+#
+# Agent containers provisioned by the orchestrator also get
+# hot-reload mounts via AGENT_DEV_ROOT (see agent_manager).
+
+services:
+  caddy:
+    ports:
+      - "3000:3000"
+      - "3080:3080"
+    environment:
+      - DOMAIN=localhost:3000
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  orchestrator:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./orchestrator/src:/app/src
+    environment:
+      # Tell agent_manager to mount host source into agent containers
+      - AGENT_DEV_ROOT=${AGENT_DEV_ROOT:-${PWD}/app}
+    command: >
+      uv run uvicorn src.main:app
+      --host 0.0.0.0 --port 9000
+      --reload --reload-dir /app/src
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./dashboard/src:/app/src
+      - ./dashboard/public:/app/public

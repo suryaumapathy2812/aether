@@ -1,0 +1,28 @@
+name: spotify
+display_name: Spotify
+description: Control playback and browse your music
+version: 0.1.0
+
+auth:
+  type: oauth2
+  provider: spotify
+  scopes:
+    - user-read-playback-state
+    - user-modify-playback-state
+    - user-read-currently-playing
+    - user-read-recently-played
+    - playlist-read-private
+    - user-read-email
+  config_fields:
+    - key: account_email
+      label: Spotify Account
+      type: text
+      required: true
+
+tools:
+  - class: NowPlayingTool
+  - class: PlayPauseTool
+  - class: SkipTrackTool
+  - class: SearchSpotifyTool
+  - class: QueueTrackTool
+  - class: RecentTracksTool

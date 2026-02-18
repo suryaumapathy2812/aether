@@ -53,9 +53,10 @@ from aether.tools.list_directory import ListDirectoryTool
 from aether.tools.run_command import RunCommandTool
 from aether.tools.web_search import WebSearchTool
 from aether.tools.run_task import RunTaskTool
-from aether.skills.loader import SkillLoader
+from aether.skills.loader import Skill, SkillLoader
 from aether.agents.task_runner import TaskRunner
 from aether.plugins.loader import PluginLoader
+from aether.plugins.context import PluginContextStore
 from aether.plugins.event import PluginEvent
 from aether.processors.event import EventProcessor
 
@@ -112,11 +113,26 @@ skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
 
 # --- Plugin Loader ---
-PLUGINS_DIR = str(APP_ROOT.parent / "plugins")  # app/plugins/
+PLUGINS_DIR = str(APP_ROOT / "plugins")  # /app/plugins/
 plugin_loader = PluginLoader(PLUGINS_DIR)
 loaded_plugins = plugin_loader.discover()
-for tool in plugin_loader.all_tools():
-    tool_registry.register(tool)
+for plugin in loaded_plugins:
+    for tool in plugin.tools:
+        tool_registry.register(tool, plugin_name=plugin.manifest.name)
+
+# --- Plugin Context Store (runtime credentials for plugin tools) ---
+plugin_context_store = PluginContextStore()
+
+# --- Inject plugin SKILL.md into skill_loader ---
+for plugin in loaded_plugins:
+    if plugin.skill_content:
+        skill = Skill(
+            name=plugin.manifest.name,
+            description=plugin.manifest.description or plugin.manifest.display_name,
+            location=f"{plugin.manifest.location}/SKILL.md",
+            _content=plugin.skill_content,
+        )
+        skill_loader.register(skill)
 
 # --- Event Processor (decision engine for plugin events) ---
 event_processor = EventProcessor(llm_provider, memory_store)
@@ -179,6 +195,52 @@ async def _heartbeat_loop():
             logger.warning("Heartbeat to orchestrator failed")
 
 
+async def _fetch_plugin_configs():
+    """Fetch decrypted plugin configs from the orchestrator.
+
+    Called at startup (after registration) and on /config/reload.
+    Populates the plugin_context_store so tools get their credentials.
+    """
+    if not ORCHESTRATOR_URL or not AGENT_USER_ID:
+        logger.debug(
+            "No ORCHESTRATOR_URL or AGENT_USER_ID — skipping plugin config fetch"
+        )
+        return
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # 1. Get list of enabled plugins for this user
+            resp = await client.get(
+                f"{ORCHESTRATOR_URL}/api/internal/plugins",
+                params={"user_id": AGENT_USER_ID},
+                headers=_agent_auth_headers(),
+            )
+            if resp.status_code != 200:
+                logger.debug(f"No enabled plugins (status={resp.status_code})")
+                return
+
+            enabled = resp.json().get("plugins", [])
+
+            # 2. Fetch config for each enabled plugin
+            for plugin_name in enabled:
+                cfg_resp = await client.get(
+                    f"{ORCHESTRATOR_URL}/api/internal/plugins/{plugin_name}/config",
+                    params={"user_id": AGENT_USER_ID},
+                    headers=_agent_auth_headers(),
+                )
+                if cfg_resp.status_code == 200:
+                    plugin_context_store.set(plugin_name, cfg_resp.json())
+                else:
+                    logger.debug(
+                        f"No config for plugin {plugin_name} (status={cfg_resp.status_code})"
+                    )
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch plugin configs: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     await memory_store.start()
@@ -191,14 +253,18 @@ async def startup():
     if ORCHESTRATOR_URL:
         asyncio.create_task(_heartbeat_loop())
 
+    # Fetch plugin configs (needs orchestrator registration first)
+    await _fetch_plugin_configs()
+
     logger.info(
-        "Aether v0.07 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s)",
+        "Aether v0.07 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s, plugin_ctx=%s)",
         AGENT_ID,
         config.stt.provider,
         config.llm.provider,
         config.tts.provider,
         tool_registry.tool_names(),
         [s.name for s in skill_loader.all()],
+        plugin_context_store.loaded_plugins(),
     )
 
 
@@ -369,8 +435,11 @@ async def config_reload(request_body: dict | None = None):
 
     new_config = reload_config()
 
+    # Also refresh plugin configs (user may have changed plugin settings)
+    await _fetch_plugin_configs()
+
     logger.info(
-        "Config reloaded (STT=%s/%s, LLM=%s/%s, TTS=%s/%s/%s, style=%s)",
+        "Config reloaded (STT=%s/%s, LLM=%s/%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
         new_config.stt.provider,
         new_config.stt.model,
         new_config.llm.provider,
@@ -379,6 +448,7 @@ async def config_reload(request_body: dict | None = None):
         new_config.tts.model,
         new_config.tts.voice,
         new_config.personality.base_style,
+        plugin_context_store.loaded_plugins(),
     )
 
     return JSONResponse({"status": "reloaded"})
@@ -693,6 +763,7 @@ async def websocket_endpoint(ws: WebSocket):
         memory_store,
         tool_registry=tool_registry,
         skill_loader=skill_loader,
+        plugin_context=plugin_context_store,
     )
     llm.session_id = session_id  # For action memory
     tts = TTSProcessor(tts_provider)

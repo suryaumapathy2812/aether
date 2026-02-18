@@ -66,11 +66,17 @@ async def get_user_id_from_ws(ws: WebSocket) -> str | None:
 
 
 def _extract_token_from_request(request: Request) -> str | None:
-    """Extract Bearer token from Authorization header."""
+    """Extract Bearer token from Authorization header or query param.
+
+    Checks the Authorization header first, then falls back to a ``token``
+    query parameter.  The query-param path is needed for browser-redirect
+    flows (e.g. OAuth start) where custom headers cannot be sent.
+    """
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:]
-    return None
+    # Fallback: query param (used by OAuth redirect flows)
+    return request.query_params.get("token")
 
 
 async def _validate_token(token: str) -> str | None:

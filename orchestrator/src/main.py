@@ -16,6 +16,9 @@ import uuid
 import asyncio
 import logging
 
+import time
+import urllib.parse
+
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -26,6 +29,7 @@ from fastapi import (
     Depends,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
@@ -57,7 +61,6 @@ async def verify_agent_secret(request: Request) -> None:
 
 
 from .agent_manager import (
-    MULTI_USER_MODE,
     IDLE_TIMEOUT_MINUTES,
     provision_agent,
     stop_agent,
@@ -92,15 +95,10 @@ async def startup():
             "⚠ AGENT_SECRET not set — agent registration endpoints are UNPROTECTED"
         )
 
-    if MULTI_USER_MODE:
-        pool = await get_pool()
-        await reconcile_containers(pool)
-        asyncio.create_task(_idle_reaper())
-        log.info(
-            f"Orchestrator ready (multi-user mode, idle timeout={IDLE_TIMEOUT_MINUTES}m)"
-        )
-    else:
-        log.info("Orchestrator ready (dev mode — single agent)")
+    pool = await get_pool()
+    await reconcile_containers(pool)
+    asyncio.create_task(_idle_reaper())
+    log.info(f"Orchestrator ready (idle timeout={IDLE_TIMEOUT_MINUTES}m)")
 
 
 @app.on_event("shutdown")
@@ -174,42 +172,13 @@ class PreferencesBody(BaseModel):
 
 async def _ensure_agent(user_id: str) -> None:
     """
-    Ensure the user has a running agent.
+    Ensure the user has a running agent container.
 
-    Dev mode: grab any running agent (single shared agent from docker-compose).
-    Multi-user mode: provision a dedicated container per user via Docker SDK.
+    Provisions a dedicated container per user via Docker SDK.
+    If the container already exists and is running, this is a no-op.
     """
     pool = await get_pool()
 
-    if not MULTI_USER_MODE:
-        # ── Dev mode: single shared agent ──────────────────────
-        # Always prefer the most recently healthy agent (handles restarts/stale records)
-        freshest = await pool.fetchrow(
-            "SELECT id FROM agents WHERE status = 'running' ORDER BY last_health DESC NULLS LAST LIMIT 1"
-        )
-        if not freshest:
-            return  # No agents at all — agent hasn't registered yet
-
-        # Assign (or reassign) the user to the freshest agent
-        existing = await pool.fetchrow(
-            "SELECT id FROM agents WHERE user_id = $1 AND status = 'running'", user_id
-        )
-        if existing and existing["id"] == freshest["id"]:
-            return  # Already on the right agent
-
-        # Clear old assignment if any
-        if existing:
-            await pool.execute(
-                "UPDATE agents SET user_id = NULL WHERE id = $1", existing["id"]
-            )
-
-        await pool.execute(
-            "UPDATE agents SET user_id = $1 WHERE id = $2", user_id, freshest["id"]
-        )
-        log.info(f"Dev mode: assigned agent {freshest['id']} to user {user_id}")
-        return
-
-    # ── Multi-user mode: dedicated container per user ──────
     existing = await pool.fetchrow(
         "SELECT id, status FROM agents WHERE user_id = $1", user_id
     )
@@ -808,10 +777,39 @@ AVAILABLE_PLUGINS = {
         "description": "Monitor and respond to Gmail emails",
         "auth_type": "oauth2",
         "auth_provider": "google",
+        "scopes": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ],
         "config_fields": [
             {
                 "key": "account_email",
                 "label": "Gmail Address",
+                "type": "text",
+                "required": True,
+            },
+        ],
+    },
+    "spotify": {
+        "name": "spotify",
+        "display_name": "Spotify",
+        "description": "Control playback and browse your music",
+        "auth_type": "oauth2",
+        "auth_provider": "spotify",
+        "scopes": [
+            "user-read-playback-state",
+            "user-modify-playback-state",
+            "user-read-currently-playing",
+            "user-read-recently-played",
+            "playlist-read-private",
+            "user-read-email",
+        ],
+        "config_fields": [
+            {
+                "key": "account_email",
+                "label": "Spotify Account",
                 "type": "text",
                 "required": True,
             },
@@ -833,6 +831,16 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
     )
     installed = {r["name"]: {"id": r["id"], "enabled": r["enabled"]} for r in rows}
 
+    # Check which installed plugins have OAuth tokens (connected)
+    connected_plugins: set[str] = set()
+    for name, info in installed.items():
+        token_row = await pool.fetchrow(
+            "SELECT value FROM plugin_configs WHERE plugin_id = $1 AND key = 'access_token'",
+            info["id"],
+        )
+        if token_row:
+            connected_plugins.add(name)
+
     result = []
     for name, meta in AVAILABLE_PLUGINS.items():
         entry = {**meta}
@@ -840,10 +848,12 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
             entry["installed"] = True
             entry["plugin_id"] = installed[name]["id"]
             entry["enabled"] = installed[name]["enabled"]
+            entry["connected"] = name in connected_plugins
         else:
             entry["installed"] = False
             entry["plugin_id"] = None
             entry["enabled"] = False
+            entry["connected"] = False
         result.append(entry)
     return result
 
@@ -955,6 +965,425 @@ async def uninstall_plugin(plugin_name: str, user_id: str = Depends(get_user_id)
         "DELETE FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
     )
     return {"status": "uninstalled"}
+
+
+# ── Internal Plugin Config (agent-facing) ─────────────────
+
+
+@app.get(
+    "/api/internal/plugins",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def list_enabled_plugins_for_agent(user_id: str = Query(...)):
+    """List all enabled plugins for a user (agent-facing).
+
+    Returns plugin names so the agent knows which configs to fetch.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT name FROM plugins WHERE user_id = $1 AND enabled = true", user_id
+    )
+    return {"plugins": [r["name"] for r in rows]}
+
+
+# ── OAuth2 Provider Registry ──────────────────────────────
+#
+# Provider-agnostic OAuth2 flow. Each provider defines its auth/token URLs,
+# scopes, credentials, and how to exchange/refresh tokens.
+# Adding a new OAuth provider = adding an entry to OAUTH_PROVIDERS.
+
+import base64 as _base64
+import httpx as _httpx
+
+# In-memory state store for CSRF protection (state → {user_id, plugin_name, created}).
+# In production, use Redis or DB. Short-lived: cleaned up after 10 min.
+_oauth_states: dict[str, dict] = {}
+
+
+OAUTH_PROVIDERS: dict[str, dict] = {
+    "google": {
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        "auth_params": {
+            "access_type": "offline",
+            "prompt": "consent",
+        },
+        "token_auth": "body",  # client_id/secret sent in POST body
+        "userinfo_url": "https://www.googleapis.com/oauth2/v2/userinfo",
+        "userinfo_email_field": "email",
+    },
+    "spotify": {
+        "auth_url": "https://accounts.spotify.com/authorize",
+        "token_url": "https://accounts.spotify.com/api/token",
+        "client_id": os.getenv("SPOTIFY_CLIENT_ID", ""),
+        "client_secret": os.getenv("SPOTIFY_CLIENT_SECRET", ""),
+        "auth_params": {},
+        "token_auth": "basic",  # client_id:secret sent as Basic auth header
+        "userinfo_url": "https://api.spotify.com/v1/me",
+        "userinfo_email_field": "email",
+    },
+}
+
+
+def _get_oauth_redirect_uri(request: Request, plugin_name: str, **_) -> str:
+    """Build the OAuth redirect URI from the incoming request's origin."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    return f"{scheme}://{host}/api/plugins/{plugin_name}/oauth/callback"
+
+
+async def _exchange_token(provider: dict, code: str, redirect_uri: str) -> dict:
+    """Exchange an auth code for tokens. Handles both body and Basic auth styles."""
+    data = {
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    headers: dict[str, str] = {}
+
+    if provider["token_auth"] == "basic":
+        # Spotify-style: client credentials in Basic auth header
+        creds = _base64.b64encode(
+            f"{provider['client_id']}:{provider['client_secret']}".encode()
+        ).decode()
+        headers["Authorization"] = f"Basic {creds}"
+    else:
+        # Google-style: client credentials in POST body
+        data["client_id"] = provider["client_id"]
+        data["client_secret"] = provider["client_secret"]
+
+    async with _httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(provider["token_url"], data=data, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _refresh_oauth_token(plugin_id: str, provider_name: str) -> str | None:
+    """Refresh an expired OAuth access token using the stored refresh_token.
+
+    Works for any provider in OAUTH_PROVIDERS.
+    Returns the new access_token, or None if refresh failed.
+    """
+    provider = OAUTH_PROVIDERS.get(provider_name)
+    if not provider:
+        log.warning(f"Unknown OAuth provider: {provider_name}")
+        return None
+
+    pool = await get_pool()
+    configs = await pool.fetch(
+        "SELECT key, value FROM plugin_configs WHERE plugin_id = $1", plugin_id
+    )
+    config_map = {c["key"]: decrypt_value(c["value"]) for c in configs}
+
+    refresh_token = config_map.get("refresh_token")
+    if not refresh_token:
+        log.warning(f"No refresh_token for plugin {plugin_id}")
+        return None
+
+    data = {
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    headers: dict[str, str] = {}
+
+    if provider["token_auth"] == "basic":
+        creds = _base64.b64encode(
+            f"{provider['client_id']}:{provider['client_secret']}".encode()
+        ).decode()
+        headers["Authorization"] = f"Basic {creds}"
+    else:
+        data["client_id"] = provider["client_id"]
+        data["client_secret"] = provider["client_secret"]
+
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(provider["token_url"], data=data, headers=headers)
+            resp.raise_for_status()
+            tokens = resp.json()
+    except Exception as e:
+        log.error(f"Token refresh failed for plugin {plugin_id} ({provider_name}): {e}")
+        return None
+
+    new_access_token = tokens.get("access_token", "")
+    new_expiry = str(int(time.time()) + int(tokens.get("expires_in", 3600)))
+
+    if not new_access_token:
+        return None
+
+    # Update stored tokens
+    for key, value in [
+        ("access_token", new_access_token),
+        ("token_expiry", new_expiry),
+    ]:
+        config_id = uuid.uuid4().hex[:12]
+        encrypted = encrypt_value(value)
+        await pool.execute(
+            """
+            INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
+            VALUES ($1, $2, $3, $4, now())
+            ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
+            """,
+            config_id,
+            plugin_id,
+            key,
+            encrypted,
+        )
+
+    log.info(f"Refreshed {provider_name} token for plugin {plugin_id}")
+    return new_access_token
+
+
+async def _fetch_oauth_user_info(provider: dict, access_token: str) -> str:
+    """Fetch the user's email/display name from the provider's userinfo endpoint."""
+    url = provider.get("userinfo_url")
+    field = provider.get("userinfo_email_field", "email")
+    if not url:
+        return ""
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if resp.status_code == 200:
+                return resp.json().get(field, "")
+    except Exception:
+        pass
+    return ""
+
+
+@app.get("/api/plugins/{plugin_name}/oauth/start")
+async def oauth_start(
+    plugin_name: str, request: Request, user_id: str = Depends(get_user_id)
+):
+    """Initiate OAuth2 flow for any plugin.
+
+    Looks up the plugin's auth_provider in OAUTH_PROVIDERS, then redirects
+    the user to the provider's consent screen.
+    """
+    if plugin_name not in AVAILABLE_PLUGINS:
+        raise HTTPException(404, f"Unknown plugin: {plugin_name}")
+
+    plugin_meta = AVAILABLE_PLUGINS[plugin_name]
+    provider_name = plugin_meta.get("auth_provider", "")
+    provider = OAUTH_PROVIDERS.get(provider_name)
+    if not provider:
+        raise HTTPException(400, f"No OAuth provider configured for {plugin_name}")
+
+    if not provider["client_id"] or not provider["client_secret"]:
+        raise HTTPException(
+            500,
+            f"OAuth not configured for {provider_name} "
+            f"(missing client ID/secret env vars)",
+        )
+
+    # Ensure plugin is installed
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    if not row:
+        raise HTTPException(
+            400, f"{plugin_name} plugin not installed — install it first"
+        )
+
+    # Generate CSRF state token
+    state = uuid.uuid4().hex
+    _oauth_states[state] = {
+        "user_id": user_id,
+        "plugin_name": plugin_name,
+        "created": time.time(),
+    }
+
+    # Clean up stale states (older than 10 min)
+    cutoff = time.time() - 600
+    stale = [k for k, v in _oauth_states.items() if v["created"] < cutoff]
+    for k in stale:
+        _oauth_states.pop(k, None)
+
+    redirect_uri = _get_oauth_redirect_uri(request, plugin_name)
+
+    # Build scopes from plugin metadata
+    scopes = plugin_meta.get("scopes", [])
+
+    params = {
+        "client_id": provider["client_id"],
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(scopes),
+        "state": state,
+        **provider.get("auth_params", {}),
+    }
+
+    auth_url = f"{provider['auth_url']}?{urllib.parse.urlencode(params)}"
+    return RedirectResponse(auth_url)
+
+
+@app.get("/api/plugins/{plugin_name}/oauth/callback")
+async def oauth_callback(
+    plugin_name: str,
+    request: Request,
+    code: str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None),
+):
+    """Handle OAuth2 callback for any plugin.
+
+    Exchanges the auth code for tokens, stores them encrypted in plugin_configs,
+    enables the plugin, and signals the agent to reload.
+    """
+    # Handle user denial
+    if error:
+        log.warning(f"OAuth denied for {plugin_name}: {error}")
+        return RedirectResponse("/plugins?error=oauth_denied")
+
+    if not code or not state:
+        return RedirectResponse("/plugins?error=missing_params")
+
+    # Validate CSRF state
+    state_data = _oauth_states.pop(state, None)
+    if not state_data:
+        return RedirectResponse("/plugins?error=invalid_state")
+
+    # Verify the callback matches the plugin that started the flow
+    if state_data.get("plugin_name") != plugin_name:
+        return RedirectResponse("/plugins?error=state_mismatch")
+
+    user_id = state_data["user_id"]
+
+    plugin_meta = AVAILABLE_PLUGINS.get(plugin_name)
+    if not plugin_meta:
+        return RedirectResponse("/plugins?error=unknown_plugin")
+
+    provider_name = plugin_meta.get("auth_provider", "")
+    provider = OAUTH_PROVIDERS.get(provider_name)
+    if not provider:
+        return RedirectResponse("/plugins?error=no_provider")
+
+    redirect_uri = _get_oauth_redirect_uri(request, plugin_name)
+
+    # Exchange auth code for tokens
+    try:
+        tokens = await _exchange_token(provider, code, redirect_uri)
+    except Exception as e:
+        log.error(f"OAuth token exchange failed for {plugin_name}: {e}")
+        return RedirectResponse("/plugins?error=token_exchange_failed")
+
+    access_token = tokens.get("access_token", "")
+    refresh_token = tokens.get("refresh_token", "")
+    expires_in = tokens.get("expires_in", 3600)
+    token_expiry = str(int(time.time()) + int(expires_in))
+
+    if not access_token:
+        return RedirectResponse("/plugins?error=no_access_token")
+
+    # Fetch the user's account email/name for display
+    account_email = await _fetch_oauth_user_info(provider, access_token)
+
+    # Store tokens encrypted in plugin_configs
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+    )
+    if not row:
+        return RedirectResponse("/plugins?error=plugin_not_found")
+
+    plugin_id = row["id"]
+
+    config_entries = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_expiry": token_expiry,
+    }
+    if account_email:
+        config_entries["account_email"] = account_email
+
+    for key, value in config_entries.items():
+        config_id = uuid.uuid4().hex[:12]
+        encrypted = encrypt_value(value)
+        await pool.execute(
+            """
+            INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
+            VALUES ($1, $2, $3, $4, now())
+            ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
+            """,
+            config_id,
+            plugin_id,
+            key,
+            encrypted,
+        )
+
+    # Auto-enable the plugin
+    await pool.execute("UPDATE plugins SET enabled = true WHERE id = $1", plugin_id)
+
+    # Signal agent to reload plugin configs
+    await _signal_agent_plugin_reload(user_id)
+
+    log.info(f"{plugin_name} OAuth complete for user {user_id} ({account_email})")
+    return RedirectResponse(f"/plugins/{plugin_name}?connected=true")
+
+
+async def _signal_agent_plugin_reload(user_id: str) -> None:
+    """Tell the agent to refresh its plugin configs after OAuth or config change."""
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        return
+
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"http://{agent['host']}:{agent['port']}/config/reload",
+                json={},
+            )
+            log.info(f"Signaled agent plugin reload for user {user_id}")
+    except Exception as e:
+        log.warning(f"Failed to signal agent plugin reload: {e}")
+
+
+@app.get(
+    "/api/internal/plugins/{plugin_name}/config",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def get_plugin_config_for_agent(plugin_name: str, user_id: str = Query(...)):
+    """Return full decrypted plugin config for the agent to use at tool call time.
+
+    Agent-authenticated (AGENT_SECRET). Returns unmasked values — never
+    expose this endpoint to end users.
+
+    Auto-refreshes expired OAuth tokens before returning.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2 AND enabled = true",
+        user_id,
+        plugin_name,
+    )
+    if not row:
+        raise HTTPException(404, "Plugin not installed or not enabled")
+
+    plugin_id = row["id"]
+    configs = await pool.fetch(
+        "SELECT key, value FROM plugin_configs WHERE plugin_id = $1", plugin_id
+    )
+    config_map = {c["key"]: decrypt_value(c["value"]) for c in configs}
+
+    # Auto-refresh expired OAuth tokens (works for any provider)
+    plugin_meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+    provider_name = plugin_meta.get("auth_provider", "")
+    if provider_name and config_map.get("token_expiry"):
+        try:
+            expiry = int(config_map["token_expiry"])
+            # Refresh if token expires within 5 minutes
+            if time.time() > expiry - 300:
+                new_token = await _refresh_oauth_token(plugin_id, provider_name)
+                if new_token:
+                    config_map["access_token"] = new_token
+                    config_map["token_expiry"] = str(int(time.time()) + 3600)
+        except (ValueError, TypeError):
+            pass  # Invalid expiry — skip refresh
+
+    return config_map
 
 
 # ── Webhook Receiver ──────────────────────────────────────

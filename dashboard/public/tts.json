@@ -1,0 +1,61 @@
+{
+  "providers": {
+    "openai": {
+      "display_name": "OpenAI",
+      "models": {
+        "tts-1": {
+          "description": "Optimized for speed",
+          "streaming": true,
+          "recommended": true,
+          "voices": ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+        },
+        "tts-1-hd": {
+          "description": "Optimized for quality",
+          "streaming": true,
+          "recommended": false,
+          "voices": ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+        },
+        "gpt-4o-mini-tts": {
+          "description": "GPT-4o mini powered, supports instructions",
+          "streaming": true,
+          "recommended": false,
+          "voices": ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"]
+        }
+      }
+    },
+    "sarvam": {
+      "display_name": "Sarvam",
+      "models": {
+        "bulbul:v3": {
+          "description": "Latest — 14 voices, Indian language support",
+          "streaming": true,
+          "recommended": true,
+          "voices": ["shubh", "ritu", "amit", "sumit", "pooja", "manan", "simran", "rahul", "kavya", "ratan", "priya", "ishita", "shreya", "shruti"]
+        },
+        "bulbul:v2": {
+          "description": "Production — 7 voices with pitch/pace control",
+          "streaming": true,
+          "recommended": false,
+          "voices": ["anushka", "manisha", "arya", "vidya", "abhilash", "karun", "hitesh"]
+        }
+      }
+    },
+    "elevenlabs": {
+      "display_name": "ElevenLabs",
+      "models": {
+        "eleven_multilingual_v2": {
+          "description": "Multilingual, expressive voices",
+          "streaming": true,
+          "recommended": true,
+          "voices": ["rachel", "drew", "clyde", "paul", "domi", "dave", "fin", "sarah", "antoni", "thomas"]
+        },
+        "eleven_turbo_v2_5": {
+          "description": "Low-latency, optimized for real-time",
+          "streaming": true,
+          "recommended": false,
+          "voices": ["rachel", "drew", "clyde", "paul", "domi", "dave", "fin", "sarah", "antoni", "thomas"]
+        }
+      }
+    }
+  }
+}

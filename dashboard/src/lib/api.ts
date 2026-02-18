@@ -150,6 +150,7 @@ export interface PluginInfo {
   installed: boolean;
   plugin_id: string | null;
   enabled: boolean;
+  connected: boolean;
 }
 
 export async function listPlugins() {
@@ -183,6 +184,15 @@ export async function getPluginConfig(name: string) {
 
 export async function uninstallPlugin(name: string) {
   return api(`/api/plugins/${name}`, { method: "DELETE" });
+}
+
+export function getOAuthStartUrl(pluginName: string): string {
+  // This is a redirect endpoint — browser navigates directly (not a fetch call).
+  // Browser redirects can't send Authorization headers, so we pass the
+  // session token as a query param (same pattern as WebSocket connections).
+  const base = ORCHESTRATOR_URL || "";
+  const token = _sessionToken || "";
+  return `${base}/api/plugins/${pluginName}/oauth/start?token=${encodeURIComponent(token)}`;
 }
 
 // ── WebSocket URL ──

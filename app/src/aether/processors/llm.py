@@ -32,6 +32,7 @@ from aether.core.frames import (
 from aether.core.processor import Processor
 from aether.memory.store import MemoryStore
 from aether.providers.base import LLMProvider
+from aether.plugins.context import PluginContextStore
 from aether.skills.loader import SkillLoader
 from aether.tools.registry import ToolRegistry
 
@@ -102,12 +103,14 @@ class LLMProcessor(Processor):
         store: MemoryStore,
         tool_registry: ToolRegistry | None = None,
         skill_loader: SkillLoader | None = None,
+        plugin_context: PluginContextStore | None = None,
     ):
         super().__init__("LLM")
         self.provider = provider
         self.store = store
         self.tool_registry = tool_registry
         self.skill_loader = skill_loader
+        self.plugin_context = plugin_context
         self.conversation_history: list[dict] = []
 
     async def start(self) -> None:
@@ -276,7 +279,17 @@ class LLMProcessor(Processor):
                 yield tool_call_frame(tc.name, tc.arguments, call_id=tc.id)
 
                 logger.info(f"Tool: {tc.name}({', '.join(tc.arguments.keys())})")
-                result = await self.tool_registry.dispatch(tc.name, tc.arguments)
+
+                # Resolve plugin context for this tool (if it belongs to a plugin)
+                tool_context = None
+                if self.plugin_context and self.tool_registry:
+                    plugin_name = self.tool_registry.get_plugin_for_tool(tc.name)
+                    if plugin_name:
+                        tool_context = self.plugin_context.get(plugin_name)
+
+                result = await self.tool_registry.dispatch(
+                    tc.name, tc.arguments, context=tool_context
+                )
 
                 yield tool_result_frame(
                     tc.name, result.output, call_id=tc.id, error=result.error

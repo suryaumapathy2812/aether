@@ -19,6 +19,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Copy application code
 COPY src/ src/
 COPY skills/ skills/
+COPY plugins/ plugins/
 
 # Install the project itself
 RUN uv sync --frozen --no-dev

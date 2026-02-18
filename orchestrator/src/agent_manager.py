@@ -3,8 +3,9 @@ Agent Container Manager
 ───────────────────────
 Spawns and manages per-user agent containers via Docker SDK.
 
-Only active when MULTI_USER_MODE=true. In dev mode (default),
-the orchestrator uses the single shared agent from docker-compose.
+Every user gets a dedicated agent container with isolated memory,
+workspace, and credentials. The orchestrator provisions containers
+on demand (first WS connection) and reaps idle ones automatically.
 """
 
 from __future__ import annotations
@@ -16,11 +17,15 @@ log = logging.getLogger("orchestrator.agent_manager")
 
 # ── Configuration ──────────────────────────────────────────
 
-MULTI_USER_MODE = os.getenv("MULTI_USER_MODE", "false").lower() == "true"
 AGENT_IMAGE = os.getenv("AGENT_IMAGE", "core-ai-agent:latest")
 AGENT_NETWORK = os.getenv("AGENT_NETWORK", "core-ai_default")
 IDLE_TIMEOUT_MINUTES = int(os.getenv("AGENT_IDLE_TIMEOUT", "30"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+
+# Dev: host path to app/ directory for hot-reload mounts into agent containers.
+# When set, agent containers get source + plugin mounts with --reload.
+# Example: /Users/you/code/core-ai/app
+AGENT_DEV_ROOT = os.getenv("AGENT_DEV_ROOT", "")
 
 # System-wide fallback API keys (from orchestrator's own env)
 SYSTEM_API_KEYS = {
@@ -68,9 +73,6 @@ async def provision_agent(
 
     Returns: {"agent_id": str, "host": str, "port": int, "container_id": str}
     """
-    if not MULTI_USER_MODE:
-        raise RuntimeError("Multi-user mode not enabled")
-
     agent_id = f"agent-{user_id}"
     container_name = f"aether-agent-{user_id}"
 
@@ -131,17 +133,33 @@ async def provision_agent(
             docker_client.volumes.create(vol_name)
             log.info(f"Created volume {vol_name}")
 
+    # Build volume mounts
+    vol_mounts = {
+        memory_vol: {"bind": "/data", "mode": "rw"},
+        workspace_vol: {"bind": "/workspace", "mode": "rw"},
+    }
+
+    # Dev: mount host source for hot-reload
+    command = None
+    if AGENT_DEV_ROOT:
+        vol_mounts[f"{AGENT_DEV_ROOT}/src"] = {"bind": "/app/src", "mode": "rw"}
+        vol_mounts[f"{AGENT_DEV_ROOT}/plugins"] = {"bind": "/app/plugins", "mode": "rw"}
+        vol_mounts[f"{AGENT_DEV_ROOT}/skills"] = {"bind": "/app/skills", "mode": "rw"}
+        command = (
+            "uv run uvicorn aether.main:app "
+            "--host 0.0.0.0 --port 8000 "
+            "--reload --reload-dir /app/src"
+        )
+
     # Create and start container
     container = docker_client.containers.run(
         AGENT_IMAGE,
         name=container_name,
         detach=True,
         environment=environment,
-        volumes={
-            memory_vol: {"bind": "/data", "mode": "rw"},
-            workspace_vol: {"bind": "/workspace", "mode": "rw"},
-        },
+        volumes=vol_mounts,
         network=AGENT_NETWORK,
+        command=command,
         # Resource limits
         mem_limit="512m",
         cpu_period=100000,
@@ -160,9 +178,6 @@ async def provision_agent(
 
 async def stop_agent(user_id: str) -> None:
     """Stop a user's agent container (preserves state in volumes)."""
-    if not MULTI_USER_MODE:
-        return
-
     container_name = f"aether-agent-{user_id}"
     docker_client = _get_docker()
 
@@ -176,9 +191,6 @@ async def stop_agent(user_id: str) -> None:
 
 async def destroy_agent(user_id: str) -> None:
     """Remove a user's agent container (volumes preserved for data safety)."""
-    if not MULTI_USER_MODE:
-        return
-
     container_name = f"aether-agent-{user_id}"
     docker_client = _get_docker()
 
@@ -192,9 +204,6 @@ async def destroy_agent(user_id: str) -> None:
 
 async def get_agent_status(user_id: str) -> str | None:
     """Check if a user's agent container is running. Returns Docker status or None."""
-    if not MULTI_USER_MODE:
-        return None
-
     container_name = f"aether-agent-{user_id}"
     docker_client = _get_docker()
 
@@ -210,9 +219,6 @@ async def reconcile_containers(pool) -> None:
     Startup reconciliation: find orphaned agent containers
     (running but not in DB) and clean them up.
     """
-    if not MULTI_USER_MODE:
-        return
-
     try:
         docker_client = _get_docker()
         containers = docker_client.containers.list(

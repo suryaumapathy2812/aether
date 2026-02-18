@@ -32,6 +32,7 @@ YAML_LINE_RE = re.compile(r"^(\w+):\s*(.+)$", re.MULTILINE)
 @dataclass
 class Skill:
     """A loaded skill."""
+
     name: str
     description: str
     location: str  # File path to SKILL.md
@@ -46,7 +47,7 @@ class Skill:
                     raw = f.read()
                 # Strip frontmatter
                 match = FRONTMATTER_RE.match(raw)
-                self._content = raw[match.end():].strip() if match else raw.strip()
+                self._content = raw[match.end() :].strip() if match else raw.strip()
             except Exception as e:
                 logger.error(f"Failed to load skill content from {self.location}: {e}")
                 self._content = ""
@@ -84,6 +85,13 @@ class SkillLoader:
                         logger.info(f"Discovered skill: {skill.name} ({skill_path})")
 
         return count
+
+    def register(self, skill: Skill) -> None:
+        """Register a skill directly (e.g. from a plugin's SKILL.md)."""
+        if skill.name in self._skills:
+            logger.warning(f"Duplicate skill name: {skill.name}")
+        self._skills[skill.name] = skill
+        logger.info(f"Registered skill: {skill.name}")
 
     def get(self, name: str) -> Skill | None:
         """Get a skill by name."""

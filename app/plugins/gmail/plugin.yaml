@@ -1,0 +1,27 @@
+name: gmail
+display_name: Gmail
+description: Monitor and respond to Gmail emails
+version: 0.1.0
+
+auth:
+  type: oauth2
+  provider: google
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+    - https://www.googleapis.com/auth/gmail.send
+    - https://www.googleapis.com/auth/gmail.modify
+  config_fields:
+    - key: account_email
+      label: Gmail Address
+      type: text
+      required: true
+
+webhook:
+  events:
+    - message.new
+
+tools:
+  - class: ListUnreadTool
+  - class: ReadEmailTool
+  - class: SendReplyTool
+  - class: ArchiveEmailTool

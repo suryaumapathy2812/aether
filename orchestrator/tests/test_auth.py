@@ -12,13 +12,19 @@ from tests.conftest import make_record
 # ── Helpers ────────────────────────────────────────────────
 
 
-def _make_request(auth_header: str | None = None) -> MagicMock:
-    """Create a mock FastAPI Request with optional Authorization header."""
+def _make_request(
+    auth_header: str | None = None, token_param: str | None = None
+) -> MagicMock:
+    """Create a mock FastAPI Request with optional Authorization header and query params."""
     request = MagicMock()
     headers = {}
     if auth_header:
         headers["authorization"] = auth_header
     request.headers = headers
+    query_params = {}
+    if token_param:
+        query_params["token"] = token_param
+    request.query_params = query_params
     return request
 
 

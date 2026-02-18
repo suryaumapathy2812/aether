@@ -35,53 +35,6 @@ class TestProviderToEnv:
         assert _provider_to_env("") is None
 
 
-# ── Multi-user mode guards ────────────────────────────────
-
-
-class TestMultiUserGuards:
-    @pytest.mark.asyncio
-    async def test_provision_raises_when_not_multi_user(self):
-        """provision_agent raises RuntimeError when MULTI_USER_MODE=false."""
-        with patch("src.agent_manager.MULTI_USER_MODE", False):
-            from src.agent_manager import provision_agent
-
-            with pytest.raises(RuntimeError, match="Multi-user mode not enabled"):
-                await provision_agent("user-1")
-
-    @pytest.mark.asyncio
-    async def test_stop_noop_when_not_multi_user(self):
-        """stop_agent is a no-op when MULTI_USER_MODE=false."""
-        with patch("src.agent_manager.MULTI_USER_MODE", False):
-            from src.agent_manager import stop_agent
-
-            # Should not raise
-            await stop_agent("user-1")
-
-    @pytest.mark.asyncio
-    async def test_destroy_noop_when_not_multi_user(self):
-        """destroy_agent is a no-op when MULTI_USER_MODE=false."""
-        with patch("src.agent_manager.MULTI_USER_MODE", False):
-            from src.agent_manager import destroy_agent
-
-            await destroy_agent("user-1")
-
-    @pytest.mark.asyncio
-    async def test_get_status_returns_none_when_not_multi_user(self):
-        """get_agent_status returns None when MULTI_USER_MODE=false."""
-        with patch("src.agent_manager.MULTI_USER_MODE", False):
-            from src.agent_manager import get_agent_status
-
-            assert await get_agent_status("user-1") is None
-
-    @pytest.mark.asyncio
-    async def test_reconcile_noop_when_not_multi_user(self):
-        """reconcile_containers is a no-op when MULTI_USER_MODE=false."""
-        with patch("src.agent_manager.MULTI_USER_MODE", False):
-            from src.agent_manager import reconcile_containers
-
-            await reconcile_containers(MagicMock())
-
-
 # ── Container provisioning ─────────────────────────────────
 
 
@@ -110,10 +63,7 @@ class TestProvisionAgent:
         mock_container.id = "abc123def456"
         docker_client.containers.run.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import provision_agent
 
             result = await provision_agent("user-42")
@@ -142,10 +92,7 @@ class TestProvisionAgent:
         mock_container.status = "exited"
         docker_client.containers.get.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import provision_agent
 
             result = await provision_agent("user-42")
@@ -165,10 +112,7 @@ class TestProvisionAgent:
         mock_container.status = "running"
         docker_client.containers.get.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import provision_agent
 
             result = await provision_agent("user-42")
@@ -191,7 +135,6 @@ class TestProvisionAgent:
         user_keys = {"openai": "sk-user-key", "deepgram": "dg-user-key"}
 
         with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
             patch("src.agent_manager._get_docker", return_value=docker_client),
             patch("src.agent_manager.SYSTEM_API_KEYS", {"OPENAI_API_KEY": "sk-system"}),
         ):
@@ -217,10 +160,7 @@ class TestStopDestroy:
         mock_container = MagicMock()
         docker_client.containers.get.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import stop_agent
 
             await stop_agent("user-42")
@@ -234,10 +174,7 @@ class TestStopDestroy:
         docker_client = MagicMock()
         docker_client.containers.get.side_effect = Exception("Not found")
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import stop_agent
 
             # Should not raise
@@ -250,10 +187,7 @@ class TestStopDestroy:
         mock_container = MagicMock()
         docker_client.containers.get.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import destroy_agent
 
             await destroy_agent("user-42")
@@ -272,10 +206,7 @@ class TestGetAgentStatus:
         mock_container.status = "running"
         docker_client.containers.get.return_value = mock_container
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import get_agent_status
 
             assert await get_agent_status("user-42") == "running"
@@ -285,10 +216,7 @@ class TestGetAgentStatus:
         docker_client = MagicMock()
         docker_client.containers.get.side_effect = Exception("Not found")
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import get_agent_status
 
             assert await get_agent_status("user-99") is None
@@ -310,10 +238,7 @@ class TestReconcileContainers:
         mock_pool = AsyncMock()
         mock_pool.fetchrow = AsyncMock(return_value=None)  # Not in DB
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import reconcile_containers
 
             await reconcile_containers(mock_pool)
@@ -340,10 +265,7 @@ class TestReconcileContainers:
         )
         mock_pool.execute = AsyncMock()
 
-        with (
-            patch("src.agent_manager.MULTI_USER_MODE", True),
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import reconcile_containers
 
             await reconcile_containers(mock_pool)

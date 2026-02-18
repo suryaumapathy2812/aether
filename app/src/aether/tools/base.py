@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ToolParam:
     """A single parameter for a tool."""
+
     name: str
     type: str  # "string", "integer", "boolean", "array", "object"
     description: str
@@ -33,6 +34,7 @@ class ToolParam:
 @dataclass
 class ToolResult:
     """The result of executing a tool."""
+
     output: str
     metadata: dict = field(default_factory=dict)
     error: bool = False
@@ -62,7 +64,11 @@ class AetherTool(ABC):
 
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:
-        """Run the tool with the given arguments. Return a ToolResult."""
+        """Run the tool with the given arguments. Return a ToolResult.
+
+        Plugin tools receive a ``context`` kwarg with runtime credentials
+        (e.g. ``context["access_token"]``).  Built-in tools can ignore it.
+        """
         ...
 
     def to_openai_schema(self) -> dict:
@@ -109,9 +115,18 @@ class AetherTool(ABC):
                 cleaned[param.name] = param.default
         return cleaned
 
-    async def safe_execute(self, **kwargs) -> ToolResult:
-        """Execute with validation and error handling."""
+    async def safe_execute(self, context: dict | None = None, **kwargs) -> ToolResult:
+        """Execute with validation and error handling.
+
+        Args:
+            context: Runtime credentials / config injected by the plugin
+                     context store (e.g. ``{"access_token": "ya29.xxx"}``).
+                     Built-in tools receive ``None`` and can ignore it.
+                     Plugin tools read ``self._context`` inside execute().
+            **kwargs: Tool arguments from the LLM function call.
+        """
         try:
+            self._context = context or {}
             cleaned = self.validate_args(kwargs)
             return await self.execute(**cleaned)
         except ValueError as e:
