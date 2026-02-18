@@ -26,7 +26,6 @@ services:
     build: ./orchestrator
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
-      - JWT_SECRET=${JWT_SECRET:-change_me_in_production}
       - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
@@ -53,7 +52,8 @@ services:
     build: ./dashboard
     environment:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-change_me_in_production}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL}
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:9000}
     ports:

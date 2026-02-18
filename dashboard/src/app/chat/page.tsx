@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { isLoggedIn, getWsUrl } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
+import { getWsUrl } from "@/lib/api";
 
 /**
  * Chat — text conversation with Aether.
@@ -16,6 +17,7 @@ const MAX_RECONNECT_DELAY = 30000; // 30 seconds
 
 export default function ChatPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,7 +112,8 @@ export default function ChatPage() {
   }, [router]);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (isPending) return;
+    if (!session) {
       router.push("/");
       return;
     }
@@ -123,7 +126,7 @@ export default function ChatPage() {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [router, connect]);
+  }, [router, connect, session, isPending]);
 
   function sendText() {
     if (!input.trim() || !wsRef.current) return;
@@ -134,6 +137,8 @@ export default function ChatPage() {
     wsRef.current.send(JSON.stringify({ type: "text", data: text }));
     setStatus("thinking...");
   }
+
+  if (isPending) return null;
 
   return (
     <div className="h-dvh flex flex-col w-full">

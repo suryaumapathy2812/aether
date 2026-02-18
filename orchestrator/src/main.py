@@ -1,7 +1,10 @@
 """
 Aether Orchestrator
 ────────────────────
-Agent registry, WebSocket proxy, device pairing, user auth.
+Agent registry, WebSocket proxy, device pairing, API key management.
+
+Auth is handled by better-auth in the dashboard (Next.js).
+The orchestrator validates sessions by reading the shared Postgres session table.
 """
 
 from __future__ import annotations
@@ -10,14 +13,21 @@ import os
 import uuid
 import asyncio
 import logging
-import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    HTTPException,
+    Request,
+    Query,
+    Depends,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
-from .auth import hash_password, verify_password, create_token, decode_token
+from .auth import get_user_id, get_user_id_from_ws
 from .agent_manager import (
     MULTI_USER_MODE,
     IDLE_TIMEOUT_MINUTES,
@@ -30,7 +40,7 @@ from .agent_manager import (
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")
 
-app = FastAPI(title="Aether Orchestrator", version="0.1.0")
+app = FastAPI(title="Aether Orchestrator", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,17 +100,6 @@ async def _idle_reaper():
 # ── Models ─────────────────────────────────────────────────
 
 
-class SignupRequest(BaseModel):
-    email: str
-    password: str
-    name: str = ""
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
 class AgentRegisterRequest(BaseModel):
     agent_id: str
     host: str
@@ -124,7 +123,7 @@ class ApiKeyBody(BaseModel):
     key_value: str
 
 
-# ── Auth ───────────────────────────────────────────────────
+# ── Agent Provisioning ─────────────────────────────────────
 
 
 async def _ensure_agent(user_id: str) -> None:
@@ -217,47 +216,14 @@ async def _ensure_agent(user_id: str) -> None:
     log.warning(f"Agent for user {user_id} didn't become ready in 15s")
 
 
-@app.post("/auth/signup")
-async def signup(body: SignupRequest):
-    pool = await get_pool()
-    user_id = uuid.uuid4().hex[:12]
-    hashed = hash_password(body.password)
-    try:
-        await pool.execute(
-            "INSERT INTO users (id, email, name, password) VALUES ($1, $2, $3, $4)",
-            user_id,
-            body.email.lower(),
-            body.name,
-            hashed,
-        )
-    except Exception:
-        raise HTTPException(400, "Email already registered")
-    token = create_token(user_id)
-    await _ensure_agent(user_id)
-    return {"user_id": user_id, "token": token}
-
-
-@app.post("/auth/login")
-async def login(body: LoginRequest):
-    pool = await get_pool()
-    row = await pool.fetchrow(
-        "SELECT id, password FROM users WHERE email = $1", body.email.lower()
-    )
-    if not row or not verify_password(body.password, row["password"]):
-        raise HTTPException(401, "Invalid credentials")
-    token = create_token(row["id"])
-    await _ensure_agent(row["id"])
-    return {"user_id": row["id"], "token": token}
+# ── Auth (user info) ───────────────────────────────────────
 
 
 @app.get("/auth/me")
-async def me(token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
+async def me(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, email, name, created_at FROM users WHERE id = $1", payload["sub"]
+        'SELECT id, email, name, created_at FROM "user" WHERE id = $1', user_id
     )
     if not row:
         raise HTTPException(404, "User not found")
@@ -341,12 +307,8 @@ async def pair_request(body: PairRequestBody):
 
 
 @app.post("/pair/confirm")
-async def pair_confirm(body: PairConfirmBody, token: str = Query(...)):
+async def pair_confirm(body: PairConfirmBody, user_id: str = Depends(get_user_id)):
     """Dashboard calls this when user enters the code."""
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
-    user_id = payload["sub"]
     pool = await get_pool()
 
     # Find the pending pair request
@@ -362,9 +324,11 @@ async def pair_confirm(body: PairConfirmBody, token: str = Query(...)):
         "UPDATE pair_requests SET claimed_by = $1 WHERE code = $2", user_id, body.code
     )
 
-    # Create device + token
+    # Create device + token (device token = session token for the device)
     device_id = uuid.uuid4().hex[:12]
-    device_token = create_token(user_id, device_id=device_id)
+    device_token = (
+        uuid.uuid4().hex
+    )  # Simple opaque token, validated against devices table
     device_name = row.get("device_name") or "Unknown Device"
     await pool.execute(
         "INSERT INTO devices (id, user_id, name, device_type, token) VALUES ($1, $2, $3, $4, $5)",
@@ -375,6 +339,10 @@ async def pair_confirm(body: PairConfirmBody, token: str = Query(...)):
         device_token,
     )
     log.info(f"Device paired: {device_id} ({device_name}) for user {user_id}")
+
+    # Ensure agent is provisioned for this user
+    await _ensure_agent(user_id)
+
     return {"device_id": device_id, "device_token": device_token}
 
 
@@ -403,14 +371,11 @@ async def pair_status(code: str):
 
 
 @app.get("/devices")
-async def list_devices(token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
+async def list_devices(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
         "SELECT id, name, device_type, paired_at, last_seen FROM devices WHERE user_id = $1 ORDER BY paired_at DESC",
-        payload["sub"],
+        user_id,
     )
     return [dict(r) for r in rows]
 
@@ -419,10 +384,7 @@ async def list_devices(token: str = Query(...)):
 
 
 @app.post("/services/keys")
-async def store_api_key(body: ApiKeyBody, token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
+async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     key_id = uuid.uuid4().hex[:12]
     await pool.execute(
@@ -432,7 +394,7 @@ async def store_api_key(body: ApiKeyBody, token: str = Query(...)):
         ON CONFLICT (user_id, provider) DO UPDATE SET key_value = $4
     """,
         key_id,
-        payload["sub"],
+        user_id,
         body.provider,
         body.key_value,
     )
@@ -440,27 +402,21 @@ async def store_api_key(body: ApiKeyBody, token: str = Query(...)):
 
 
 @app.get("/services/keys")
-async def list_api_keys(token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
+async def list_api_keys(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
         "SELECT provider, substring(key_value, 1, 8) || '...' as preview FROM api_keys WHERE user_id = $1",
-        payload["sub"],
+        user_id,
     )
     return [dict(r) for r in rows]
 
 
 @app.delete("/services/keys/{provider}")
-async def delete_api_key(provider: str, token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
+async def delete_api_key(provider: str, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     await pool.execute(
         "DELETE FROM api_keys WHERE user_id = $1 AND provider = $2",
-        payload["sub"],
+        user_id,
         provider,
     )
     return {"status": "deleted"}
@@ -496,11 +452,8 @@ async def _get_agent_for_user(user_id: str) -> dict | None:
 
 
 @app.get("/memory/facts")
-async def proxy_memory_facts(token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
-    agent = await _get_agent_for_user(payload["sub"])
+async def proxy_memory_facts(user_id: str = Depends(get_user_id)):
+    agent = await _get_agent_for_user(user_id)
     if not agent:
         raise HTTPException(404, "No agent assigned")
     import httpx
@@ -511,11 +464,8 @@ async def proxy_memory_facts(token: str = Query(...)):
 
 
 @app.get("/memory/sessions")
-async def proxy_memory_sessions(token: str = Query(...)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
-    agent = await _get_agent_for_user(payload["sub"])
+async def proxy_memory_sessions(user_id: str = Depends(get_user_id)):
+    agent = await _get_agent_for_user(user_id)
     if not agent:
         raise HTTPException(404, "No agent assigned")
     import httpx
@@ -528,11 +478,10 @@ async def proxy_memory_sessions(token: str = Query(...)):
 
 
 @app.get("/memory/conversations")
-async def proxy_memory_conversations(token: str = Query(...), limit: int = 20):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(401, "Invalid token")
-    agent = await _get_agent_for_user(payload["sub"])
+async def proxy_memory_conversations(
+    user_id: str = Depends(get_user_id), limit: int = 20
+):
+    agent = await _get_agent_for_user(user_id)
     if not agent:
         raise HTTPException(404, "No agent assigned")
     import httpx
@@ -549,18 +498,17 @@ async def proxy_memory_conversations(token: str = Query(...), limit: int = 20):
 
 
 @app.websocket("/ws")
-async def ws_proxy(ws: WebSocket, token: str = Query(...)):
+async def ws_proxy(ws: WebSocket):
     """
     Proxy WebSocket between client and the user's Aether agent.
 
-    Client connects here → orchestrator validates token → finds agent → proxies bidirectionally.
+    Client connects here → orchestrator validates session → finds agent → proxies bidirectionally.
+    Auth: session token via query param `token` or Authorization header.
     """
-    payload = decode_token(token)
-    if not payload:
-        await ws.close(code=4001, reason="Invalid token")
+    user_id = await get_user_id_from_ws(ws)
+    if not user_id:
+        await ws.close(code=4001, reason="Invalid or missing session")
         return
-
-    user_id = payload["sub"]
 
     # Ensure agent is provisioned (starts container in multi-user mode)
     await _ensure_agent(user_id)

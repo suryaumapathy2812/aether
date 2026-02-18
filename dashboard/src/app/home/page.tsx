@@ -1,26 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import MenuList from "@/components/MenuList";
-import { getMe, isLoggedIn } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
 
 /**
  * Home — navigation hub. User greeting + menu items.
  */
 export default function HomePage() {
   const router = useRouter();
-  const [name, setName] = useState("");
+  const { data: session, isPending } = useSession();
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (!isPending && !session) {
       router.push("/");
-      return;
     }
-    getMe()
-      .then((u) => setName(u.name || u.email))
-      .catch(() => router.push("/"));
-  }, [router]);
+  }, [session, isPending, router]);
+
+  if (isPending || !session) return null;
+
+  const name = session.user.name || session.user.email;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6">

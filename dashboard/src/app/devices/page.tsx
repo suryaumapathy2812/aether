@@ -4,13 +4,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
-import { listDevices, confirmPairing, isLoggedIn } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
+import { listDevices, confirmPairing } from "@/lib/api";
 
 /**
  * Devices — list paired devices + pair new ones.
  */
 export default function DevicesPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
   const [devices, setDevices] = useState<
     { id: string; name: string; device_type: string }[]
   >([]);
@@ -20,12 +22,13 @@ export default function DevicesPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (isPending) return;
+    if (!session) {
       router.push("/");
       return;
     }
     listDevices().then(setDevices).catch(() => {});
-  }, [router]);
+  }, [session, isPending, router]);
 
   async function handlePair() {
     setStatus("");
@@ -42,6 +45,8 @@ export default function DevicesPage() {
       setLoading(false);
     }
   }
+
+  if (isPending || !session) return null;
 
   // Empty state + pairing flow use centered layout
   const showCentered = devices.length === 0 && !pairing;
@@ -92,7 +97,7 @@ export default function DevicesPage() {
           </button>
         </div>
       ) : (
-        <div className="w-full max-w-sm">
+        <div className="w-full max-sm">
           {devices.map((d) => (
             <div
               key={d.id}

@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
+import { useSession } from "@/lib/auth-client";
 import {
-  isLoggedIn,
   getMemoryFacts,
   getMemorySessions,
   getMemoryConversations,
@@ -16,6 +16,7 @@ import {
  */
 export default function MemoryPage() {
   const router = useRouter();
+  const { data: session, isPending: sessionPending } = useSession();
   const [facts, setFacts] = useState<string[]>([]);
   const [sessions, setSessions] = useState<
     { summary: string; ended_at: number; turns: number }[]
@@ -27,7 +28,8 @@ export default function MemoryPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (sessionPending) return;
+    if (!session) {
       router.push("/");
       return;
     }
@@ -50,7 +52,9 @@ export default function MemoryPage() {
     }
 
     load();
-  }, [router]);
+  }, [session, sessionPending, router]);
+
+  if (sessionPending || !session) return null;
 
   const isEmpty =
     facts.length === 0 && sessions.length === 0 && conversations.length === 0;

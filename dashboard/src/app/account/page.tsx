@@ -4,34 +4,35 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
-import { getMe, logout, isLoggedIn } from "@/lib/api";
+import { useSession, signOut } from "@/lib/auth-client";
 
 /**
  * Account — profile info, edit, log out.
  */
 export default function AccountPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [view, setView] = useState<"menu" | "edit">("menu");
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (!isPending && !session) {
       router.push("/");
       return;
     }
-    getMe()
-      .then((u) => {
-        setName(u.name || "");
-        setEmail(u.email);
-      })
-      .catch(() => router.push("/"));
-  }, [router]);
+    if (session) {
+      setName(session.user.name || "");
+      setEmail(session.user.email);
+    }
+  }, [session, isPending, router]);
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await signOut();
     router.push("/");
   }
+
+  if (isPending || !session) return null;
 
   if (view === "edit") {
     return (

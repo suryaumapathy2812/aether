@@ -7,43 +7,81 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ── Auth (better-auth managed) ──
+// ── Better Auth core tables ──
 
 model user {
-  id        String   @id
-  email     String   @unique
-  name      String?
-  password  String
-  createdAt DateTime @default(now()) @map("created_at")
+  id            String    @id
+  email         String    @unique
+  name          String?
+  emailVerified Boolean   @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
+  sessions session[]
+  accounts account[]
   devices  device[]
   agent    agent?
   apiKeys  apiKey[]
-  sessions session[]
 
-  @@map("users")
+  @@map("user")
 }
 
 model session {
-  id        String   @id @default(cuid())
+  id        String   @id
   userId    String   @map("user_id")
   token     String   @unique
   expiresAt DateTime @map("expires_at")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   user user @relation(fields: [userId], references: [id])
 
-  @@map("sessions")
+  @@map("session")
 }
 
-// ── Devices ──
+model account {
+  id                    String    @id
+  userId                String    @map("user_id")
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  idToken               String?   @map("id_token")
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user user @relation(fields: [userId], references: [id])
+
+  @@map("account")
+}
+
+model verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("verification")
+}
+
+// ── Aether domain tables ──
 
 model device {
-  id         String   @id
-  userId     String   @map("user_id")
-  name       String   @default("Unknown Device")
-  deviceType String   @default("ios") @map("device_type")
-  token      String   @unique
-  pairedAt   DateTime @default(now()) @map("paired_at")
+  id         String    @id
+  userId     String    @map("user_id")
+  name       String    @default("Unknown Device")
+  deviceType String    @default("ios") @map("device_type")
+  token      String    @unique
+  pairedAt   DateTime  @default(now()) @map("paired_at")
   lastSeen   DateTime? @map("last_seen")
 
   user user @relation(fields: [userId], references: [id])
@@ -51,30 +89,28 @@ model device {
   @@map("devices")
 }
 
-// ── Agents ──
-
 model agent {
-  id           String   @id
-  userId       String?  @unique @map("user_id")
-  containerId  String?  @map("container_id")
-  host         String
-  port         Int
-  status       String   @default("running")
-  registeredAt DateTime @default(now()) @map("registered_at")
-  lastHealth   DateTime? @map("last_health")
+  id             String    @id
+  userId         String?   @unique @map("user_id")
+  containerId    String?   @map("container_id")
+  containerName  String?   @map("container_name")
+  host           String
+  port           Int
+  status         String    @default("starting")
+  registeredAt   DateTime  @default(now()) @map("registered_at")
+  lastHealth     DateTime? @map("last_health")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
   user user? @relation(fields: [userId], references: [id])
 
   @@map("agents")
 }
 
-// ── API Keys (per-user provider keys) ──
-
 model apiKey {
-  id       String @id
-  userId   String @map("user_id")
-  provider String
-  keyValue String @map("key_value")
+  id        String   @id
+  userId    String   @map("user_id")
+  provider  String
+  keyValue  String   @map("key_value")
   createdAt DateTime @default(now()) @map("created_at")
 
   user user @relation(fields: [userId], references: [id])
@@ -83,11 +119,10 @@ model apiKey {
   @@map("api_keys")
 }
 
-// ── Pairing ──
-
 model pairRequest {
   code       String   @id
   deviceType String   @default("ios") @map("device_type")
+  deviceName String   @default("Unknown Device") @map("device_name")
   createdAt  DateTime @default(now()) @map("created_at")
   expiresAt  DateTime @default(dbgenerated("now() + interval '10 minutes'")) @map("expires_at")
   claimedBy  String?  @map("claimed_by")

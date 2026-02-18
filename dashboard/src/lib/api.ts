@@ -1,23 +1,46 @@
 /**
  * Orchestrator API client.
- * All dashboard ↔ orchestrator communication goes through here.
+ *
+ * Auth is handled by better-auth (cookie-based sessions via /api/auth/*).
+ * The session token is obtained from better-auth's useSession()/getSession()
+ * and passed to the orchestrator as an Authorization: Bearer header.
+ *
+ * Why not cookies? Dashboard (localhost:3000) and orchestrator (localhost:9000)
+ * are different origins — cross-origin cookies don't work without SameSite=None + Secure.
+ * Instead, we read the session token from better-auth's client-side session data
+ * and send it explicitly.
  */
 
 const ORCHESTRATOR_URL =
   process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:9000";
 
-function tokenParam(): string {
-  if (typeof window === "undefined") return "";
-  const token = localStorage.getItem("aether_token");
-  return token ? `?token=${token}` : "";
+// ── Session token management ──
+// Set by components that have access to useSession() data.
+// All API calls read from here.
+
+let _sessionToken: string | null = null;
+
+export function setSessionToken(token: string | null) {
+  _sessionToken = token;
 }
 
-async function api<T>(
-  path: string,
-  options?: RequestInit
-): Promise<T> {
+export function getSessionToken(): string | null {
+  return _sessionToken;
+}
+
+async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = _sessionToken;
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
+
   const res = await fetch(`${ORCHESTRATOR_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
   if (!res.ok) {
@@ -27,79 +50,36 @@ async function api<T>(
   return res.json();
 }
 
-// ── Auth ──
-
-export async function signup(email: string, password: string, name: string) {
-  const data = await api<{ user_id: string; token: string }>("/auth/signup", {
-    method: "POST",
-    body: JSON.stringify({ email, password, name }),
-  });
-  localStorage.setItem("aether_token", data.token);
-  localStorage.setItem("aether_user_id", data.user_id);
-  return data;
-}
-
-export async function login(email: string, password: string) {
-  const data = await api<{ user_id: string; token: string }>("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-  localStorage.setItem("aether_token", data.token);
-  localStorage.setItem("aether_user_id", data.user_id);
-  return data;
-}
-
-export async function getMe() {
-  return api<{ id: string; email: string; name: string }>(
-    `/auth/me${tokenParam()}`
-  );
-}
-
-export function logout() {
-  localStorage.removeItem("aether_token");
-  localStorage.removeItem("aether_user_id");
-}
-
-export function isLoggedIn(): boolean {
-  if (typeof window === "undefined") return false;
-  return !!localStorage.getItem("aether_token");
-}
-
 // ── Devices ──
 
 export async function listDevices() {
   return api<
     { id: string; name: string; device_type: string; paired_at: string }[]
-  >(`/devices${tokenParam()}`);
+  >("/devices");
 }
 
 export async function confirmPairing(code: string) {
-  return api<{ device_id: string; device_token: string }>(
-    `/pair/confirm${tokenParam()}`,
-    {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    }
-  );
+  return api<{ device_id: string; device_token: string }>("/pair/confirm", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
 }
 
 // ── Services (API keys) ──
 
 export async function listApiKeys() {
-  return api<{ provider: string; preview: string }[]>(
-    `/services/keys${tokenParam()}`
-  );
+  return api<{ provider: string; preview: string }[]>("/services/keys");
 }
 
 export async function saveApiKey(provider: string, keyValue: string) {
-  return api(`/services/keys${tokenParam()}`, {
+  return api("/services/keys", {
     method: "POST",
     body: JSON.stringify({ provider, key_value: keyValue }),
   });
 }
 
 export async function deleteApiKey(provider: string) {
-  return api(`/services/keys/${provider}${tokenParam()}`, {
+  return api(`/services/keys/${provider}`, {
     method: "DELETE",
   });
 }
@@ -107,7 +87,7 @@ export async function deleteApiKey(provider: string) {
 // ── Memory ──
 
 export async function getMemoryFacts() {
-  return api<{ facts: string[] }>(`/memory/facts${tokenParam()}`);
+  return api<{ facts: string[] }>("/memory/facts");
 }
 
 export async function getMemorySessions() {
@@ -120,7 +100,7 @@ export async function getMemorySessions() {
       turns: number;
       tools_used: string[];
     }[];
-  }>(`/memory/sessions${tokenParam()}`);
+  }>("/memory/sessions");
 }
 
 export async function getMemoryConversations(limit = 20) {
@@ -131,13 +111,13 @@ export async function getMemoryConversations(limit = 20) {
       assistant_message: string;
       timestamp: number;
     }[];
-  }>(`/memory/conversations${tokenParam()}&limit=${limit}`);
+  }>(`/memory/conversations?limit=${limit}`);
 }
 
 // ── WebSocket URL ──
 
 export function getWsUrl(): string {
-  const token = localStorage.getItem("aether_token") || "";
+  const token = _sessionToken || "";
   const base = ORCHESTRATOR_URL.replace("http", "ws");
   return `${base}/ws?token=${token}`;
 }

@@ -29,21 +29,69 @@ async def close_pool():
 
 
 async def bootstrap_schema():
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist.
+
+    Schema is shared with the dashboard (better-auth manages user/session/account/verification).
+    The orchestrator creates the tables it owns and ensures better-auth core tables exist.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id          TEXT PRIMARY KEY,
-                email       TEXT UNIQUE NOT NULL,
-                name        TEXT,
-                password    TEXT NOT NULL,
-                created_at  TIMESTAMPTZ DEFAULT now()
+            -- ── Better Auth core tables ──
+            -- These are also managed by Prisma in the dashboard,
+            -- but we create them here so the orchestrator can start independently.
+
+            CREATE TABLE IF NOT EXISTS "user" (
+                id              TEXT PRIMARY KEY,
+                email           TEXT UNIQUE NOT NULL,
+                name            TEXT,
+                email_verified  BOOLEAN DEFAULT false,
+                image           TEXT,
+                created_at      TIMESTAMPTZ DEFAULT now(),
+                updated_at      TIMESTAMPTZ DEFAULT now()
             );
+
+            CREATE TABLE IF NOT EXISTS session (
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL REFERENCES "user"(id),
+                token           TEXT UNIQUE NOT NULL,
+                expires_at      TIMESTAMPTZ NOT NULL,
+                ip_address      TEXT,
+                user_agent      TEXT,
+                created_at      TIMESTAMPTZ DEFAULT now(),
+                updated_at      TIMESTAMPTZ DEFAULT now()
+            );
+
+            CREATE TABLE IF NOT EXISTS account (
+                id                          TEXT PRIMARY KEY,
+                user_id                     TEXT NOT NULL REFERENCES "user"(id),
+                account_id                  TEXT NOT NULL,
+                provider_id                 TEXT NOT NULL,
+                access_token                TEXT,
+                refresh_token               TEXT,
+                access_token_expires_at     TIMESTAMPTZ,
+                refresh_token_expires_at    TIMESTAMPTZ,
+                scope                       TEXT,
+                id_token                    TEXT,
+                password                    TEXT,
+                created_at                  TIMESTAMPTZ DEFAULT now(),
+                updated_at                  TIMESTAMPTZ DEFAULT now()
+            );
+
+            CREATE TABLE IF NOT EXISTS verification (
+                id              TEXT PRIMARY KEY,
+                identifier      TEXT NOT NULL,
+                value           TEXT NOT NULL,
+                expires_at      TIMESTAMPTZ NOT NULL,
+                created_at      TIMESTAMPTZ DEFAULT now(),
+                updated_at      TIMESTAMPTZ DEFAULT now()
+            );
+
+            -- ── Aether domain tables ──
 
             CREATE TABLE IF NOT EXISTS devices (
                 id          TEXT PRIMARY KEY,
-                user_id     TEXT NOT NULL REFERENCES users(id),
+                user_id     TEXT NOT NULL REFERENCES "user"(id),
                 name        TEXT DEFAULT 'Unknown Device',
                 device_type TEXT DEFAULT 'ios',
                 token       TEXT UNIQUE NOT NULL,
@@ -53,7 +101,7 @@ async def bootstrap_schema():
 
             CREATE TABLE IF NOT EXISTS agents (
                 id              TEXT PRIMARY KEY,
-                user_id         TEXT UNIQUE REFERENCES users(id),
+                user_id         TEXT UNIQUE REFERENCES "user"(id),
                 container_id    TEXT,
                 container_name  TEXT,
                 host            TEXT NOT NULL,
@@ -70,12 +118,12 @@ async def bootstrap_schema():
                 device_name TEXT DEFAULT 'Unknown Device',
                 created_at  TIMESTAMPTZ DEFAULT now(),
                 expires_at  TIMESTAMPTZ DEFAULT now() + interval '10 minutes',
-                claimed_by  TEXT REFERENCES users(id)
+                claimed_by  TEXT REFERENCES "user"(id)
             );
 
             CREATE TABLE IF NOT EXISTS api_keys (
                 id          TEXT PRIMARY KEY,
-                user_id     TEXT NOT NULL REFERENCES users(id),
+                user_id     TEXT NOT NULL REFERENCES "user"(id),
                 provider    TEXT NOT NULL,
                 key_value   TEXT NOT NULL,
                 created_at  TIMESTAMPTZ DEFAULT now(),

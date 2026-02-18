@@ -1,15 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import MinimalInput from "@/components/MinimalInput";
-import { login, signup } from "@/lib/api";
+import { signIn, signUp, useSession } from "@/lib/auth-client";
 
 /**
  * Login / Sign Up — centered form, dark bg, minimal.
+ * Uses better-auth for cookie-based session management.
  */
 export default function LoginPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,15 +19,31 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // If already logged in, redirect to home
+  useEffect(() => {
+    if (!isPending && session) {
+      router.push("/home");
+    }
+  }, [session, isPending, router]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
       if (mode === "signup") {
-        await signup(email, password, name);
+        const { error } = await signUp.email({
+          email,
+          password,
+          name: name || email.split("@")[0],
+        });
+        if (error) throw new Error(error.message || "Signup failed");
       } else {
-        await login(email, password);
+        const { error } = await signIn.email({
+          email,
+          password,
+        });
+        if (error) throw new Error(error.message || "Login failed");
       }
       router.push("/home");
     } catch (err: unknown) {
@@ -34,6 +52,9 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
+
+  // Don't show form while checking session
+  if (isPending) return null;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6">

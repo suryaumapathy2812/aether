@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
-import { listApiKeys, saveApiKey, deleteApiKey, isLoggedIn } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
+import { listApiKeys, saveApiKey, deleteApiKey } from "@/lib/api";
 
 const PROVIDERS = [
   { id: "openai", label: "OpenAI" },
@@ -19,13 +20,15 @@ const PROVIDERS = [
  */
 export default function ServicesPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (isPending) return;
+    if (!session) {
       router.push("/");
       return;
     }
@@ -36,7 +39,7 @@ export default function ServicesPage() {
         setKeys(map);
       })
       .catch(() => {});
-  }, [router]);
+  }, [session, isPending, router]);
 
   async function handleSave(provider: string) {
     setSaving(true);
@@ -56,6 +59,8 @@ export default function ServicesPage() {
     delete keys[provider];
     setKeys({ ...keys });
   }
+
+  if (isPending || !session) return null;
 
   return (
     <PageShell title="Services" back="/home">
