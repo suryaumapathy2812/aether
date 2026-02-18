@@ -1,0 +1,15 @@
+name: google-calendar
+display_name: Google Calendar
+description: View and create calendar events
+version: 0.1.0
+
+auth:
+  type: oauth2
+  provider: google
+  token_source: gmail
+
+tools:
+  - class: UpcomingEventsTool
+  - class: SearchEventsTool
+  - class: CreateEventTool
+  - class: GetEventTool

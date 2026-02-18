@@ -152,15 +152,22 @@ function PluginsContent() {
                   >
                     {actionInProgress === plugin.name ? "..." : "install"}
                   </button>
-                ) : /* Installed but needs OAuth connection */
-                plugin.auth_type === "oauth2" && !plugin.connected ? (
+                ) : /* Installed, OAuth needed, not connected, and no token_source shortcut */
+                plugin.auth_type === "oauth2" &&
+                  !plugin.connected &&
+                  !plugin.token_source ? (
                   <button
                     onClick={() => handleConnect(plugin.name)}
                     className="btn"
                   >
                     connect with {plugin.auth_provider}
                   </button>
-                ) : /* Connected but disabled */
+                ) : /* Has token_source but source not connected yet */
+                plugin.token_source && !plugin.connected ? (
+                  <span className="text-[var(--color-text-muted)] tracking-wider">
+                    connect {plugin.token_source} first
+                  </span>
+                ) : /* Connected/ready but disabled */
                 !plugin.enabled ? (
                   <button
                     onClick={() => handleEnable(plugin.name)}
@@ -173,7 +180,7 @@ function PluginsContent() {
                   /* Enabled and connected */
                   <div className="flex items-center gap-2">
                     <span className="text-[var(--color-text-muted)] tracking-wider">
-                      connected
+                      {plugin.auth_type === "none" ? "active" : "connected"}
                     </span>
                     <button
                       onClick={() => handleDisable(plugin.name)}

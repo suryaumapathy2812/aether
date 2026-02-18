@@ -1,0 +1,11 @@
+name: weather
+display_name: Weather
+description: Current weather and forecasts for any location
+version: 0.1.0
+
+auth:
+  type: none
+
+tools:
+  - class: CurrentWeatherTool
+  - class: ForecastTool

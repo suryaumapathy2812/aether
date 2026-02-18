@@ -1,0 +1,13 @@
+name: google-contacts
+display_name: Google Contacts
+description: Search and look up your contacts
+version: 0.1.0
+
+auth:
+  type: oauth2
+  provider: google
+  token_source: gmail
+
+tools:
+  - class: SearchContactsTool
+  - class: GetContactTool
