@@ -46,6 +46,11 @@ class DeepgramSTTProvider(STTProvider):
         self._audio_chunks_sent = 0
         self._last_send_at: float = 0.0
 
+    @property
+    def is_open(self) -> bool:
+        """True only when the live websocket is currently writable."""
+        return self._connected and self._socket is not None and not self._reconnecting
+
     async def start(self) -> None:
         if self.client:
             return

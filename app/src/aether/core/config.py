@@ -54,6 +54,8 @@ class LLMConfig:
     provider: str = "openai"
     api_key: str = ""
     model: str = "gpt-4o"
+    # Separate model for voice — gpt-4o-mini is ~1s faster TTFT, good for voice
+    voice_model: str = "gpt-4o-mini"
     max_tokens: int = 500
     temperature: float = 0.7
     max_history_turns: int = 20
@@ -64,6 +66,7 @@ class LLMConfig:
             provider=os.getenv("AETHER_LLM_PROVIDER", "openai"),
             api_key=os.getenv("OPENAI_API_KEY", ""),
             model=os.getenv("AETHER_LLM_MODEL", "gpt-4o"),
+            voice_model=os.getenv("AETHER_LLM_VOICE_MODEL", "gpt-4o-mini"),
             max_tokens=int(os.getenv("AETHER_LLM_MAX_TOKENS", "500")),
             temperature=float(os.getenv("AETHER_LLM_TEMPERATURE", "0.7")),
             max_history_turns=int(os.getenv("AETHER_LLM_MAX_HISTORY_TURNS", "20")),
@@ -169,7 +172,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     ws_send_timeout: float = 5.0
-    debounce_delay: float = 1.5
+    debounce_delay: float = 0.3
     working_dir: str = "/"  # Docker default: full access. Container is the sandbox.
 
     @classmethod
@@ -178,7 +181,7 @@ class ServerConfig:
             host=os.getenv("AETHER_HOST", "0.0.0.0"),
             port=int(os.getenv("AETHER_PORT", "8000")),
             ws_send_timeout=float(os.getenv("AETHER_WS_SEND_TIMEOUT", "5.0")),
-            debounce_delay=float(os.getenv("AETHER_DEBOUNCE_DELAY", "1.5")),
+            debounce_delay=float(os.getenv("AETHER_DEBOUNCE_DELAY", "0.3")),
             working_dir=os.getenv("AETHER_WORKING_DIR", "/"),
         )
 
@@ -219,6 +222,9 @@ class VADConfig:
     deactivation_threshold: float = 0.35
     min_speech_duration: float = 0.05
     min_silence_duration: float = 0.55
+    # STT gating — connect STT only when speech detected
+    stt_pre_roll_ms: int = 500  # ring buffer size (ms of audio to keep)
+    stt_idle_disconnect_s: float = 5.0  # seconds of silence before disconnecting STT
 
     @classmethod
     def from_env(cls) -> "VADConfig":
@@ -238,6 +244,46 @@ class VADConfig:
             min_silence_duration=float(
                 os.getenv("AETHER_VAD_MIN_SILENCE_DURATION", "0.55")
             ),
+            stt_pre_roll_ms=int(os.getenv("AETHER_STT_PRE_ROLL_MS", "500")),
+            stt_idle_disconnect_s=float(
+                os.getenv("AETHER_STT_IDLE_DISCONNECT_S", "5.0")
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class WebRTCConfig:
+    """WebRTC transport settings."""
+
+    session_ttl_seconds: int = 600  # 10 min idle before session cleanup
+    disconnect_grace_seconds: int = 10  # grace period before pausing on disconnect
+
+    @classmethod
+    def from_env(cls) -> "WebRTCConfig":
+        return cls(
+            session_ttl_seconds=int(os.getenv("AETHER_WEBRTC_SESSION_TTL", "600")),
+            disconnect_grace_seconds=int(
+                os.getenv("AETHER_WEBRTC_DISCONNECT_GRACE", "10")
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TelephonyConfig:
+    """Telephony transport settings."""
+
+    enabled: bool = False
+    provider: str = "twilio"  # twilio | telnyx | vobiz
+    sample_rate: int = 8000
+    encoding: str = "mulaw"
+
+    @classmethod
+    def from_env(cls) -> "TelephonyConfig":
+        return cls(
+            enabled=os.getenv("AETHER_TELEPHONY_ENABLED", "false").lower() == "true",
+            provider=os.getenv("AETHER_TELEPHONY_PROVIDER", "twilio"),
+            sample_rate=int(os.getenv("AETHER_TELEPHONY_SAMPLE_RATE", "8000")),
+            encoding=os.getenv("AETHER_TELEPHONY_ENCODING", "mulaw"),
         )
 
 
@@ -253,7 +299,7 @@ class TurnDetectionConfig:
     model_revision: str = "v1.2.2-en"
     model_filename: str = "model.onnx"
     model_dir: str = "/models/turn-detector"
-    min_endpointing_delay: float = 0.5
+    min_endpointing_delay: float = 0.3
     max_endpointing_delay: float = 3.0
     inference_timeout_seconds: float = 0.35
 
@@ -270,7 +316,7 @@ class TurnDetectionConfig:
             model_filename=os.getenv("AETHER_TURN_MODEL_FILENAME", default_filename),
             model_dir=os.getenv("AETHER_TURN_MODEL_DIR", "/models/turn-detector"),
             min_endpointing_delay=float(
-                os.getenv("AETHER_TURN_MIN_ENDPOINTING_DELAY", "0.5")
+                os.getenv("AETHER_TURN_MIN_ENDPOINTING_DELAY", "0.3")
             ),
             max_endpointing_delay=float(
                 os.getenv("AETHER_TURN_MAX_ENDPOINTING_DELAY", "3.0")
@@ -293,6 +339,8 @@ class AetherConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     kernel: KernelConfig = field(default_factory=KernelConfig)
     vad: VADConfig = field(default_factory=VADConfig)
+    webrtc: WebRTCConfig = field(default_factory=WebRTCConfig)
+    telephony: TelephonyConfig = field(default_factory=TelephonyConfig)
     turn_detection: TurnDetectionConfig = field(default_factory=TurnDetectionConfig)
 
     @classmethod
@@ -306,6 +354,8 @@ class AetherConfig:
             server=ServerConfig.from_env(),
             kernel=KernelConfig.from_env(),
             vad=VADConfig.from_env(),
+            webrtc=WebRTCConfig.from_env(),
+            telephony=TelephonyConfig.from_env(),
             turn_detection=TurnDetectionConfig.from_env(),
         )
 

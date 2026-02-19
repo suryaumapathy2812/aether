@@ -38,6 +38,7 @@ import logging
 import re
 import time
 import unicodedata
+from collections import deque
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from aether.core.config import config
@@ -51,6 +52,12 @@ if TYPE_CHECKING:
     from aether.providers.base import TTSProvider
 
 logger = logging.getLogger(__name__)
+
+_STATE_IDLE_VAD_ONLY = "idle_vad_only"
+_STATE_STT_CONNECTING = "stt_connecting"
+_STATE_STT_STREAMING = "stt_streaming"
+_STATE_THINKING = "thinking"
+_STATE_TTS_PLAYING = "tts_playing"
 
 
 class VoiceSession:
@@ -77,6 +84,7 @@ class VoiceSession:
         self.is_streaming = False
         self.is_responding = False
         self.is_muted = False
+        self._state = _STATE_IDLE_VAD_ONLY
 
         # ── Echo suppression ──────────────────────────────────────
         self._tts_playing = False
@@ -105,6 +113,17 @@ class VoiceSession:
         self._audio_in_count = 0
         self._audio_in_dropped = 0
 
+        # ── VAD-gated STT ────────────────────────────────────────────
+        # STT connects only when speech is detected; ring buffer keeps
+        # pre-speech audio so nothing is missed.
+        self._stt_connected: bool = False
+        _pre_roll_chunks = max(1, config.vad.stt_pre_roll_ms // 20)  # 20ms per chunk
+        self._audio_ring_buffer: deque[bytes] = deque(maxlen=_pre_roll_chunks)
+        self._stt_idle_disconnect_task: asyncio.Task | None = None
+
+        # ── Notification queue ───────────────────────────────────────
+        self._pending_notifications: list[str] = []
+
         # ── Background tasks ──────────────────────────────────────
         self._stt_event_task: asyncio.Task | None = None
         self._response_task: asyncio.Task | None = None
@@ -120,10 +139,19 @@ class VoiceSession:
     # ─── Lifecycle ───────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Connect STT, start event loop, play greeting."""
+        """Initialize STT (but don't connect — VAD will trigger that), start event loop, play greeting."""
+        logger.info(
+            "[pipeline] %s start() — initializing STT (VAD-gated)", self.session_id
+        )
         await self.stt.start()
-        await self.stt.connect_stream()
+        # STT stream is NOT connected here — VAD speech_started will connect it.
+        # This saves Deepgram costs during silence periods.
+        self._stt_connected = False
         self.is_streaming = True
+        self._set_state(_STATE_IDLE_VAD_ONLY, "session_start")
+        logger.info(
+            "[pipeline] %s STT initialized, starting event loop", self.session_id
+        )
 
         self._stt_event_task = asyncio.create_task(
             self._stt_event_loop(), name=f"stt-events-{self.session_id}"
@@ -131,33 +159,121 @@ class VoiceSession:
 
         greeting = await self.agent.generate_greeting()
         if greeting:
+            logger.info("[pipeline] %s greeting: %r", self.session_id, greeting[:60])
             await self._send_text_event("transcript", greeting, role="assistant")
             await self._synthesize_and_send(greeting)
             await self._send_text_event("stream_end", "")
 
         await self._send_text_event("status", "listening...")
-        logger.info("VoiceSession %s started", self.session_id)
+        logger.info("[pipeline] %s started — ready for audio", self.session_id)
 
     async def stop(self) -> None:
-        """Disconnect and clean up all tasks."""
+        """Fully stop and clean up. Called on permanent session end."""
         self.is_streaming = False
+        self._set_state(_STATE_IDLE_VAD_ONLY, "session_stop")
 
-        for task in (self._eou_task, self._stt_event_task, self._response_task):
+        for task in (
+            self._eou_task,
+            self._stt_event_task,
+            self._response_task,
+            self._stt_idle_disconnect_task,
+        ):
             if task and not task.done():
                 task.cancel()
 
-        await self.stt.disconnect_stream()
+        if self._stt_connected:
+            await self.stt.disconnect_stream()
+            self._stt_connected = False
         await self.stt.stop()
         await self.agent.cancel_session(self.session_id)
 
         logger.info("VoiceSession %s stopped", self.session_id)
 
+    async def pause(self) -> None:
+        """Pause on WebRTC disconnect — keep session state for fast reconnect.
+
+        Stops audio/STT but preserves dialog history, transcript buffer,
+        and agent session so the user can reconnect without losing context.
+        """
+        self.is_streaming = False
+
+        # Cancel in-flight tasks but don't destroy session state
+        for task in (
+            self._eou_task,
+            self._stt_event_task,
+            self._response_task,
+            self._stt_idle_disconnect_task,
+        ):
+            if task and not task.done():
+                task.cancel()
+        self._eou_task = None
+        self._stt_event_task = None
+        self._stt_idle_disconnect_task = None
+
+        # Disconnect STT stream if connected
+        if self._stt_connected:
+            try:
+                await self.stt.disconnect_stream()
+            except Exception:
+                pass
+            self._stt_connected = False
+
+        # Clear audio callbacks — they point to the old peer connection
+        self.on_audio_out = None
+        self.on_barge_in = None
+        self.on_text_event = None
+        self.on_tts_duration = None
+
+        # Reset speaking/responding state but keep _transcript and _dialog_history
+        self._speaking = False
+        self._tts_playing = False
+        self._tts_cooldown_until = 0.0
+        self._assistant_speaking_until = 0.0
+        self.is_responding = False
+        self._set_state(_STATE_IDLE_VAD_ONLY, "session_pause")
+
+        logger.info("VoiceSession %s paused (reconnectable)", self.session_id)
+
+    async def resume(self) -> None:
+        """Resume after WebRTC reconnect — reuse existing session state.
+
+        Does NOT reconnect STT immediately — waits for VAD speech_started.
+        Callbacks must be re-wired by the transport before calling resume().
+        """
+        # STT stays disconnected until VAD detects speech (VAD-gated)
+        self._stt_connected = False
+        self.is_streaming = True
+        self._set_state(_STATE_IDLE_VAD_ONLY, "session_resume")
+
+        # Generate greeting if appropriate (time-aware)
+        greeting = await self.agent.generate_greeting()
+        if greeting:
+            logger.info(
+                "[pipeline] %s resume greeting: %r", self.session_id, greeting[:60]
+            )
+            await self._send_text_event("transcript", greeting, role="assistant")
+            await self._synthesize_and_send(greeting)
+            await self._send_text_event("stream_end", "")
+
+        await self._send_text_event("status", "listening...")
+        logger.info(
+            "VoiceSession %s resumed (STT will connect on speech)", self.session_id
+        )
+
     # ─── Audio Input ─────────────────────────────────────────────
 
     async def on_audio_in(self, pcm_bytes: bytes) -> None:
-        """Raw PCM from WebRTC → STT. Drops audio during TTS playback."""
+        """Raw PCM from WebRTC → ring buffer → STT (when connected).
+
+        Always appends to ring buffer (for pre-speech capture).
+        Only forwards to STT when _stt_connected is True.
+        Drops audio during TTS playback (echo suppression).
+        """
         if not self.is_streaming or self.is_muted:
             return
+
+        # Always buffer for pre-roll (VAD needs history when speech starts)
+        self._audio_ring_buffer.append(pcm_bytes)
 
         if self._tts_playing or time.time() < self._tts_cooldown_until:
             self._audio_in_dropped += 1
@@ -168,8 +284,10 @@ class VoiceSession:
                     self._tts_playing,
                     max(0.0, self._tts_cooldown_until - time.time()),
                 )
-            # Send silence to keep Deepgram websocket alive
-            await self.stt.send_audio(b"\x00" * len(pcm_bytes))
+            return
+
+        # Only forward to STT when the stream is explicitly active and writable.
+        if not self._can_stream_stt_audio():
             return
 
         self._audio_in_count += 1
@@ -197,7 +315,18 @@ class VoiceSession:
             self._speaking = True
             # Cancel any pending EOU — user is still talking
             self._cancel_eou()
+            # Cancel pending STT disconnect — user is speaking again
+            if (
+                self._stt_idle_disconnect_task
+                and not self._stt_idle_disconnect_task.done()
+            ):
+                self._stt_idle_disconnect_task.cancel()
+                self._stt_idle_disconnect_task = None
             logger.debug("VAD speech_started (p=%.3f)", probability)
+
+            # VAD-gated STT: connect on first speech detection
+            if not self._stt_connected:
+                await self._connect_stt_with_preroll()
 
             if mode == "active":
                 await self._handle_barge_in("vad", probability=probability)
@@ -213,6 +342,59 @@ class VoiceSession:
 
         elif mode == "shadow":
             logger.debug("VAD %s (p=%.3f)", action, probability)
+
+    # ─── VAD-Gated STT Connect/Disconnect ──────────────────────────
+
+    async def _connect_stt_with_preroll(self) -> None:
+        """Connect STT and flush the ring buffer (pre-speech audio)."""
+        try:
+            self._set_state(_STATE_STT_CONNECTING, "vad_speech_started")
+            logger.info("[pipeline] Connecting STT (VAD triggered)")
+            await self.stt.connect_stream()
+            self._stt_connected = True
+            self._set_state(_STATE_STT_STREAMING, "stt_connected")
+
+            # Restart event loop if it was stopped
+            if self._stt_event_task is None or self._stt_event_task.done():
+                self._stt_event_task = asyncio.create_task(
+                    self._stt_event_loop(), name=f"stt-events-{self.session_id}"
+                )
+
+            # Flush ring buffer — send buffered pre-speech audio
+            buffered = list(self._audio_ring_buffer)
+            if buffered:
+                logger.info(
+                    "[pipeline] Flushing %d pre-roll chunks to STT", len(buffered)
+                )
+                for chunk in buffered:
+                    if self.stt.is_open:
+                        await self.stt.send_audio(chunk)
+        except Exception as e:
+            logger.error("Failed to connect STT: %s", e, exc_info=True)
+            self._stt_connected = False
+            self._set_state(_STATE_IDLE_VAD_ONLY, "stt_connect_failed")
+
+    def _schedule_stt_disconnect(self) -> None:
+        """Schedule STT disconnect after idle timeout."""
+        if self._stt_idle_disconnect_task and not self._stt_idle_disconnect_task.done():
+            self._stt_idle_disconnect_task.cancel()
+        self._stt_idle_disconnect_task = asyncio.create_task(
+            self._disconnect_stt_idle(),
+            name=f"stt-idle-disconnect-{self.session_id}",
+        )
+
+    async def _disconnect_stt_idle(self) -> None:
+        """Disconnect STT after configurable silence period."""
+        try:
+            delay = config.vad.stt_idle_disconnect_s
+            await asyncio.sleep(delay)
+            if self._stt_connected and not self._speaking and not self.is_responding:
+                logger.info("[pipeline] Disconnecting STT after %.1fs idle", delay)
+                await self.stt.disconnect_stream()
+                self._stt_connected = False
+                self._set_state(_STATE_IDLE_VAD_ONLY, "stt_idle_disconnect")
+        except asyncio.CancelledError:
+            pass  # Speech started again, cancelled by on_vad_event
 
     # ─── STT Event Loop ──────────────────────────────────────────
 
@@ -255,7 +437,9 @@ class VoiceSession:
                             else final
                         )
                         logger.info(
-                            "STT final: %r (speaking=%s)", final[:80], self._speaking
+                            "[pipeline] STT final received: %r (speaking=%s)",
+                            final[:80],
+                            self._speaking,
                         )
 
                         if not self._speaking and not self.is_responding:
@@ -391,7 +575,9 @@ class VoiceSession:
             if not transcript:
                 return
 
-            logger.info("EOU committed: %r", transcript[:80])
+            logger.info(
+                "[pipeline] EOU committed — triggering LLM: %r", transcript[:80]
+            )
             self._response_task = asyncio.create_task(
                 self._trigger_response(transcript),
                 name=f"voice-response-{self.session_id}",
@@ -403,28 +589,30 @@ class VoiceSession:
     # ─── Voice Response ──────────────────────────────────────────
 
     async def _trigger_response(self, text: str) -> None:
-        """LLM → sentence-chunked TTS → audio out."""
+        """LLM → streaming TTS chunks → audio out."""
         self.is_responding = True
+        self._set_state(_STATE_THINKING, "llm_request_start")
         response_start = time.time()
         assistant_text = ""
 
         try:
+            logger.info(
+                "[pipeline] %s LLM request start: %r", self.session_id, text[:80]
+            )
             await self._send_text_event("transcript", text, interim=False)
             await self._send_text_event("status", "thinking...")
 
-            sentence_buffer = ""
+            tts_buffer = ""
+
             async for event in self.agent.generate_reply_voice(text, self.session_id):
                 if event.stream_type == "text_chunk":
                     chunk = event.payload.get("text", "")
                     await self._send_text_event("text_chunk", chunk)
                     assistant_text += chunk
-
-                    sentence_buffer += chunk
-                    sentences = _split_sentences(sentence_buffer)
-                    for sentence in sentences[:-1]:
-                        if sentence.strip():
-                            await self._synthesize_and_send(sentence.strip())
-                    sentence_buffer = sentences[-1] if sentences else ""
+                    tts_buffer += chunk
+                    pieces, tts_buffer = _extract_tts_chunks(tts_buffer)
+                    for piece in pieces:
+                        await self._synthesize_and_send(piece)
 
                 elif event.stream_type == "status":
                     status_text = event.payload.get("message", "")
@@ -437,8 +625,8 @@ class VoiceSession:
                         "tool_result", json.dumps(event.payload)
                     )
 
-            if sentence_buffer.strip():
-                await self._synthesize_and_send(sentence_buffer.strip())
+            if tts_buffer.strip():
+                await self._synthesize_and_send(tts_buffer.strip())
 
             await self._send_text_event("stream_end", "")
 
@@ -454,8 +642,26 @@ class VoiceSession:
             await self._send_text_event("error", str(e))
         finally:
             self.is_responding = False
+            self._set_state(_STATE_IDLE_VAD_ONLY, "response_complete")
             if self.is_streaming:
                 await self._send_text_event("status", "listening...")
+
+            # Deliver any queued notifications
+            if self._pending_notifications and self.is_streaming:
+                for notif_text in self._pending_notifications:
+                    logger.info(
+                        "[pipeline] Delivering queued notification: %r", notif_text[:60]
+                    )
+                    await self._send_text_event(
+                        "transcript", notif_text, role="assistant"
+                    )
+                    await self._synthesize_and_send(notif_text)
+                    await self._send_text_event("stream_end", "")
+                self._pending_notifications.clear()
+
+            # Schedule STT disconnect after idle timeout
+            if self._stt_connected:
+                self._schedule_stt_disconnect()
 
             # If user spoke while we were responding, process it now
             if self._transcript.strip() and self.is_streaming:
@@ -547,6 +753,7 @@ class VoiceSession:
             self._response_task.cancel()
 
         self.is_responding = False
+        self._set_state(_STATE_IDLE_VAD_ONLY, "barge_in")
         await self.agent.cancel_session(self.session_id)
 
         if self.is_streaming:
@@ -555,7 +762,10 @@ class VoiceSession:
     # ─── TTS ─────────────────────────────────────────────────────
 
     async def _synthesize_and_send(self, text: str) -> None:
-        """Text → TTS → audio out callback.
+        """Text → streaming TTS → audio out callback.
+
+        Uses synthesize_stream() for chunk-by-chunk delivery, falling back
+        to batch synthesis if the provider doesn't support streaming.
 
         Strips non-speakable characters (emoji, symbols) before synthesis so
         TTS providers don't waste a round-trip on unpronounceable glyphs.
@@ -574,14 +784,21 @@ class VoiceSession:
             return
         try:
             self._tts_playing = True
-            audio_bytes = await self.tts_provider.synthesize(clean)
-            logger.info("TTS: %d bytes for %r", len(audio_bytes), clean[:60])
-            await self.on_audio_out(audio_bytes)
-            logger.info("TTS audio queued")
-            # _assistant_speaking_until and _tts_cooldown_until are updated by
-            # on_tts_duration() once the transport knows the resampled PCM size.
-            # If the transport doesn't call it (e.g. tests), fall back to a
-            # conservative 3-second guard so echo suppression still activates.
+            self._set_state(_STATE_TTS_PLAYING, "tts_stream_start")
+            logger.info("[pipeline] TTS stream start: %r", clean[:60])
+            chunk_count = 0
+            async for audio_chunk in self.tts_provider.synthesize_stream(clean):
+                chunk_count += 1
+                if chunk_count == 1:
+                    logger.info(
+                        "[pipeline] TTS first chunk: %d bytes for %r",
+                        len(audio_chunk),
+                        clean[:60],
+                    )
+                await self.on_audio_out(audio_chunk)
+            logger.info("[pipeline] TTS stream done: %d chunks", chunk_count)
+            # If the transport doesn't call on_tts_duration (e.g. tests),
+            # fall back to a conservative 3-second guard.
             if not self.on_tts_duration:
                 self._assistant_speaking_until = time.time() + 3.0
                 self._tts_cooldown_until = time.time() + 3.3
@@ -589,8 +806,32 @@ class VoiceSession:
             logger.warning("TTS failed: %s", e, exc_info=True)
         finally:
             self._tts_playing = False
+            if self.is_responding:
+                self._set_state(_STATE_THINKING, "tts_stream_end")
 
     # ─── Helpers ─────────────────────────────────────────────────
+
+    def _set_state(self, next_state: str, reason: str) -> None:
+        if self._state == next_state:
+            return
+        prev = self._state
+        self._state = next_state
+        logger.info("[pipeline] state: %s -> %s (%s)", prev, next_state, reason)
+
+    def _can_stream_stt_audio(self) -> bool:
+        if self._state != _STATE_STT_STREAMING:
+            return False
+        if not self._stt_connected:
+            return False
+        if self.stt.is_open:
+            return True
+        logger.debug(
+            "[pipeline] STT send skipped: state=%s stt_connected=%s stt_open=%s",
+            self._state,
+            self._stt_connected,
+            self.stt.is_open,
+        )
+        return False
 
     async def _send_text_event(self, event_type: str, data: str, **kwargs: Any) -> None:
         if self.on_text_event:
@@ -599,6 +840,27 @@ class VoiceSession:
             except Exception as e:
                 logger.debug("Failed to send text event %s: %s", event_type, e)
 
+    async def deliver_notification(self, text: str) -> None:
+        """Deliver a spoken notification through this voice session.
+
+        If the session is currently responding, queue the notification
+        for delivery after the response completes. If idle, synthesize
+        and push audio immediately.
+        """
+        if not self.is_streaming:
+            return
+
+        if self.is_responding:
+            # Queue for delivery after current response ends
+            logger.info("[pipeline] Queuing notification (responding): %r", text[:60])
+            self._pending_notifications.append(text)
+        else:
+            # Deliver immediately
+            logger.info("[pipeline] Delivering notification now: %r", text[:60])
+            await self._send_text_event("transcript", text, role="assistant")
+            await self._synthesize_and_send(text)
+            await self._send_text_event("stream_end", "")
+
     def mute(self) -> None:
         self.is_muted = True
 
@@ -606,10 +868,37 @@ class VoiceSession:
         self.is_muted = False
 
 
-def _split_sentences(text: str) -> list[str]:
-    """Split on sentence boundaries for low-latency TTS chunking."""
-    parts = re.split(r"(?<=[.!?])\s+", text)
-    return parts if parts else [text]
+_TTS_CHUNK_MIN_CHARS = 60
+_TTS_CHUNK_MAX_CHARS = 140
+_TTS_PAUSE_CHARS = ".,;:!?\n"
+
+
+def _extract_tts_chunks(buffer: str) -> tuple[list[str], str]:
+    """Extract speakable chunks from a streamed LLM text buffer.
+
+    This intentionally avoids sentence-boundary trimming. It emits on natural
+    pause punctuation when available, otherwise falls back to a max size cut.
+    """
+    pieces: list[str] = []
+    remaining = buffer
+
+    while len(remaining) >= _TTS_CHUNK_MIN_CHARS:
+        pause_cut = max(remaining.rfind(ch) for ch in _TTS_PAUSE_CHARS)
+        if pause_cut >= _TTS_CHUNK_MIN_CHARS:
+            cut = pause_cut + 1
+        elif len(remaining) >= _TTS_CHUNK_MAX_CHARS:
+            cut = remaining.rfind(" ", 0, _TTS_CHUNK_MAX_CHARS)
+            if cut == -1:
+                cut = _TTS_CHUNK_MAX_CHARS
+        else:
+            break
+
+        piece = remaining[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remaining = remaining[cut:].lstrip()
+
+    return pieces, remaining
 
 
 # Unicode categories that are non-speakable (emoji, symbols, surrogates, etc.)
