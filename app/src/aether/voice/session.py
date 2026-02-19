@@ -254,18 +254,15 @@ class VoiceSession:
                             "STT final: %r (speaking=%s)", final[:80], self._speaking
                         )
 
-                        # LiveKit catch-up pattern:
-                        # VAD END_OF_SPEECH fired before Deepgram delivered
-                        # the transcript → _run_eou bailed with empty text.
-                        # Now that the transcript is here, run EOU if no task
-                        # is already pending and user is not speaking.
-                        if (
-                            not self._speaking
-                            and not self.is_responding
-                            and (self._eou_task is None or self._eou_task.done())
-                        ):
+                        if not self._speaking and not self.is_responding:
+                            # Two cases both handled by _run_eou():
+                            # 1. Catch-up: VAD ended before transcript arrived
+                            #    (eou_task is None or done)
+                            # 2. Transcript grew while EOU task was sleeping —
+                            #    restart so the task commits the full transcript,
+                            #    not the stale snapshot from when it started.
                             logger.info(
-                                "STT final arrived after VAD ended — running EOU catch-up"
+                                "STT final — restarting EOU with full transcript"
                             )
                             self._run_eou()
 
@@ -278,13 +275,20 @@ class VoiceSession:
 
                     if action == "utterance_end":
                         # Transcript accumulation only — no commit logic here.
+                        # utterance_end often carries text already delivered
+                        # via the final path — skip if already in _transcript
+                        # to prevent duplicates.
                         transcript = (
                             frame.data.get("transcript", "")
                             if isinstance(frame.data, dict)
                             else ""
                         )
                         text = transcript.strip()
-                        if text and text != self._last_final_text:
+                        if (
+                            text
+                            and text != self._last_final_text
+                            and text not in self._transcript
+                        ):
                             self._last_final_text = text
                             self._transcript = (
                                 f"{self._transcript} {text}".strip()
@@ -341,20 +345,27 @@ class VoiceSession:
         """
         EOU task: run turn detector once, sleep, then commit.
 
+        IMPORTANT: do NOT snapshot _transcript at the start.
+        The transcript grows while we sleep (Deepgram delivers finals
+        asynchronously). Always read _transcript at commit time so we
+        commit everything the user said, not just the first chunk.
+
         Token check at every await point — if VAD fires START_OF_SPEECH
-        while we sleep, _cancel_eou() increments the token and this task
-        exits cleanly on the next check.
+        or a new final arrives while we sleep, _run_eou() increments the
+        token and this task exits cleanly on the next check.
         """
         try:
             if token != self._eou_token:
                 return
 
-            text = self._transcript.strip()
-            if not text:
+            # Snapshot for turn detector only — may be partial, that's ok.
+            # The detector just needs enough context to decide the delay.
+            text_for_detector = self._transcript.strip()
+            if not text_for_detector:
                 return
 
             # Run turn detector exactly once
-            delay = await self._resolve_endpoint_delay(text)
+            delay = await self._resolve_endpoint_delay(text_for_detector)
 
             if token != self._eou_token:
                 return
@@ -369,7 +380,7 @@ class VoiceSession:
                 logger.info("EOU aborted after delay — VAD reports user speaking again")
                 return
 
-            # Commit
+            # Read _transcript NOW — it may have grown during the sleep
             transcript = self._transcript.strip()
             self._transcript = ""
             self._last_final_text = ""
@@ -383,7 +394,7 @@ class VoiceSession:
             )
 
         except asyncio.CancelledError:
-            pass  # Cancelled by _cancel_eou — user started speaking again
+            pass  # Cancelled by _run_eou — new final arrived, restarting with more text
 
     # ─── Voice Response ──────────────────────────────────────────
 
