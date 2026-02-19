@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether — WebRTC Voice</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .app-layout { display: flex; height: 100vh; width: 100%; }
+
+        .main-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .activity-panel {
+            width: 360px;
+            border-left: 1px solid #1a1a1a;
+            display: flex;
+            flex-direction: column;
+            background: #050505;
+        }
+
+        .activity-header {
+            padding: 1rem;
+            border-bottom: 1px solid #1a1a1a;
+            font-size: 0.75rem;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .activity-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+
+        .activity-item {
+            padding: 0.6rem 0.8rem;
+            border-radius: 6px;
+            margin-bottom: 0.4rem;
+            font-size: 0.8rem;
+            animation: slideIn 0.2s ease;
+        }
+
+        .activity-item.status { color: #a78bfa; background: rgba(167, 139, 250, 0.05); }
+        .activity-item.tool-call {
+            color: #4ecdc4; background: rgba(78, 205, 196, 0.05);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        .activity-item.tool-result {
+            color: #888; background: rgba(255, 255, 255, 0.02);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.75rem; max-height: 80px; overflow: hidden;
+        }
+        .activity-item.tool-result.error { color: #ff6b6b; background: rgba(255, 107, 107, 0.05); }
+        .activity-item.debug { color: #555; background: rgba(255,255,255,0.02); font-size: 0.7rem; font-family: monospace; }
+
+        .spinner { display: inline-block; width: 12px; text-align: center; animation: spin 0.8s steps(8) infinite; }
+        .checkmark { color: #4ecdc4; }
+        .crossmark { color: #ff6b6b; }
+
+        @keyframes spin {
+            0% { content: '⠋'; } 12.5% { content: '⠙'; } 25% { content: '⠹'; }
+            37.5% { content: '⠸'; } 50% { content: '⠼'; } 62.5% { content: '⠴'; }
+            75% { content: '⠦'; } 87.5% { content: '⠧'; }
+        }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Orb */
+        #status {
+            font-size: 0.85rem; color: #666; margin-bottom: 1rem;
+            min-height: 1.2rem; transition: color 0.3s;
+        }
+        #status.active { color: #4ecdc4; }
+        #status.error { color: #ff6b6b; }
+
+        #live-transcript {
+            font-size: 0.85rem; color: #4ecdc4; margin-bottom: 1.5rem;
+            min-height: 1.2rem; max-width: 500px; text-align: center;
+            opacity: 0.7; font-style: italic; transition: opacity 0.2s;
+        }
+        #live-transcript.active { opacity: 1; font-style: normal; }
+
+        #orb-container { position: relative; width: 160px; height: 160px; margin-bottom: 2rem; cursor: pointer; }
+
+        #orb {
+            width: 100%; height: 100%; border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #1a1a2e, #0a0a15);
+            border: 1px solid #1a1a2e; transition: all 0.4s ease;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        #orb:hover { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.1); }
+        #orb.listening { border-color: #4ecdc4; box-shadow: 0 0 60px rgba(78, 205, 196, 0.2); animation: pulse 2s ease-in-out infinite; }
+        #orb.thinking { border-color: #a78bfa; box-shadow: 0 0 60px rgba(167, 139, 250, 0.2); animation: pulse 1.2s ease-in-out infinite; }
+        #orb.speaking { border-color: #f59e0b; box-shadow: 0 0 60px rgba(245, 158, 11, 0.2); animation: pulse 0.8s ease-in-out infinite; }
+        #orb.connecting { border-color: #666; animation: breathe 3s ease-in-out infinite; }
+        #orb.working { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.15); animation: pulse 1.5s ease-in-out infinite; }
+        #orb.muted { border-color: #333; box-shadow: none; opacity: 0.4; animation: none; }
+
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+        @keyframes breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+        #orb-label { font-size: 0.75rem; color: #444; letter-spacing: 0.1em; text-transform: uppercase; }
+
+        /* Conversation */
+        #conversation {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 600px; max-height: 250px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem;
+        }
+
+        .message { font-size: 0.9rem; line-height: 1.5; padding: 0.5rem 0; opacity: 0; animation: fadeIn 0.3s ease forwards; }
+        .message.user { color: #888; text-align: right; }
+        .message.assistant { color: #e0e0e0; }
+
+        @keyframes fadeIn { to { opacity: 1; } }
+
+        /* Controls */
+        #controls {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 1rem;
+        }
+
+        .ctrl-btn {
+            background: none; border: 1px solid #333; color: #666;
+            padding: 0.5rem 1rem; border-radius: 2rem; font-size: 0.75rem;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
+
+        #text-input-container {
+            position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 500px; display: none;
+        }
+
+        #text-input {
+            width: 100%; background: #111; border: 1px solid #333; color: #e0e0e0;
+            padding: 0.75rem 1rem; border-radius: 2rem; font-size: 0.9rem; outline: none;
+        }
+        #text-input:focus { border-color: #4ecdc4; }
+
+        .badge {
+            display: inline-block; padding: 0.15rem 0.5rem; border-radius: 1rem;
+            font-size: 0.65rem; letter-spacing: 0.05em; text-transform: uppercase;
+            background: rgba(78, 205, 196, 0.1); color: #4ecdc4; margin-left: 0.5rem;
+        }
+
+        @media (max-width: 768px) { .activity-panel { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="app-layout">
+        <div class="main-panel">
+            <div id="status">initializing...</div>
+            <div id="live-transcript"></div>
+
+            <div id="orb-container" onclick="toggleVoice()">
+                <div id="orb" class="connecting">
+                    <span id="orb-label">aether</span>
+                </div>
+            </div>
+
+            <div id="conversation"></div>
+
+            <div id="text-input-container">
+                <input id="text-input" type="text" placeholder="Type a message..."
+                       onkeydown="if(event.key==='Enter')sendText()">
+            </div>
+
+            <div id="controls">
+                <button class="ctrl-btn" id="mute-btn" onclick="toggleMute()" style="display:none">mute</button>
+                <button class="ctrl-btn" onclick="toggleTextMode()">text</button>
+                <button class="ctrl-btn" onclick="captureImage()">camera</button>
+            </div>
+        </div>
+
+        <div class="activity-panel">
+            <div class="activity-header">Activity <span class="badge">WebRTC</span></div>
+            <div class="activity-list" id="activity-list"></div>
+        </div>
+    </div>
+
+    <script>
+    // ─── State ───────────────────────────────────────────────────
+    let pc = null;           // RTCPeerConnection
+    let dc = null;           // RTCDataChannel
+    let pcId = null;         // Server-assigned peer connection ID
+    let localStream = null;  // getUserMedia stream
+    let remoteAudio = null;  // <audio> element for playback
+    let isVoiceActive = false;
+    let isTextMode = false;
+    let isMuted = false;
+    let streamingMessageEl = null;
+
+    const SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    let spinnerIndex = 0;
+    let spinnerInterval = null;
+    const activeSpinners = new Map();
+
+    // ─── Elements ────────────────────────────────────────────────
+    const orb = document.getElementById('orb');
+    const orbLabel = document.getElementById('orb-label');
+    const statusEl = document.getElementById('status');
+    const liveTranscript = document.getElementById('live-transcript');
+    const conversation = document.getElementById('conversation');
+    const textContainer = document.getElementById('text-input-container');
+    const textInput = document.getElementById('text-input');
+    const muteBtn = document.getElementById('mute-btn');
+    const activityList = document.getElementById('activity-list');
+
+    // ─── Spinner ─────────────────────────────────────────────────
+    function startSpinnerAnimation() {
+        if (spinnerInterval) return;
+        spinnerInterval = setInterval(() => {
+            spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
+            activeSpinners.forEach(el => {
+                const s = el.querySelector('.spinner');
+                if (s) s.textContent = SPINNER_FRAMES[spinnerIndex];
+            });
+        }, 80);
+    }
+
+    function stopSpinnerAnimation() {
+        if (activeSpinners.size === 0 && spinnerInterval) {
+            clearInterval(spinnerInterval);
+            spinnerInterval = null;
+        }
+    }
+
+    // ─── Activity Panel ──────────────────────────────────────────
+    function addActivity(type, content, id) {
+        const item = document.createElement('div');
+        item.className = `activity-item ${type}`;
+        item.innerHTML = content;
+        if (id) item.dataset.id = id;
+        activityList.appendChild(item);
+        activityList.scrollTop = activityList.scrollHeight;
+        while (activityList.children.length > 50) activityList.removeChild(activityList.firstChild);
+        return item;
+    }
+
+    function logDebug(text) { addActivity('debug', text); }
+
+    function handleToolStatus(text) {
+        addActivity('status', `<span class="spinner">${SPINNER_FRAMES[0]}</span> ${text}`);
+        setOrbState('working');
+    }
+
+    function handleToolCall(data) {
+        const parsed = JSON.parse(data);
+        const el = addActivity('tool-call',
+            `<span class="spinner">${SPINNER_FRAMES[0]}</span> <strong>${parsed.name}</strong>`,
+            parsed.call_id
+        );
+        activeSpinners.set(parsed.call_id, el);
+        startSpinnerAnimation();
+    }
+
+    function handleToolResult(data) {
+        const parsed = JSON.parse(data);
+        const callId = parsed.call_id || '';
+        if (activeSpinners.has(callId)) {
+            const el = activeSpinners.get(callId);
+            const s = el.querySelector('.spinner');
+            if (s) { s.classList.remove('spinner'); s.textContent = parsed.error ? '✗' : '✓'; s.className = parsed.error ? 'crossmark' : 'checkmark'; }
+            activeSpinners.delete(callId);
+            stopSpinnerAnimation();
+        }
+        const preview = parsed.output.length > 120 ? parsed.output.substring(0, 120) + '...' : parsed.output;
+        addActivity(`tool-result ${parsed.error ? 'error' : ''}`, preview);
+    }
+
+    // ─── WebRTC Connection ───────────────────────────────────────
+    async function connect() {
+        setOrbState('connecting');
+        setStatus('requesting microphone...');
+
+        try {
+            // 1. Get microphone
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 48000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                }
+            });
+            logDebug('Mic acquired');
+
+            // 2. Create peer connection
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            // 3. Add mic track
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            // 4. Create data channel (for text/events — same JSON as WebSocket)
+            dc = pc.createDataChannel('aether', { ordered: true });
+            dc.onopen = onDataChannelOpen;
+            dc.onclose = () => { logDebug('Data channel closed'); };
+            dc.onmessage = onDataChannelMessage;
+
+            // 5. Handle remote audio track (TTS playback)
+            pc.ontrack = (event) => {
+                logDebug(`Remote track: ${event.track.kind}`);
+                if (event.track.kind === 'audio') {
+                    if (!remoteAudio) {
+                        remoteAudio = document.createElement('audio');
+                        remoteAudio.autoplay = true;
+                        document.body.appendChild(remoteAudio);
+                    }
+                    remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
+                    logDebug('Remote audio attached');
+                }
+            };
+
+            // 6. ICE candidate gathering
+            const iceCandidates = [];
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    iceCandidates.push({
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                    });
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                logDebug(`Connection: ${pc.connectionState}`);
+                if (pc.connectionState === 'connected') {
+                    setStatus('connected — tap orb to start voice');
+                    setOrbState('idle');
+                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    setStatus('connection lost', false, true);
+                    setOrbState('connecting');
+                    cleanup();
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                logDebug(`ICE: ${pc.iceConnectionState}`);
+            };
+
+            // 7. Create SDP offer
+            setStatus('creating offer...');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // 8. Wait for ICE gathering to complete (or timeout)
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') { resolve(); return; }
+                const timeout = setTimeout(resolve, 3000);
+                pc.onicegatheringstatechange = () => {
+                    if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
+                };
+            });
+            logDebug(`ICE candidates gathered: ${iceCandidates.length}`);
+
+            // 9. Send offer to server
+            setStatus('signaling...');
+            const offerResp = await fetch('/webrtc/offer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                    user_id: 'web-rtc-test',
+                }),
+            });
+
+            if (!offerResp.ok) {
+                const err = await offerResp.json();
+                throw new Error(err.error || 'Offer failed');
+            }
+
+            const answer = await offerResp.json();
+            pcId = answer.pc_id;
+            logDebug(`Server pc_id: ${pcId}`);
+
+            // 10. Set remote description
+            await pc.setRemoteDescription(new RTCSessionDescription({
+                sdp: answer.sdp,
+                type: answer.type,
+            }));
+
+            // 11. Send ICE candidates
+            if (iceCandidates.length > 0) {
+                await fetch('/webrtc/ice', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pc_id: pcId, candidates: iceCandidates }),
+                });
+                logDebug(`Sent ${iceCandidates.length} ICE candidates`);
+            }
+
+            setStatus('waiting for connection...');
+
+        } catch (err) {
+            console.error('Connection error:', err);
+            setStatus(`error: ${err.message}`, false, true);
+            setOrbState('idle');
+        }
+    }
+
+    // ─── Data Channel Handlers ───────────────────────────────────
+    function onDataChannelOpen() {
+        logDebug('Data channel open');
+    }
+
+    function onDataChannelMessage(event) {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        switch (msg.type) {
+            case 'transcript':
+                handleTranscript(msg.data, msg.interim);
+                break;
+            case 'text_chunk':
+                handleTextChunk(msg.data, msg.index);
+                break;
+            case 'audio_chunk':
+                // Audio comes via WebRTC track, not data channel.
+                // But status_audio may arrive here as base64 fallback.
+                break;
+            case 'stream_end':
+                handleStreamEnd();
+                break;
+            case 'status':
+                handleToolStatus(msg.data);
+                setStatus(msg.data, true);
+                break;
+            case 'tool_call':
+                handleToolCall(msg.data);
+                break;
+            case 'tool_result':
+                handleToolResult(msg.data);
+                break;
+        }
+    }
+
+    // ─── Voice Toggle ────────────────────────────────────────────
+    async function toggleVoice() {
+        if (isTextMode) return;
+        if (isMuted) { toggleMute(); return; }
+
+        if (!pc || pc.connectionState !== 'connected') {
+            // Not connected yet — start connection
+            await connect();
+            return;
+        }
+
+        if (isVoiceActive) {
+            stopVoice();
+        } else {
+            startVoice();
+        }
+    }
+
+    function startVoice() {
+        if (!dc || dc.readyState !== 'open') {
+            setStatus('data channel not ready', false, true);
+            return;
+        }
+        dc.send(JSON.stringify({ type: 'stream_start' }));
+        isVoiceActive = true;
+        isMuted = false;
+        muteBtn.style.display = '';
+        setOrbState('listening');
+        setStatus('listening...', true);
+        liveTranscript.textContent = '';
+        logDebug('Voice started (stream_start sent)');
+    }
+
+    function stopVoice() {
+        if (dc && dc.readyState === 'open') {
+            dc.send(JSON.stringify({ type: 'stream_stop' }));
+        }
+        isVoiceActive = false;
+        isMuted = false;
+        muteBtn.style.display = 'none';
+        liveTranscript.textContent = '';
+        setOrbState('idle');
+        setStatus('tap orb to speak');
+        logDebug('Voice stopped (stream_stop sent)');
+    }
+
+    function toggleMute() {
+        if (!isVoiceActive) return;
+        isMuted = !isMuted;
+        if (isMuted) {
+            dc.send(JSON.stringify({ type: 'mute' }));
+            setOrbState('muted');
+            muteBtn.textContent = 'unmute';
+            muteBtn.style.borderColor = '#ff6b6b';
+            muteBtn.style.color = '#ff6b6b';
+            liveTranscript.textContent = '';
+            // Mute the actual mic track so no audio is sent
+            localStream.getAudioTracks().forEach(t => t.enabled = false);
+        } else {
+            dc.send(JSON.stringify({ type: 'unmute' }));
+            setOrbState('listening');
+            setStatus('listening...', true);
+            muteBtn.textContent = 'mute';
+            muteBtn.style.borderColor = '';
+            muteBtn.style.color = '';
+            localStream.getAudioTracks().forEach(t => t.enabled = true);
+        }
+    }
+
+    // ─── Text Mode ───────────────────────────────────────────────
+    function toggleTextMode() {
+        isTextMode = !isTextMode;
+        textContainer.style.display = isTextMode ? 'block' : 'none';
+        if (isTextMode) {
+            if (isVoiceActive) stopVoice();
+            textInput.focus();
+        }
+    }
+
+    function sendText() {
+        const text = textInput.value.trim();
+        if (!text || !dc || dc.readyState !== 'open') return;
+        addMessage(text, 'user');
+        dc.send(JSON.stringify({ type: 'text', data: text }));
+        textInput.value = '';
+        setOrbState('thinking');
+        setStatus('thinking...', true);
+    }
+
+    // ─── Camera ──────────────────────────────────────────────────
+    async function captureImage() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.play();
+            await new Promise(r => video.onloadedmetadata = r);
+            await new Promise(r => setTimeout(r, 500));
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            stream.getTracks().forEach(t => t.stop());
+            const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+            if (dc && dc.readyState === 'open') {
+                dc.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
+                setStatus('image sent — now speak your question', true);
+            }
+        } catch (err) { setStatus('camera access denied', false, true); }
+    }
+
+    // ─── Message Handlers ────────────────────────────────────────
+    function handleTranscript(text, interim) {
+        if (interim) {
+            liveTranscript.textContent = text;
+            liveTranscript.className = 'active';
+        } else {
+            liveTranscript.textContent = '';
+            liveTranscript.className = '';
+            addMessage(text, 'user');
+            setOrbState('thinking');
+            setStatus('thinking...', true);
+        }
+    }
+
+    function handleTextChunk(text, index) {
+        if (index === 0) {
+            streamingMessageEl = document.createElement('div');
+            streamingMessageEl.className = 'message assistant';
+            streamingMessageEl.textContent = text;
+            conversation.appendChild(streamingMessageEl);
+            setOrbState('speaking');
+            setStatus('speaking...', true);
+        } else if (streamingMessageEl) {
+            streamingMessageEl.textContent += ' ' + text;
+        }
+        conversation.scrollTop = conversation.scrollHeight;
+    }
+
+    function handleStreamEnd() {
+        streamingMessageEl = null;
+        while (conversation.children.length > 20) conversation.removeChild(conversation.firstChild);
+        if (isVoiceActive) {
+            setTimeout(() => {
+                if (isVoiceActive) {
+                    setOrbState('listening');
+                    setStatus('listening...', true);
+                }
+            }, 500);
+        }
+    }
+
+    // ─── UI Helpers ──────────────────────────────────────────────
+    function setOrbState(state) {
+        orb.className = state === 'idle' ? '' : state;
+        const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '♪', connecting: '···', muted: 'muted', working: '⚙' };
+        orbLabel.textContent = labels[state] || 'aether';
+        if (state === 'idle') setStatus('tap orb to speak');
+    }
+
+    function setStatus(text, active = false, error = false) {
+        statusEl.textContent = text;
+        statusEl.className = error ? 'error' : (active ? 'active' : '');
+    }
+
+    function addMessage(text, role) {
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+        div.textContent = text;
+        conversation.appendChild(div);
+        conversation.scrollTop = conversation.scrollHeight;
+        while (conversation.children.length > 20) conversation.removeChild(conversation.firstChild);
+    }
+
+    function cleanup() {
+        isVoiceActive = false;
+        isMuted = false;
+        muteBtn.style.display = 'none';
+        if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+        if (pc) { pc.close(); pc = null; }
+        dc = null;
+        pcId = null;
+    }
+
+    // ─── Keepalive ───────────────────────────────────────────────
+    setInterval(() => {
+        if (dc && dc.readyState === 'open') dc.send('ping');
+    }, 15000);
+
+    // ─── Init ────────────────────────────────────────────────────
+    setStatus('tap the orb to connect');
+    setOrbState('idle');
+    </script>
+</body>
+</html>

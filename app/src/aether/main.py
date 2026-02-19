@@ -1,13 +1,13 @@
 """
-Aether v0.08 — Transport Layer.
+Aether v0.10 — Clean Transport Architecture.
 
-Changes from v0.07:
-- Transport layer: modular connection handling (WebSocket, future WebRTC/Push)
-- KernelCore: adapter between transport (CoreMsg) and core (Frames)
-- TransportManager: facade routing messages between transports and core
-- Old monolithic websocket_endpoint removed — /ws delegates to WebSocketTransport
-- Plugin events routed through transport_manager.broadcast()
-- Providers started once via KernelCore.start() (no double startup)
+Three independent transports, one AgentCore facade:
+  1. OpenAI-compatible HTTP API (/v1/chat/completions) — text chat
+  2. Simplified WebRTC Voice (/webrtc/offer) — per-session STT, direct audio
+  3. WS Notification Sidecar (/ws) — push-only for dashboard
+
+All transports call AgentCore. AgentCore wraps the KernelScheduler.
+No CoreMsg, no TransportManager, no KernelCore.
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -15,7 +15,6 @@ Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import socket
@@ -29,12 +28,10 @@ from fastapi.staticfiles import StaticFiles
 
 import aether.core.config as _config_mod
 from aether.core.config import config, reload_config
-
-# FrameType removed — /chat now routes through scheduler
 from aether.core.logging import setup_logging
 from aether.core.metrics import metrics
 from aether.memory.store import MemoryStore
-from aether.providers import get_stt_provider, get_llm_provider, get_tts_provider
+from aether.providers import get_llm_provider, get_stt_provider, get_tts_provider
 from aether.tools.registry import ToolRegistry
 from aether.tools.read_file import ReadFileTool
 from aether.tools.write_file import WriteFileTool
@@ -49,17 +46,26 @@ from aether.plugins.context import PluginContextStore
 from aether.plugins.event import PluginEvent
 from aether.processors.event import EventProcessor
 
-# --- Transport Layer ---
-from aether.kernel.core import KernelCore
-from aether.transport import CoreMsg, TransportManager, WebSocketTransport
+# --- New architecture ---
+from aether.agent import AgentCore
+from aether.kernel.scheduler import KernelScheduler, ServiceRouter
+from aether.services.reply_service import ReplyService
+from aether.services.memory_service import MemoryService
+from aether.services.notification_service import NotificationService
+from aether.services.tool_service import ToolService
+from aether.llm.core import LLMCore
+from aether.llm.context_builder import ContextBuilder
+from aether.tools.orchestrator import ToolOrchestrator
+from aether.http.openai_compat import create_router as create_openai_router
+from aether.ws.sidecar import WSSidecar
 
-# Optional: WebRTC transport (requires aiortc)
-SmallWebRTCTransport = None
+# Optional: WebRTC voice transport (requires aiortc)
+WebRTCVoiceTransport = None
 try:
-    from aether.transport.webrtc import SmallWebRTCTransport as _WebRTCTransport
-    from aether.transport.webrtc import AIORTC_AVAILABLE
+    from aether.voice.webrtc import WebRTCVoiceTransport as _WebRTCVoiceTransport
+    from aether.voice.webrtc import AIORTC_AVAILABLE
 
-    SmallWebRTCTransport = _WebRTCTransport
+    WebRTCVoiceTransport = _WebRTCVoiceTransport
 except ImportError:
     AIORTC_AVAILABLE = False
 
@@ -74,10 +80,11 @@ AGENT_USER_ID = os.getenv("AETHER_USER_ID", "")
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
 # --- App ---
-app = FastAPI(title="Aether", version="0.0.8")
+app = FastAPI(title="Aether", version="0.10.0")
 
 # Static files: serve from client/web/ (new structure) or fallback to legacy static/
-CLIENT_WEB_DIR = Path(__file__).parent.parent.parent.parent.parent / "client" / "web"
+# __file__ = app/src/aether/main.py → .parent×4 = core-ai/ (repo root)
+CLIENT_WEB_DIR = Path(__file__).parent.parent.parent.parent / "client" / "web"
 STATIC_DIR = (
     CLIENT_WEB_DIR if CLIENT_WEB_DIR.exists() else Path(__file__).parent / "static"
 )
@@ -138,8 +145,88 @@ for plugin in loaded_plugins:
 # --- Event Processor (decision engine for plugin events) ---
 event_processor = EventProcessor(llm_provider, memory_store)
 
-# --- Transport Manager (initialized at startup) ---
-transport_manager: TransportManager | None = None
+# --- Build the core stack ---
+# LLMCore + ContextBuilder + ToolOrchestrator
+tool_orchestrator = ToolOrchestrator(tool_registry)
+llm_core = LLMCore(llm_provider, tool_orchestrator)
+context_builder = ContextBuilder(
+    memory_store=memory_store,
+    tool_registry=tool_registry,
+    skill_loader=skill_loader,
+    plugin_context_store=plugin_context_store,
+)
+
+# Services
+reply_service = ReplyService(llm_core, context_builder, memory_store)
+memory_service = MemoryService(llm_core, memory_store)
+notification_service = NotificationService(llm_core, memory_store)
+tool_service = ToolService(tool_orchestrator)
+
+# ServiceRouter → KernelScheduler
+service_router = ServiceRouter(
+    reply_service=reply_service,
+    memory_service=memory_service,
+    notification_service=notification_service,
+    tool_service=tool_service,
+)
+
+kernel_cfg = config.kernel
+scheduler = KernelScheduler(
+    service_router=service_router,
+    max_interactive_workers=kernel_cfg.workers_interactive,
+    max_background_workers=kernel_cfg.workers_background,
+    interactive_queue_limit=kernel_cfg.interactive_queue_limit,
+    background_queue_limit=kernel_cfg.background_queue_limit,
+)
+
+# AgentCore — the single facade for all transports
+agent_core = AgentCore(
+    scheduler=scheduler,
+    memory_store=memory_store,
+    llm_provider=llm_provider,
+    tool_registry=tool_registry,
+    skill_loader=skill_loader,
+    plugin_context=plugin_context_store,
+)
+
+# --- Mount OpenAI-compatible HTTP API ---
+openai_router = create_openai_router(agent_core)
+app.include_router(openai_router)
+
+# --- WS Notification Sidecar ---
+ws_sidecar = WSSidecar(agent=agent_core)
+
+# --- WebRTC Voice Transport (optional) ---
+webrtc_transport = None
+if AIORTC_AVAILABLE and WebRTCVoiceTransport is not None:
+    try:
+        ice_servers = []
+        stun_url = os.getenv("WEBRTC_STUN_URL", "stun:stun.l.google.com:19302")
+        if stun_url:
+            ice_servers.append({"urls": stun_url})
+
+        turn_url = os.getenv("WEBRTC_TURN_URL", "")
+        turn_username = os.getenv("WEBRTC_TURN_USERNAME", "")
+        turn_credential = os.getenv("WEBRTC_TURN_CREDENTIAL", "")
+        if turn_url:
+            ice_servers.append(
+                {
+                    "urls": turn_url,
+                    "username": turn_username,
+                    "credential": turn_credential,
+                }
+            )
+
+        webrtc_transport = WebRTCVoiceTransport(
+            agent=agent_core,
+            tts_provider=tts_provider,
+            ice_servers=ice_servers or None,
+        )
+        logger.info("WebRTC voice transport initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize WebRTC transport: {e}")
+else:
+    logger.info("WebRTC transport not available (aiortc not installed)")
 
 
 # ── Orchestrator helpers ───────────────────────────────────────
@@ -151,7 +238,41 @@ def _agent_auth_headers() -> dict[str, str]:
     return {}
 
 
-async def _register_with_orchestrator():
+def _detect_agent_host() -> str:
+    """Determine the host address the orchestrator should use to reach this agent."""
+    explicit = os.getenv("AETHER_AGENT_HOST", "")
+    if explicit and explicit != "host.docker.internal":
+        return explicit
+
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["hostname", "-I"], capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0:
+            ips = result.stdout.strip().split()
+            for ip in ips:
+                if not ip.startswith("127.") and ":" not in ip:
+                    logger.info(f"Auto-detected agent host: {ip}")
+                    return ip
+    except Exception:
+        pass
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            detected = s.getsockname()[0]
+        if detected and not detected.startswith("127."):
+            logger.info(f"Auto-detected agent host (UDP): {detected}")
+            return detected
+    except Exception:
+        pass
+
+    return socket.gethostname()
+
+
+async def _register_with_orchestrator() -> None:
     if not ORCHESTRATOR_URL:
         logger.info("No ORCHESTRATOR_URL — skipping registration")
         return
@@ -160,25 +281,29 @@ async def _register_with_orchestrator():
 
     import httpx
 
+    agent_host = _detect_agent_host()
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 f"{ORCHESTRATOR_URL}/api/agents/register",
                 json={
                     "agent_id": AGENT_ID,
-                    "host": os.getenv("AETHER_AGENT_HOST", socket.gethostname()),
+                    "host": agent_host,
                     "port": config.server.port,
                     "container_id": os.getenv("HOSTNAME", ""),
                     "user_id": AGENT_USER_ID or None,
                 },
                 headers=_agent_auth_headers(),
             )
-            logger.info(f"Registered with orchestrator: {resp.status_code}")
+            logger.info(
+                f"Registered with orchestrator: {resp.status_code} (host={agent_host})"
+            )
     except Exception as e:
         logger.error(f"Failed to register with orchestrator: {e}")
 
 
-async def _heartbeat_loop():
+async def _heartbeat_loop() -> None:
     import httpx
 
     while True:
@@ -193,7 +318,7 @@ async def _heartbeat_loop():
             logger.warning("Heartbeat to orchestrator failed")
 
 
-async def _fetch_plugin_configs():
+async def _fetch_plugin_configs() -> None:
     if not ORCHESTRATOR_URL or not AGENT_USER_ID:
         logger.debug(
             "No ORCHESTRATOR_URL or AGENT_USER_ID — skipping plugin config fetch"
@@ -234,9 +359,7 @@ async def _fetch_plugin_configs():
 
 
 @app.on_event("startup")
-async def startup():
-    global transport_manager
-
+async def startup() -> None:
     # Register with orchestrator and start heartbeat
     await _register_with_orchestrator()
     if ORCHESTRATOR_URL:
@@ -245,69 +368,17 @@ async def startup():
     # Fetch plugin configs
     await _fetch_plugin_configs()
 
-    # Build the transport layer
-    #   KernelCore starts providers (STT, LLM, TTS, Memory) via start_all()
-    #   No separate provider.start() calls needed.
-    core = KernelCore(
-        llm_provider=llm_provider,
-        memory_store=memory_store,
-        tool_registry=tool_registry,
-        skill_loader=skill_loader,
-        plugin_context=plugin_context_store,
-        stt_provider=stt_provider,
-        tts_provider=tts_provider,
-    )
+    # Start providers
+    await llm_provider.start()
+    await tts_provider.start()
+    await memory_store.start()
 
-    transport_manager = TransportManager(core=core)
-
-    # Register transports
-    ws_transport = WebSocketTransport()
-    await transport_manager.register_transport(ws_transport)
-
-    # Optional: WebRTC transport (self-hosted via aiortc)
-    if AIORTC_AVAILABLE and SmallWebRTCTransport is not None:
-        try:
-            ice_servers = []
-            stun_url = os.getenv("WEBRTC_STUN_URL", "stun:stun.l.google.com:19302")
-            if stun_url:
-                ice_servers.append({"urls": stun_url})
-
-            turn_url = os.getenv("WEBRTC_TURN_URL", "")
-            turn_username = os.getenv("WEBRTC_TURN_USERNAME", "")
-            turn_credential = os.getenv("WEBRTC_TURN_CREDENTIAL", "")
-            if turn_url:
-                ice_servers.append(
-                    {
-                        "urls": turn_url,
-                        "username": turn_username,
-                        "credential": turn_credential,
-                    }
-                )
-
-            webrtc_transport = SmallWebRTCTransport(
-                ice_servers=ice_servers or None,
-                sample_rate_in=48000,  # aiortc always delivers 48 kHz from the client
-            )
-            await transport_manager.register_transport(webrtc_transport)
-            logger.info("WebRTC transport registered (aiortc)")
-        except Exception as e:
-            logger.warning(f"Failed to register WebRTC transport: {e}")
-    else:
-        logger.info("WebRTC transport not available (aiortc not installed)")
-
-    # Start everything (core + transports)
-    await transport_manager.start_all()
-
-    # Inject scheduler reference into WebSocket transport for disconnect cancellation
-    scheduler_ref = getattr(core, "_scheduler", None)
-    if scheduler_ref is not None and ws_transport is not None:
-        ws_transport._scheduler = scheduler_ref
-        logger.info(
-            "Scheduler wired into WebSocket transport for disconnect cancellation"
-        )
+    # Start AgentCore (starts the scheduler worker pools)
+    await agent_core.start()
 
     logger.info(
-        "Aether v0.09 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s, plugin_ctx=%s)",
+        "Aether v0.10 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, "
+        "tools=%s, skills=%s, plugin_ctx=%s, webrtc=%s)",
         AGENT_ID,
         config.stt.provider,
         config.llm.provider,
@@ -315,65 +386,40 @@ async def startup():
         tool_registry.tool_names(),
         [s.name for s in skill_loader.all()],
         plugin_context_store.loaded_plugins(),
+        "available" if webrtc_transport else "unavailable",
     )
 
 
 @app.on_event("shutdown")
-async def shutdown():
-    global transport_manager
-    if transport_manager:
-        await transport_manager.stop_all()
-        transport_manager = None
+async def shutdown() -> None:
+    # Stop AgentCore (stops scheduler)
+    await agent_core.stop()
+
+    # Close WebRTC connections
+    if webrtc_transport:
+        await webrtc_transport.close_all()
+
+    # Stop providers
+    await llm_provider.stop()
+    await tts_provider.stop()
 
 
-# ── WebSocket endpoint — delegates to transport layer ──────────
+# ── WebSocket endpoint — notification sidecar ──────────────────
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, user_id: str = ""):
-    """
-    WebSocket endpoint — thin delegate to the transport layer.
-
-    The WebSocketTransport handles:
-    - Connection accept/close
-    - Protocol parsing (JSON messages)
-    - Normalizing to CoreMsg
-    - Routing through TransportManager → KernelCore
-    - Serializing responses back to the client
-    """
-    if not transport_manager:
-        await ws.close(code=1013, reason="Server not ready")
-        return
-
-    ws_transport: WebSocketTransport | None = transport_manager.get_transport(
-        "websocket"
-    )  # type: ignore[assignment]
-    if not ws_transport:
-        await ws.close(code=1013, reason="WebSocket transport not available")
-        return
-
-    await ws_transport.handle_connection(ws, user_id=user_id)
+async def websocket_endpoint(ws: WebSocket) -> None:
+    """WebSocket endpoint — push-only notification sidecar for dashboard."""
+    await ws_sidecar.handle_connection(ws)
 
 
 # ── WebRTC signaling endpoints ─────────────────────────────────
 
 
 @app.post("/webrtc/offer")
-async def webrtc_offer(request: Request):
-    """
-    WebRTC signaling: receive SDP offer, return SDP answer.
-
-    Client sends:
-        {"sdp": "...", "type": "offer", "user_id": "...", "pc_id": "..."}
-
-    Server returns:
-        {"sdp": "...", "type": "answer", "pc_id": "pc-xxxx"}
-    """
-    if not transport_manager:
-        return JSONResponse({"error": "Server not ready"}, status_code=503)
-
-    webrtc = transport_manager.get_transport("webrtc")
-    if not webrtc:
+async def webrtc_offer(request: Request) -> JSONResponse:
+    """WebRTC signaling: receive SDP offer, return SDP answer."""
+    if not webrtc_transport:
         return JSONResponse(
             {"error": "WebRTC transport not available"}, status_code=404
         )
@@ -388,7 +434,7 @@ async def webrtc_offer(request: Request):
         return JSONResponse({"error": "Missing SDP"}, status_code=400)
 
     try:
-        answer = await webrtc.handle_offer(  # type: ignore[union-attr]
+        answer = await webrtc_transport.handle_offer(
             sdp=sdp,
             sdp_type=sdp_type,
             user_id=user_id,
@@ -401,23 +447,9 @@ async def webrtc_offer(request: Request):
 
 
 @app.patch("/webrtc/ice")
-async def webrtc_ice(request: Request):
-    """
-    WebRTC signaling: add ICE candidates.
-
-    Client sends:
-        {
-            "pc_id": "pc-xxxx",
-            "candidates": [
-                {"candidate": "...", "sdpMid": "0", "sdpMLineIndex": 0}
-            ]
-        }
-    """
-    if not transport_manager:
-        return JSONResponse({"error": "Server not ready"}, status_code=503)
-
-    webrtc = transport_manager.get_transport("webrtc")
-    if not webrtc:
+async def webrtc_ice(request: Request) -> JSONResponse:
+    """WebRTC signaling: add ICE candidates."""
+    if not webrtc_transport:
         return JSONResponse(
             {"error": "WebRTC transport not available"}, status_code=404
         )
@@ -431,7 +463,7 @@ async def webrtc_ice(request: Request):
 
     try:
         for c in candidates:
-            await webrtc.handle_ice_candidate(  # type: ignore[union-attr]
+            await webrtc_transport.handle_ice_candidate(
                 pc_id=pc_id,
                 candidate=c.get("candidate", ""),
                 sdp_mid=c.get("sdpMid"),
@@ -445,20 +477,17 @@ async def webrtc_ice(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ── HTTP Chat Streaming (Vercel AI SDK compatible) ─────────────
+# ── Legacy /chat endpoint (backward compat) ───────────────────
 
 
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     """
-    HTTP streaming chat endpoint for dashboard text chat.
+    Legacy HTTP streaming chat endpoint for dashboard text chat.
 
-    Accepts AI SDK UI messages ("parts") and legacy messages ("content").
-    Streams plain text chunks via the kernel scheduler.
+    Streams plain text chunks via AgentCore. For OpenAI-compatible
+    format, use /v1/chat/completions instead.
     """
-    if not transport_manager:
-        return JSONResponse({"error": "Server not ready"}, status_code=503)
-
     body = await request.json()
     incoming_messages = body.get("messages", [])
     user_id = body.get("user_id", "")
@@ -466,19 +495,15 @@ async def chat_endpoint(request: Request):
     if not incoming_messages:
         return JSONResponse({"error": "No messages"}, status_code=400)
 
-    # Extract the latest user message.
-    # AI SDK format: {"role": "user", "parts": [{"type": "text", "text": "hello"}]}
-    # Legacy format: {"role": "user", "content": "hello"}
+    # Extract the latest user message (AI SDK + legacy format)
     last_user_msg = None
     for m in reversed(incoming_messages):
         if m.get("role") == "user":
-            # Try AI SDK format first (parts array)
             parts = m.get("parts", [])
             if parts:
                 last_user_msg = " ".join(
                     p.get("text", "") for p in parts if p.get("type") == "text"
                 )
-            # Fall back to legacy format (content string)
             else:
                 last_user_msg = m.get("content", "")
             break
@@ -486,49 +511,14 @@ async def chat_endpoint(request: Request):
     if not last_user_msg:
         return JSONResponse({"error": "No user message found"}, status_code=400)
 
-    # Get core and session
-    core: KernelCore = transport_manager.core  # type: ignore[assignment]
     session_id = f"http-{user_id or 'anon'}"
-    session = core._get_session(session_id, mode="text")
-    await core._ensure_session_started(session)
 
     async def generate():
-        """Stream plain text via scheduler."""
-        from aether.kernel.contracts import JobPriority, KernelRequest
-
         try:
-            session.turn_count += 1
-            request = KernelRequest(
-                kind="reply_text",
-                modality="text",
-                user_id=user_id or "anon",
-                session_id=session_id,
-                payload={
-                    "text": last_user_msg,
-                    "history": list(session.conversation_history),
-                },
-                priority=JobPriority.INTERACTIVE.value,
-            )
-
-            job_id = await core._scheduler.submit(request)
-            collected_text: list[str] = []
-
-            async for event in core._scheduler.stream(job_id):
+            async for event in agent_core.generate_reply(last_user_msg, session_id):
                 if event.stream_type == "text_chunk":
                     chunk = event.payload.get("text", "")
-                    collected_text.append(chunk)
                     yield chunk
-
-            # Update session history
-            session.conversation_history.append(
-                {"role": "user", "content": last_user_msg}
-            )
-            assistant_text = " ".join(collected_text).strip()
-            if assistant_text:
-                session.conversation_history.append(
-                    {"role": "assistant", "content": assistant_text}
-                )
-
         except Exception as e:
             logger.error(f"Chat stream error: {e}", exc_info=True)
             yield f"\n[error] {e}\n"
@@ -543,20 +533,29 @@ async def chat_endpoint(request: Request):
     )
 
 
-# ── REST endpoints (unchanged) ─────────────────────────────────
+# ── REST endpoints ─────────────────────────────────────────────
 
 
 @app.get("/")
-async def root():
+async def root() -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return HTMLResponse(index_path.read_text())
-    return HTMLResponse("<h1>Aether v0.08</h1><p>Client files not found.</p>")
+    return HTMLResponse("<h1>Aether v0.10</h1><p>Client files not found.</p>")
+
+
+@app.get("/webrtc")
+async def webrtc_test_page() -> HTMLResponse:
+    """Serve the WebRTC voice test page."""
+    webrtc_path = STATIC_DIR / "webrtc.html"
+    if webrtc_path.exists():
+        return HTMLResponse(webrtc_path.read_text())
+    return HTMLResponse("<h1>WebRTC test page not found</h1>", status_code=404)
 
 
 @app.get("/workspace")
 @app.get("/workspace/{path:path}")
-async def browse_workspace(path: str = ""):
+async def browse_workspace(path: str = "") -> JSONResponse:
     """Browse the workspace directory."""
     workspace = Path(WORKING_DIR)
     target = workspace / path
@@ -601,31 +600,16 @@ async def browse_workspace(path: str = ""):
 
 
 @app.get("/health")
-async def health():
-    """Health check — providers, memory, transport, and metrics snapshot."""
-    # Transport status includes core health
-    transport_status: dict = {"enabled": False}
-    core_health: dict = {}
-    if transport_manager:
-        try:
-            status = await transport_manager.get_status()
-            transport_status = {
-                "enabled": True,
-                "transports": list(status.get("transports", {}).keys()),
-                "connections": len(status.get("connections", {})),
-            }
-            core_health = status.get("core", {})
-        except Exception as e:
-            transport_status = {"enabled": True, "error": str(e)}
+async def health() -> JSONResponse:
+    """Health check — AgentCore, providers, memory, and metrics snapshot."""
+    # AgentCore health includes scheduler status
+    agent_health = await agent_core.health_check()
 
-    # Fallback: direct provider health if core didn't report
-    providers = core_health.get("providers", {})
-    if not providers:
-        providers = {
-            "stt": await stt_provider.health_check(),
-            "llm": await llm_provider.health_check(),
-            "tts": await tts_provider.health_check(),
-        }
+    providers = {
+        "stt": await stt_provider.health_check(),
+        "llm": await llm_provider.health_check(),
+        "tts": await tts_provider.health_check(),
+    }
 
     facts = await memory_store.get_facts()
     recent = await memory_store.get_recent(limit=1)
@@ -633,7 +617,7 @@ async def health():
     return JSONResponse(
         {
             "status": "ok",
-            "version": "0.0.9",
+            "version": "0.10.0",
             "providers": providers,
             "memory": {
                 "facts_count": len(facts),
@@ -641,29 +625,27 @@ async def health():
             },
             "tools": tool_registry.tool_names(),
             "skills": [s.name for s in skill_loader.all()],
-            "transport": transport_status,
+            "agent_core": agent_health,
+            "transports": {
+                "http": True,
+                "webrtc": webrtc_transport is not None,
+                "ws_sidecar": True,
+                "ws_connections": ws_sidecar.connection_count,
+            },
             "metrics": metrics.snapshot(),
         }
     )
 
 
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint() -> JSONResponse:
     """Full in-process metrics snapshot (counters, gauges, histogram percentiles)."""
     return JSONResponse(metrics.snapshot())
 
 
 @app.get("/metrics/latency")
-async def latency_metrics():
-    """SLO-focused latency metrics — p50/p95 for all critical paths.
-
-    Compare against SLO thresholds from REFACTOR.md:
-        /chat TTFT p95      ≤ 1800ms  (fail > 2000ms)
-        Voice TTFT p95      ≤ 2200ms  (fail > 2500ms)
-        Voice audio p95     ≤  900ms  (fail > 1100ms)
-        Tool execution p95  ≤ +15% baseline
-        Notification p95    ≤ 1200ms  (fail > 1500ms)
-    """
+async def latency_metrics() -> JSONResponse:
+    """SLO-focused latency metrics — p50/p95 for all critical paths."""
     return JSONResponse(
         {
             "chat": {
@@ -707,19 +689,19 @@ async def latency_metrics():
 
 
 @app.get("/memory/facts")
-async def memory_facts():
+async def memory_facts() -> JSONResponse:
     facts = await memory_store.get_facts()
     return JSONResponse({"facts": facts})
 
 
 @app.get("/memory/sessions")
-async def memory_sessions():
+async def memory_sessions() -> JSONResponse:
     sessions = await memory_store.get_session_summaries()
     return JSONResponse({"sessions": sessions})
 
 
 @app.get("/memory/conversations")
-async def memory_conversations(limit: int = 20):
+async def memory_conversations(limit: int = 20) -> JSONResponse:
     conversations = await memory_store.get_recent(limit=limit)
     return JSONResponse({"conversations": conversations})
 
@@ -728,7 +710,7 @@ async def memory_conversations(limit: int = 20):
 
 
 @app.get("/config")
-async def get_config():
+async def get_config() -> JSONResponse:
     cfg = _config_mod.config
     return JSONResponse(
         {
@@ -755,7 +737,7 @@ async def get_config():
 
 
 @app.post("/config/reload")
-async def config_reload(request_body: dict | None = None):
+async def config_reload(request_body: dict | None = None) -> JSONResponse:
     if request_body:
         for key, value in request_body.items():
             os.environ[key] = str(value)
@@ -779,7 +761,7 @@ async def config_reload(request_body: dict | None = None):
 
 
 @app.get("/plugins")
-async def list_plugins_endpoint():
+async def list_plugins_endpoint() -> JSONResponse:
     return JSONResponse(
         {
             "plugins": [
@@ -796,14 +778,14 @@ async def list_plugins_endpoint():
     )
 
 
-# ── Plugin event endpoints — routed through transport layer ────
+# ── Plugin event endpoints — routed through AgentCore ──────────
 
 
 @app.post("/plugin_event")
-async def receive_plugin_event(request: Request):
+async def receive_plugin_event(request: Request) -> JSONResponse:
     """
     Receive a plugin event from the orchestrator webhook receiver.
-    Runs through EventProcessor → broadcasts to connected clients via transport layer.
+    Runs through EventProcessor → broadcasts to WS sidecar clients.
     """
     body = await request.json()
 
@@ -825,23 +807,18 @@ async def receive_plugin_event(request: Request):
 
     decision = await event_processor.process(event)
 
-    # Broadcast notification to connected clients via transport layer
-    if decision.action in ("surface", "action_required") and transport_manager:
+    # Broadcast notification to WS sidecar clients via AgentCore
+    if decision.action in ("surface", "action_required"):
         level = "speak" if decision.action == "action_required" else "nudge"
-        notification = CoreMsg.event(
-            event_type="notification",
-            user_id="",  # broadcast — no specific user
-            session_id="",
-            payload={
+        await agent_core.broadcast_notification(
+            {
                 "event_id": event.id,
                 "plugin": event.plugin,
                 "level": level,
                 "text": decision.notification,
                 "actions": event.available_actions,
-            },
-            transport="notification",
+            }
         )
-        await transport_manager.broadcast(notification)
 
     # Report decision back to orchestrator
     if ORCHESTRATOR_URL and body.get("event_id"):
@@ -866,7 +843,7 @@ async def receive_plugin_event(request: Request):
 
 
 @app.post("/plugin_event/batch")
-async def receive_batch_notification(request: Request):
+async def receive_batch_notification(request: Request) -> JSONResponse:
     """Receive a batch of deferred plugin events for flushing."""
     body = await request.json()
     items = body.get("events", [])
@@ -880,18 +857,12 @@ async def receive_batch_notification(request: Request):
     )
     batch_text += " ".join(summaries)
 
-    if transport_manager:
-        notification = CoreMsg.event(
-            event_type="notification",
-            user_id="",
-            session_id="",
-            payload={
-                "level": "batch",
-                "text": batch_text,
-                "items": items,
-            },
-            transport="notification",
-        )
-        await transport_manager.broadcast(notification)
+    await agent_core.broadcast_notification(
+        {
+            "level": "batch",
+            "text": batch_text,
+            "items": items,
+        }
+    )
 
     return JSONResponse({"status": "delivered", "count": count})
