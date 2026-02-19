@@ -74,7 +74,7 @@ services:
       - AETHER_TURN_MODEL_REVISION=${AETHER_TURN_MODEL_REVISION:-v1.2.2-en}
       - AETHER_TURN_MODEL_FILENAME=${AETHER_TURN_MODEL_FILENAME:-model.onnx}
       - AETHER_TURN_MODEL_RELATIVE_DIR=${AETHER_TURN_MODEL_RELATIVE_DIR:-turn-detector}
-      - AETHER_TURN_MODEL_FILES=${AETHER_TURN_MODEL_FILES:-onnx/model.onnx,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json}
+      - AETHER_TURN_MODEL_FILES=${AETHER_TURN_MODEL_FILES:-onnx/model.onnx,languages.json,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json}
       - AETHER_TURN_MIN_ENDPOINTING_DELAY=${AETHER_TURN_MIN_ENDPOINTING_DELAY:-0.5}
       - AETHER_TURN_MAX_ENDPOINTING_DELAY=${AETHER_TURN_MAX_ENDPOINTING_DELAY:-3.0}
       - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}

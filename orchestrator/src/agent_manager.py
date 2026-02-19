@@ -64,7 +64,7 @@ AETHER_TURN_MODEL_FILES = [
     p.strip()
     for p in os.getenv(
         "AETHER_TURN_MODEL_FILES",
-        "onnx/model.onnx,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json",
+        "onnx/model.onnx,languages.json,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json",
     ).split(",")
     if p.strip()
 ]
