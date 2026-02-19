@@ -129,13 +129,26 @@ class WebRTCVoiceTransport:
             # TTS provider returns 24kHz PCM16 mono; WebRTC track expects 48kHz.
             # Build an AudioFrame from the raw PCM so av can resample it properly.
             sample_count = len(audio_bytes) // 2  # 16-bit = 2 bytes per sample
+            logger.info(
+                "send_audio: %d bytes (%d samples) input at 24kHz",
+                len(audio_bytes),
+                sample_count,
+            )
             src_frame = AudioFrame(format="s16", layout="mono", samples=sample_count)
             src_frame.sample_rate = 24000
             src_frame.planes[0].update(audio_bytes)
 
             resampled_frames = tts_resampler.resample(src_frame)
+            total_queued = 0
             for rf in resampled_frames:
-                audio_out.add_audio(rf.planes[0].to_bytes())
+                data = rf.to_ndarray().tobytes()
+                total_queued += len(data)
+                audio_out.add_audio(data)
+            logger.info(
+                "send_audio: resampled to %d bytes, queue size=%d",
+                total_queued,
+                audio_out._queue.qsize(),
+            )
 
         voice_session.on_audio_out = send_audio
 
@@ -355,6 +368,8 @@ class AudioOutputTrack(MediaStreamTrack):
         self._buffer = b""
         self._pts = 0
         self._start_time: float | None = None  # Wall-clock anchor for pacing
+        self._audio_frames_served = 0  # Diagnostic counter
+        self._silence_frames_served = 0
 
     def add_audio(self, audio_bytes: bytes) -> None:
         """Queue TTS audio bytes for playback."""
@@ -384,13 +399,15 @@ class AudioOutputTrack(MediaStreamTrack):
         frame_size = self._samples_per_frame * 2  # 16-bit = 2 bytes per sample
 
         # Fill buffer from queue
+        had_audio = len(self._buffer) >= frame_size  # Already have leftover data
         while len(self._buffer) < frame_size:
             try:
                 chunk = self._queue.get_nowait()
                 self._buffer += chunk
+                had_audio = True
             except asyncio.QueueEmpty:
-                # No audio available — send silence
-                self._buffer += b"\x00" * frame_size
+                # No audio available — pad with silence
+                self._buffer += b"\x00" * (frame_size - len(self._buffer))
                 break
 
         # Extract one frame
@@ -405,6 +422,20 @@ class AudioOutputTrack(MediaStreamTrack):
 
         # Copy PCM data into frame
         frame.planes[0].update(frame_bytes)
+
+        # Diagnostic logging
+        if not had_audio:
+            self._silence_frames_served += 1
+        else:
+            self._audio_frames_served += 1
+            if self._audio_frames_served <= 5 or self._audio_frames_served % 100 == 0:
+                logger.info(
+                    "AudioOutputTrack: serving audio frame #%d (pts=%d, qsize=%d, buf=%d)",
+                    self._audio_frames_served,
+                    self._pts,
+                    self._queue.qsize(),
+                    len(self._buffer),
+                )
 
         return frame
 

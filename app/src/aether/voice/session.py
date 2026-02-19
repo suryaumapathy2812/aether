@@ -59,6 +59,9 @@ class VoiceSession:
         self.is_muted = False
         self._tts_playing = False  # Echo suppression: mute STT input during TTS
         self._tts_cooldown_until: float = 0.0  # Timestamp: ignore mic until echo fades
+        self._assistant_speaking_until: float = 0.0
+        self._audio_in_count = 0
+        self._audio_in_dropped = 0
         self.accumulated_transcript = ""
         self._debounce_task: asyncio.Task | None = None
         self._stt_event_task: asyncio.Task | None = None
@@ -120,7 +123,22 @@ class VoiceSession:
             return
         # Echo suppression: drop mic audio while TTS is playing (+ 300ms cooldown)
         if self._tts_playing or time.time() < self._tts_cooldown_until:
+            self._audio_in_dropped += 1
+            if self._audio_in_dropped <= 3 or self._audio_in_dropped % 200 == 0:
+                logger.info(
+                    "Echo suppression: dropped %d audio chunks (tts_playing=%s, cooldown_remaining=%.1fs)",
+                    self._audio_in_dropped,
+                    self._tts_playing,
+                    max(0, self._tts_cooldown_until - time.time()),
+                )
             return
+        self._audio_in_count += 1
+        if self._audio_in_count <= 3 or self._audio_in_count % 500 == 0:
+            logger.info(
+                "Audio to STT: chunk #%d (%d bytes)",
+                self._audio_in_count,
+                len(pcm_bytes),
+            )
         await self.stt.send_audio(pcm_bytes)
 
     # ─── STT Event Loop ──────────────────────────────────────────
@@ -138,6 +156,7 @@ class VoiceSession:
                     # Interim transcript
                     is_interim = frame.metadata.get("interim", False)
                     if is_interim and not self.is_responding:
+                        logger.info("STT interim: %r", str(frame.data)[:80])
                         await self._send_text_event(
                             "transcript", frame.data, interim=True
                         )
@@ -155,6 +174,7 @@ class VoiceSession:
                             if isinstance(frame.data, dict)
                             else ""
                         )
+                        logger.info("STT utterance_end: %r", transcript[:120])
                         self.accumulated_transcript += " " + transcript
                         self.accumulated_transcript = (
                             self.accumulated_transcript.strip()
@@ -168,8 +188,21 @@ class VoiceSession:
                         )
 
                     elif action == "speech_started":
-                        # Barge-in: cancel in-progress response
-                        if self.is_responding and self._response_task:
+                        is_assistant_speaking = (
+                            time.time() < self._assistant_speaking_until
+                        )
+                        logger.info(
+                            "STT speech_started (responding=%s, assistant_speaking=%s)",
+                            self.is_responding,
+                            is_assistant_speaking,
+                        )
+                        # Barge-in only while assistant audio is actively playing.
+                        # Avoid canceling during thinking phase due ambient speech/noise.
+                        if (
+                            self.is_responding
+                            and self._response_task
+                            and is_assistant_speaking
+                        ):
                             self._response_task.cancel()
                             self.is_responding = False
                             await self.agent.cancel_session(self.session_id)
@@ -264,13 +297,21 @@ class VoiceSession:
         try:
             self._tts_playing = True
             audio_bytes = await self.tts_provider.synthesize(text)
+            logger.info(
+                "TTS synthesized: %d bytes (%.1fs) for %r",
+                len(audio_bytes),
+                len(audio_bytes) / 48000.0,
+                text[:60],
+            )
             await self.on_audio_out(audio_bytes)
+            logger.info("TTS audio queued to output track")
             # Estimate playback duration: 24kHz 16-bit mono = 48000 bytes/sec
             playback_secs = len(audio_bytes) / 48000.0
+            self._assistant_speaking_until = time.time() + playback_secs
             # Set cooldown: wait for audio to finish playing + 300ms for echo tail
             self._tts_cooldown_until = time.time() + playback_secs + 0.3
         except Exception as e:
-            logger.warning("TTS failed: %s", e)
+            logger.warning("TTS failed: %s", e, exc_info=True)
         finally:
             self._tts_playing = False
 
