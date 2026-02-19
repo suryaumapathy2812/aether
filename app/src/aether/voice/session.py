@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from aether.core.config import config
@@ -112,6 +113,9 @@ class VoiceSession:
         self.on_audio_out: Callable[[bytes], Awaitable[None]] | None = None
         self.on_barge_in: Callable[[], Awaitable[None]] | None = None
         self.on_text_event: Callable[[dict], Awaitable[None]] | None = None
+        # Called by the transport after resampling with the actual PCM duration.
+        # More accurate than estimating from raw TTS bytes (which may be MP3/WAV).
+        self.on_tts_duration: Callable[[float], None] | None = None
 
     # ─── Lifecycle ───────────────────────────────────────────────
 
@@ -551,23 +555,36 @@ class VoiceSession:
     # ─── TTS ─────────────────────────────────────────────────────
 
     async def _synthesize_and_send(self, text: str) -> None:
-        """Text → TTS → audio out callback."""
-        if not text.strip() or not self.on_audio_out:
+        """Text → TTS → audio out callback.
+
+        Strips non-speakable characters (emoji, symbols) before synthesis so
+        TTS providers don't waste a round-trip on unpronounceable glyphs.
+
+        Echo suppression timing is set via on_tts_duration() called by the
+        transport after resampling — that gives us the true PCM playback
+        duration regardless of whether the provider returned MP3, WAV, or PCM.
+        """
+        clean = _clean_for_tts(text)
+        if not clean or not self.on_audio_out:
+            if text.strip() and not clean:
+                logger.debug(
+                    "TTS skipped — text contained only non-speakable chars: %r",
+                    text[:60],
+                )
             return
         try:
             self._tts_playing = True
-            audio_bytes = await self.tts_provider.synthesize(text)
-            logger.info(
-                "TTS: %d bytes (%.1fs) for %r",
-                len(audio_bytes),
-                len(audio_bytes) / 48000.0,
-                text[:60],
-            )
+            audio_bytes = await self.tts_provider.synthesize(clean)
+            logger.info("TTS: %d bytes for %r", len(audio_bytes), clean[:60])
             await self.on_audio_out(audio_bytes)
             logger.info("TTS audio queued")
-            playback_secs = len(audio_bytes) / 48000.0
-            self._assistant_speaking_until = time.time() + playback_secs
-            self._tts_cooldown_until = time.time() + playback_secs + 0.3
+            # _assistant_speaking_until and _tts_cooldown_until are updated by
+            # on_tts_duration() once the transport knows the resampled PCM size.
+            # If the transport doesn't call it (e.g. tests), fall back to a
+            # conservative 3-second guard so echo suppression still activates.
+            if not self.on_tts_duration:
+                self._assistant_speaking_until = time.time() + 3.0
+                self._tts_cooldown_until = time.time() + 3.3
         except Exception as e:
             logger.warning("TTS failed: %s", e, exc_info=True)
         finally:
@@ -593,3 +610,57 @@ def _split_sentences(text: str) -> list[str]:
     """Split on sentence boundaries for low-latency TTS chunking."""
     parts = re.split(r"(?<=[.!?])\s+", text)
     return parts if parts else [text]
+
+
+# Unicode categories that are non-speakable (emoji, symbols, surrogates, etc.)
+_NON_SPEAKABLE_CATEGORIES = frozenset(
+    {
+        "So",  # Other symbol (emoji, misc symbols)
+        "Sm",  # Math symbol
+        "Sk",  # Modifier symbol
+        "Cs",  # Surrogate
+        "Co",  # Private use
+        "Cn",  # Unassigned
+    }
+)
+
+# Emoji ranges not always caught by category (e.g. ZWJ sequences, variation selectors)
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001f600-\U0001f64f"  # emoticons
+    "\U0001f300-\U0001f5ff"  # misc symbols & pictographs
+    "\U0001f680-\U0001f6ff"  # transport & map
+    "\U0001f700-\U0001f77f"  # alchemical
+    "\U0001f780-\U0001f7ff"  # geometric shapes extended
+    "\U0001f800-\U0001f8ff"  # supplemental arrows-c
+    "\U0001f900-\U0001f9ff"  # supplemental symbols & pictographs
+    "\U0001fa00-\U0001fa6f"  # chess symbols
+    "\U0001fa70-\U0001faff"  # symbols & pictographs extended-a
+    "\U00002702-\U000027b0"  # dingbats
+    "\U000024c2-\U0001f251"  # enclosed chars
+    "\ufe0f"  # variation selector-16 (emoji presentation)
+    "\u200d"  # zero-width joiner
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _clean_for_tts(text: str) -> str:
+    """Strip emoji and non-speakable Unicode characters before TTS synthesis.
+
+    Removes:
+    - Emoji (via regex covering all major Unicode emoji blocks)
+    - Characters in non-speakable Unicode categories (So, Sm, Sk, Cs, Co, Cn)
+
+    Preserves all normal Latin, CJK, Devanagari, punctuation, digits, etc.
+    Collapses any resulting double-spaces and strips leading/trailing whitespace.
+    """
+    # Remove emoji sequences first (handles ZWJ sequences, variation selectors)
+    text = _EMOJI_RE.sub("", text)
+    # Remove remaining non-speakable category chars
+    text = "".join(
+        ch for ch in text if unicodedata.category(ch) not in _NON_SPEAKABLE_CATEGORIES
+    )
+    # Collapse multiple spaces left by removed chars
+    text = re.sub(r"  +", " ", text).strip()
+    return text

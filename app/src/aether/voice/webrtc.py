@@ -148,18 +148,34 @@ class WebRTCVoiceTransport:
                 data = rf.to_ndarray().tobytes()
                 total_queued += len(data)
                 audio_out.add_audio(data)
+
+            # Calculate true playback duration from resampled PCM:
+            # 48kHz mono s16 = 48000 samples/sec × 2 bytes/sample = 96000 bytes/sec
+            playback_secs = total_queued / 96000.0
             logger.info(
-                "send_audio: resampled to %d bytes, queue size=%d",
+                "send_audio: resampled to %d bytes (%.2fs), queue size=%d",
                 total_queued,
+                playback_secs,
                 audio_out._queue.qsize(),
             )
+            if voice_session.on_tts_duration:
+                voice_session.on_tts_duration(playback_secs)
 
         async def on_barge_in() -> None:
             audio_out.clear_audio()
             logger.info("AudioOutputTrack: cleared buffered audio on barge-in")
 
+        def on_tts_duration(playback_secs: float) -> None:
+            """Update echo suppression window with the true PCM playback duration."""
+            import time as _time
+
+            now = _time.time()
+            voice_session._assistant_speaking_until = now + playback_secs
+            voice_session._tts_cooldown_until = now + playback_secs + 0.3
+
         voice_session.on_audio_out = send_audio
         voice_session.on_barge_in = on_barge_in
+        voice_session.on_tts_duration = on_tts_duration
 
         # Store connection
         conn = WebRTCConnection(
