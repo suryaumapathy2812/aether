@@ -242,6 +242,43 @@ class VADConfig:
 
 
 @dataclass(frozen=True)
+class TurnDetectionConfig:
+    """LiveKit turn detector settings."""
+
+    mode: str = "off"  # off | shadow | active
+    model_type: str = "multilingual"  # en | multilingual
+    model_repo: str = "livekit/turn-detector"
+    model_revision: str = "v0.4.1-intl"
+    model_filename: str = "model_q8.onnx"
+    model_dir: str = "/models/turn-detector"
+    min_endpointing_delay: float = 0.5
+    max_endpointing_delay: float = 3.0
+    inference_timeout_seconds: float = 0.35
+
+    @classmethod
+    def from_env(cls) -> "TurnDetectionConfig":
+        model_type = os.getenv("AETHER_TURN_MODEL_TYPE", "multilingual").lower()
+        default_revision = "v1.2.2-en" if model_type == "en" else "v0.4.1-intl"
+        return cls(
+            mode=os.getenv("AETHER_TURN_DETECTION_MODE", "off").lower(),
+            model_type=model_type,
+            model_repo=os.getenv("AETHER_TURN_MODEL_REPO", "livekit/turn-detector"),
+            model_revision=os.getenv("AETHER_TURN_MODEL_REVISION", default_revision),
+            model_filename=os.getenv("AETHER_TURN_MODEL_FILENAME", "model_q8.onnx"),
+            model_dir=os.getenv("AETHER_TURN_MODEL_DIR", "/models/turn-detector"),
+            min_endpointing_delay=float(
+                os.getenv("AETHER_TURN_MIN_ENDPOINTING_DELAY", "0.5")
+            ),
+            max_endpointing_delay=float(
+                os.getenv("AETHER_TURN_MAX_ENDPOINTING_DELAY", "3.0")
+            ),
+            inference_timeout_seconds=float(
+                os.getenv("AETHER_TURN_INFERENCE_TIMEOUT_SECONDS", "2.0")
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class AetherConfig:
     """Root configuration — one object to rule them all."""
 
@@ -253,6 +290,7 @@ class AetherConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     kernel: KernelConfig = field(default_factory=KernelConfig)
     vad: VADConfig = field(default_factory=VADConfig)
+    turn_detection: TurnDetectionConfig = field(default_factory=TurnDetectionConfig)
 
     @classmethod
     def from_env(cls) -> AetherConfig:
@@ -265,6 +303,7 @@ class AetherConfig:
             server=ServerConfig.from_env(),
             kernel=KernelConfig.from_env(),
             vad=VADConfig.from_env(),
+            turn_detection=TurnDetectionConfig.from_env(),
         )
 
 

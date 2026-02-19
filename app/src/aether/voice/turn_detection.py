@@ -76,10 +76,15 @@ class LiveKitTurnDetector:
         messages = history[-(MAX_HISTORY_TURNS - 1) :] + [
             {"role": "user", "content": user_text}
         ]
-        probability = await asyncio.wait_for(
-            asyncio.to_thread(self._predict_probability_sync, messages),
-            timeout=self._cfg.inference_timeout_seconds,
-        )
+        try:
+            probability = await asyncio.wait_for(
+                asyncio.to_thread(self._predict_probability_sync, messages),
+                timeout=self._cfg.inference_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(
+                f"Turn detector inference timed out after {self._cfg.inference_timeout_seconds}s"
+            )
 
         threshold = self._resolve_threshold(language)
         likely_end = probability >= threshold
@@ -99,6 +104,7 @@ class LiveKitTurnDetector:
         import numpy as np
 
         text = self._format_chat_context(messages)
+        logger.debug("Turn detector input: %r", text[:200])
         inputs = self._tokenizer(
             text,
             add_special_tokens=False,
@@ -106,10 +112,18 @@ class LiveKitTurnDetector:
             max_length=MAX_HISTORY_TOKENS,
             truncation=True,
         )
+        token_count = inputs["input_ids"].shape[-1]
         outputs = self._session.run(
             None, {"input_ids": inputs["input_ids"].astype("int64")}
         )
-        return float(outputs[0].flatten()[-1])
+        probability = float(outputs[0].flatten()[-1])
+        logger.debug(
+            "Turn detector raw: tokens=%d logit=%.4f p=%.4f",
+            token_count,
+            outputs[0].flatten()[-1],
+            probability,
+        )
+        return probability
 
     def _warmup(self) -> None:
         try:
