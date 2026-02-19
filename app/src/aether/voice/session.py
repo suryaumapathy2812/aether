@@ -21,9 +21,11 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from aether.core.config import config
 from aether.core.frames import Frame, FrameType
 from aether.core.metrics import metrics
 from aether.providers.deepgram_stt import DeepgramSTTProvider
+from aether.voice.turn_detection import TurnDecision, build_turn_detector
 
 if TYPE_CHECKING:
     from aether.agent import AgentCore
@@ -61,9 +63,17 @@ class VoiceSession:
         self._tts_cooldown_until: float = 0.0  # Timestamp: ignore mic until echo fades
         self._assistant_speaking_until: float = 0.0
         self._last_barge_in_at: float = 0.0
+        self._vad_speaking = False
+        self._last_interim_at: float = 0.0
+        self._last_interim_text: str = ""
+        self._last_final_text: str = ""
+        self._last_user_activity_at: float = time.time()
+        self._turn_commit_token: int = 0
         self._audio_in_count = 0
         self._audio_in_dropped = 0
         self.accumulated_transcript = ""
+        self._dialog_history: list[dict[str, str]] = []
+        self._turn_detector = build_turn_detector(config.turn_detection)
         self._debounce_task: asyncio.Task | None = None
         self._stt_event_task: asyncio.Task | None = None
         self._response_task: asyncio.Task | None = None
@@ -133,6 +143,8 @@ class VoiceSession:
                     self._tts_playing,
                     max(0, self._tts_cooldown_until - time.time()),
                 )
+            # Keep STT websocket alive during suppression windows.
+            await self.stt.send_audio(b"\x00" * len(pcm_bytes))
             return
         self._audio_in_count += 1
         if self._audio_in_count <= 3 or self._audio_in_count % 500 == 0:
@@ -151,6 +163,22 @@ class VoiceSession:
         """
         action = event.get("action", "")
         probability = float(event.get("probability", 0.0))
+
+        if action == "speech_started":
+            self._vad_speaking = True
+            self._last_user_activity_at = time.time()
+        elif action == "speech_ended":
+            self._vad_speaking = False
+            logger.info(
+                "VAD speech_ended — transcript=%r responding=%s",
+                self.accumulated_transcript.strip()[:60],
+                self.is_responding,
+            )
+            # VAD speech_ended is the authoritative commit trigger.
+            # Schedule regardless of whether utterance_end was seen —
+            # _debounce_and_trigger will bail early if transcript is empty.
+            if not self.is_responding:
+                self._schedule_turn_commit()
 
         if mode == "shadow":
             logger.debug("VAD %s (p=%.3f)", action, probability)
@@ -180,9 +208,43 @@ class VoiceSession:
                     is_interim = frame.metadata.get("interim", False)
                     if is_interim and not self.is_responding:
                         logger.info("STT interim: %r", str(frame.data)[:80])
+                        self._last_user_activity_at = time.time()
+                        self._last_interim_at = time.time()
+                        self._last_interim_text = str(frame.data)
                         await self._send_text_event(
                             "transcript", frame.data, interim=True
                         )
+                    elif not is_interim:
+                        final_text = str(frame.data).strip()
+                        if not final_text:
+                            continue
+                        self._last_user_activity_at = time.time()
+                        # Ignore duplicate final chunks occasionally emitted by STT.
+                        if final_text == self._last_final_text:
+                            continue
+                        self._last_final_text = final_text
+                        self.accumulated_transcript += (
+                            " " + final_text
+                            if self.accumulated_transcript
+                            else final_text
+                        )
+                        # LiveKit pattern: if VAD already ended before this
+                        # transcript arrived (the race condition), trigger EOU
+                        # now. VAD speech_ended fired with empty transcript and
+                        # bailed — this is the catch-up path.
+                        if (
+                            not self._vad_speaking
+                            and not self.is_responding
+                            and (
+                                self._debounce_task is None
+                                or self._debounce_task.done()
+                            )
+                        ):
+                            logger.info(
+                                "Final transcript arrived after VAD ended — scheduling commit: %r",
+                                final_text[:60],
+                            )
+                            self._schedule_turn_commit()
 
                 elif frame.type == FrameType.CONTROL:
                     action = (
@@ -192,23 +254,24 @@ class VoiceSession:
                     )
 
                     if action == "utterance_end":
+                        # utterance_end is used only for transcript accumulation.
+                        # Turn commits are driven by VAD speech_ended (primary)
+                        # or final transcript arrival after VAD ended (catch-up).
                         transcript = (
                             frame.data.get("transcript", "")
                             if isinstance(frame.data, dict)
                             else ""
                         )
-                        logger.info("STT utterance_end: %r", transcript[:120])
-                        self.accumulated_transcript += " " + transcript
-                        self.accumulated_transcript = (
-                            self.accumulated_transcript.strip()
+                        text = transcript.strip()
+                        if text and text != self._last_final_text:
+                            self._last_final_text = text
+                            self.accumulated_transcript += (
+                                " " + text if self.accumulated_transcript else text
+                            )
+                        logger.debug(
+                            "STT utterance_end (transcript only): %r", transcript[:80]
                         )
-
-                        # Cancel old debounce, start new
-                        if self._debounce_task and not self._debounce_task.done():
-                            self._debounce_task.cancel()
-                        self._debounce_task = asyncio.create_task(
-                            self._debounce_and_trigger()
-                        )
+                        continue
 
                     elif action == "speech_started":
                         logger.info(
@@ -216,20 +279,73 @@ class VoiceSession:
                             self.is_responding,
                             time.time() < self._assistant_speaking_until,
                         )
-                        await self._handle_barge_in("stt")
+                        # Only treat STT speech_started as real user activity
+                        # when VAD also confirms speech. Deepgram fires
+                        # speech_started on background noise constantly.
+                        if self._vad_speaking:
+                            self._last_user_activity_at = time.time()
+                            # User genuinely resumed speaking — cancel any
+                            # pending commit so we don't respond mid-sentence.
+                            if (
+                                not self.is_responding
+                                and self._debounce_task
+                                and not self._debounce_task.done()
+                            ):
+                                self._debounce_task.cancel()
+                                self._turn_commit_token += 1
+                        await self._handle_barge_in(
+                            "stt", allow_thinking_interrupt=True
+                        )
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error("STT event loop error: %s", e, exc_info=True)
 
-    async def _debounce_and_trigger(self) -> None:
-        """Wait for silence, then trigger voice response."""
+    async def _debounce_and_trigger(self, token: int) -> None:
+        """Wait for silence, then trigger voice response.
+
+        Flow:
+        1. Run turn detector ONCE on current transcript to get delay.
+        2. If VAD says user is still speaking, wait for speech_ended
+           (via cancellation + re-schedule from on_vad_event) rather
+           than polling in a hot loop.
+        3. After delay elapses, commit if token is still valid and VAD
+           is not active. No idle_for guard — VAD is the sole gating
+           signal to avoid noise-triggered resets.
+        """
         try:
-            await asyncio.sleep(0.5)  # 500ms debounce
+            if token != self._turn_commit_token:
+                return
+            text = self.accumulated_transcript.strip()
+            if not text:
+                return
+
+            # If VAD says user is still speaking, bail out now.
+            # on_vad_event(speech_ended) will re-schedule when they stop.
+            if self._vad_speaking:
+                logger.info("Turn commit deferred: VAD reports user still speaking")
+                return
+
+            # Run turn detector exactly once for this commit attempt.
+            delay_s = await self._resolve_endpoint_delay(text)
+
+            await asyncio.sleep(delay_s)
+
+            if token != self._turn_commit_token:
+                return
+
+            # Final VAD guard: if user started speaking again during the
+            # delay, bail out — on_vad_event will re-schedule.
+            if self._vad_speaking:
+                logger.info(
+                    "Turn commit aborted after delay: VAD reports user speaking again"
+                )
+                return
 
             text = self.accumulated_transcript.strip()
             self.accumulated_transcript = ""
+            self._last_final_text = ""
             if not text:
                 return
 
@@ -238,7 +354,7 @@ class VoiceSession:
                 name=f"voice-response-{self.session_id}",
             )
         except asyncio.CancelledError:
-            pass  # User still speaking, debounce reset
+            pass  # User still speaking — debounce reset via _schedule_turn_commit
 
     # ─── Voice Response ──────────────────────────────────────────
 
@@ -246,6 +362,7 @@ class VoiceSession:
         """Complete voice response: LLM → TTS → audio out."""
         self.is_responding = True
         response_start = time.time()
+        assistant_text = ""
 
         try:
             # Send final transcript
@@ -259,6 +376,7 @@ class VoiceSession:
                 if event.stream_type == "text_chunk":
                     chunk = event.payload.get("text", "")
                     await self._send_text_event("text_chunk", chunk)
+                    assistant_text += chunk
 
                     # Sentence-level TTS for low latency
                     sentence_buffer += chunk
@@ -286,6 +404,9 @@ class VoiceSession:
 
             await self._send_text_event("stream_end", "")
 
+            self._append_dialog_turn("user", text)
+            self._append_dialog_turn("assistant", assistant_text)
+
             elapsed_ms = (time.time() - response_start) * 1000
             metrics.observe("voice.response_ms", elapsed_ms)
 
@@ -299,8 +420,68 @@ class VoiceSession:
             if self.is_streaming:
                 await self._send_text_event("status", "listening...")
 
+            pending_text = self.accumulated_transcript.strip()
+            if pending_text and self.is_streaming:
+                logger.info("Processing deferred utterance after response completion")
+                self._schedule_turn_commit()
+
+    def _schedule_turn_commit(self) -> None:
+        self._turn_commit_token += 1
+        token = self._turn_commit_token
+        if self._debounce_task and not self._debounce_task.done():
+            self._debounce_task.cancel()
+        self._debounce_task = asyncio.create_task(self._debounce_and_trigger(token))
+
+    async def _resolve_endpoint_delay(self, text: str) -> float:
+        # In active mode, be conservative on failures to avoid cutting users off.
+        default_delay = (
+            config.turn_detection.max_endpointing_delay
+            if config.turn_detection.mode == "active"
+            else 0.5
+        )
+        if not self._turn_detector:
+            return default_delay
+
+        try:
+            decision: TurnDecision = await self._turn_detector.predict_delay(
+                self._dialog_history,
+                text,
+                language=None,
+            )
+        except Exception as e:
+            logger.warning(
+                "Turn detector inference failed, using default delay: %s (%s)",
+                e,
+                type(e).__name__,
+            )
+            return default_delay
+
+        mode = config.turn_detection.mode
+        logger.info(
+            "Turn detector: p=%.3f threshold=%.3f end=%s delay=%.2fs mode=%s",
+            decision.probability,
+            decision.threshold,
+            decision.likely_end_of_turn,
+            decision.recommended_delay_s,
+            mode,
+        )
+        if mode == "active":
+            return decision.recommended_delay_s
+        return default_delay
+
+    def _append_dialog_turn(self, role: str, content: str) -> None:
+        text = content.strip()
+        if not text:
+            return
+        self._dialog_history.append({"role": role, "content": text})
+        if len(self._dialog_history) > 12:
+            self._dialog_history = self._dialog_history[-12:]
+
     async def _handle_barge_in(
-        self, source: str, probability: float | None = None
+        self,
+        source: str,
+        probability: float | None = None,
+        allow_thinking_interrupt: bool = False,
     ) -> None:
         """Interrupt assistant playback when user starts speaking."""
         now = time.time()
@@ -309,7 +490,18 @@ class VoiceSession:
 
         is_assistant_speaking = time.time() < self._assistant_speaking_until
         if not is_assistant_speaking:
-            return
+            if not allow_thinking_interrupt:
+                return
+
+            if not (self._response_task and not self._response_task.done()):
+                return
+
+            has_fresh_interim = (
+                time.time() - self._last_interim_at < 1.2
+                and len(self._last_interim_text.strip()) >= 6
+            )
+            if not has_fresh_interim:
+                return
 
         self._last_barge_in_at = now
 
