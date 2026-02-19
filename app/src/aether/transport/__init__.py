@@ -10,7 +10,7 @@ A modular transport system that handles all client connections:
 The transport layer is a facade that:
 - Accepts connections from various client types
 - Normalizes messages to CoreMsg format
-- Routes messages to/from the Aether Core
+- Routes messages to/from the Aether Core (via KernelCore)
 - Manages connection lifecycle
 
 Usage:
@@ -51,10 +51,19 @@ from aether.transport.core_msg import (
     MsgMetadata,
     TextContent,
 )
-from aether.transport.handler import CoreHandler
 from aether.transport.interface import CoreInterface
 from aether.transport.manager import TransportManager
 from aether.transport.websocket import WebSocketTransport
+
+
+def __getattr__(name: str):
+    """Lazy import for backward compat — avoids circular import with kernel.core."""
+    if name == "CoreHandler":
+        from aether.kernel.core import KernelCore
+
+        return KernelCore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Optional: WebRTC transport (requires aiortc)
 try:
@@ -67,7 +76,7 @@ except (ImportError, RuntimeError):
 __all__ = [
     # Core interfaces
     "CoreInterface",
-    "CoreHandler",
+    "CoreHandler",  # backward compat alias for KernelCore
     "TransportManager",
     "Transport",
     # Message types
