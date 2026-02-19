@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 
 import httpx
 
 from aether.core.config import config
+from aether.core.metrics import metrics
 from aether.providers.base import TTSProvider
 
 logger = logging.getLogger(__name__)
@@ -52,22 +54,39 @@ class SarvamTTSProvider(TTSProvider):
         if not self.client:
             raise RuntimeError("Sarvam TTS not started")
 
-        response = await self.client.post(
-            SARVAM_TTS_URL,
-            json={
-                "text": text,
-                "target_language_code": config.tts.sarvam_language,
-                "model": config.tts.sarvam_model,
-                "speaker": config.tts.sarvam_speaker,
-                "speech_sample_rate": config.tts.sarvam_sample_rate,
-            },
-        )
-        response.raise_for_status()
+        started = time.time()
+        metrics.inc("provider.tts.requests", labels={"provider": "sarvam"})
 
-        data = response.json()
-        # API returns {"audios": ["base64..."]}
-        audio_b64 = "".join(data["audios"])
-        return base64.b64decode(audio_b64)
+        try:
+            response = await self.client.post(
+                SARVAM_TTS_URL,
+                json={
+                    "text": text,
+                    "target_language_code": config.tts.sarvam_language,
+                    "model": config.tts.sarvam_model,
+                    "speaker": config.tts.sarvam_speaker,
+                    "speech_sample_rate": config.tts.sarvam_sample_rate,
+                },
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            # API returns {"audios": ["base64..."]}
+            audio_b64 = "".join(data["audios"])
+            audio = base64.b64decode(audio_b64)
+
+            elapsed_ms = (time.time() - started) * 1000
+            metrics.observe(
+                "provider.tts.latency_ms", elapsed_ms, labels={"provider": "sarvam"}
+            )
+            # Estimate audio duration: WAV 16kHz 16-bit mono = 32000 bytes/sec
+            # Subtract 44-byte WAV header
+            audio_duration_ms = max(0, len(audio) - 44) / 32.0
+            metrics.observe("provider.tts.audio_duration_ms", audio_duration_ms)
+            return audio
+        except Exception:
+            metrics.inc("provider.tts.errors", labels={"provider": "sarvam"})
+            raise
 
     async def health_check(self) -> dict:
         status = "ready" if self.client else "not_started"

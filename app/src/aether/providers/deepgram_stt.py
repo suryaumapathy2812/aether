@@ -15,6 +15,7 @@ from deepgram import AsyncDeepgramClient
 
 from aether.core.config import config
 from aether.core.frames import Frame, text_frame, control_frame
+from aether.core.metrics import metrics
 from aether.providers.base import STTProvider
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ class DeepgramSTTProvider(STTProvider):
             raise RuntimeError("Deepgram STT not started")
 
         self._should_be_connected = True
+        metrics.inc("provider.stt.connections")
         await self._do_connect()
 
     async def _do_connect(self) -> None:
@@ -289,6 +291,10 @@ class DeepgramSTTProvider(STTProvider):
         final_text = self._transcript_buffer.strip()
         if final_text:
             logger.debug(f"STT utterance: '{final_text[:80]}'")
+            # Estimate utterance duration from word count (avg ~150 wpm)
+            word_count = len(final_text.split())
+            estimated_duration_ms = (word_count / 150) * 60 * 1000
+            metrics.observe("provider.stt.utterance_duration_ms", estimated_duration_ms)
             await self._event_queue.put(
                 control_frame("utterance_end", transcript=final_text)
             )

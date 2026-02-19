@@ -3,17 +3,23 @@ Aether Logging — clean, colorized, pipeline-aware logging.
 
 Features:
 - Color formatter for dev mode (auto-detects TTY)
+- JSON structured formatter for production (AETHER_LOG_FORMAT=json)
 - Suppresses noisy third-party loggers (httpx, httpcore, openai)
-- Configurable via AETHER_LOG_LEVEL and AETHER_LOG_COLOR
+- Configurable via AETHER_LOG_LEVEL, AETHER_LOG_COLOR, AETHER_LOG_FORMAT
 - Pipeline timing helper for STT -> LLM -> TTS latency tracking
+
+Structured log extra fields (pass via logger.info(..., extra={...})):
+    job_id, trace_id, kind, worker, duration_ms, status, session_id
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 
 # --- Color codes ---
@@ -74,6 +80,49 @@ class ColorFormatter(logging.Formatter):
         record.name = orig_name
 
         return result
+
+
+# Structured log fields forwarded from logger.info(..., extra={...})
+_STRUCTURED_FIELDS = (
+    "job_id",
+    "trace_id",
+    "kind",
+    "worker",
+    "duration_ms",
+    "status",
+    "session_id",
+    "user_id",
+)
+
+
+class StructuredFormatter(logging.Formatter):
+    """JSON log formatter for production / log aggregation.
+
+    Each log line is a single JSON object. Extra fields passed via
+    logger.info("msg", extra={"job_id": "...", "duration_ms": 42})
+    are included at the top level for easy querying.
+
+    Enable with: AETHER_LOG_FORMAT=json
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+
+        # Forward structured extra fields
+        for key in _STRUCTURED_FIELDS:
+            if hasattr(record, key):
+                entry[key] = getattr(record, key)
+
+        # Include exception info if present
+        if record.exc_info:
+            entry["exc"] = self.formatException(record.exc_info)
+
+        return json.dumps(entry, default=str)
 
 
 class PipelineTimer:
@@ -137,11 +186,16 @@ def setup_logging() -> None:
     """Configure logging for the entire application.
 
     Call this once at startup, before any other imports that use logging.
-    Reads AETHER_LOG_LEVEL (default: INFO) and AETHER_LOG_COLOR (default: auto).
+
+    Env vars:
+        AETHER_LOG_LEVEL  — DEBUG / INFO / WARNING / ERROR (default: INFO)
+        AETHER_LOG_COLOR  — true / false / auto (default: auto, TTY detection)
+        AETHER_LOG_FORMAT — text / json (default: text)
+                            Set to "json" in production for structured log aggregation.
     """
     level_name = os.getenv("AETHER_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
-    use_color = _should_use_color()
+    log_format = os.getenv("AETHER_LOG_FORMAT", "text").lower()
 
     # Root logger
     root = logging.getLogger()
@@ -150,10 +204,16 @@ def setup_logging() -> None:
     # Remove existing handlers (avoid duplicate output)
     root.handlers.clear()
 
-    # Console handler with our formatter
+    # Pick formatter based on AETHER_LOG_FORMAT
+    if log_format == "json":
+        formatter: logging.Formatter = StructuredFormatter()
+    else:
+        formatter = ColorFormatter(use_color=_should_use_color())
+
+    # Console handler
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
-    handler.setFormatter(ColorFormatter(use_color=use_color))
+    handler.setFormatter(formatter)
     root.addHandler(handler)
 
     # --- Suppress noisy third-party loggers ---
@@ -175,4 +235,4 @@ def setup_logging() -> None:
     logging.getLogger("uvicorn.error").setLevel(level)
 
     logger = logging.getLogger("aether")
-    logger.debug("Logging configured (level=%s, color=%s)", level_name, use_color)
+    logger.debug("Logging configured (level=%s, format=%s)", level_name, log_format)

@@ -3,11 +3,11 @@ Aether v0.08 — Transport Layer.
 
 Changes from v0.07:
 - Transport layer: modular connection handling (WebSocket, future WebRTC/Push)
-- CoreHandler: adapter between transport (CoreMsg) and core (Frames)
+- KernelCore: adapter between transport (CoreMsg) and core (Frames)
 - TransportManager: facade routing messages between transports and core
 - Old monolithic websocket_endpoint removed — /ws delegates to WebSocketTransport
 - Plugin events routed through transport_manager.broadcast()
-- Providers started once via CoreHandler.start() (no double startup)
+- Providers started once via KernelCore.start() (no double startup)
 
 Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 """
@@ -29,8 +29,10 @@ from fastapi.staticfiles import StaticFiles
 
 import aether.core.config as _config_mod
 from aether.core.config import config, reload_config
-from aether.core.frames import FrameType
+
+# FrameType removed — /chat now routes through scheduler
 from aether.core.logging import setup_logging
+from aether.core.metrics import metrics
 from aether.memory.store import MemoryStore
 from aether.providers import get_stt_provider, get_llm_provider, get_tts_provider
 from aether.tools.registry import ToolRegistry
@@ -48,7 +50,8 @@ from aether.plugins.event import PluginEvent
 from aether.processors.event import EventProcessor
 
 # --- Transport Layer ---
-from aether.transport import CoreHandler, CoreMsg, TransportManager, WebSocketTransport
+from aether.kernel.core import KernelCore
+from aether.transport import CoreMsg, TransportManager, WebSocketTransport
 
 # Optional: WebRTC transport (requires aiortc)
 SmallWebRTCTransport = None
@@ -243,9 +246,9 @@ async def startup():
     await _fetch_plugin_configs()
 
     # Build the transport layer
-    #   CoreHandler starts providers (STT, LLM, TTS, Memory) via start_all()
+    #   KernelCore starts providers (STT, LLM, TTS, Memory) via start_all()
     #   No separate provider.start() calls needed.
-    core = CoreHandler(
+    core = KernelCore(
         llm_provider=llm_provider,
         memory_store=memory_store,
         tool_registry=tool_registry,
@@ -294,8 +297,16 @@ async def startup():
     # Start everything (core + transports)
     await transport_manager.start_all()
 
+    # Inject scheduler reference into WebSocket transport for disconnect cancellation
+    scheduler_ref = getattr(core, "_scheduler", None)
+    if scheduler_ref is not None and ws_transport is not None:
+        ws_transport._scheduler = scheduler_ref
+        logger.info(
+            "Scheduler wired into WebSocket transport for disconnect cancellation"
+        )
+
     logger.info(
-        "Aether v0.08 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s, plugin_ctx=%s)",
+        "Aether v0.09 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, tools=%s, skills=%s, plugin_ctx=%s)",
         AGENT_ID,
         config.stt.provider,
         config.llm.provider,
@@ -326,7 +337,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str = ""):
     - Connection accept/close
     - Protocol parsing (JSON messages)
     - Normalizing to CoreMsg
-    - Routing through TransportManager → CoreHandler
+    - Routing through TransportManager → KernelCore
     - Serializing responses back to the client
     """
     if not transport_manager:
@@ -442,7 +453,7 @@ async def chat_endpoint(request: Request):
     HTTP streaming chat endpoint for dashboard text chat.
 
     Accepts AI SDK UI messages ("parts") and legacy messages ("content").
-    Streams plain text chunks for TextStreamChatTransport.
+    Streams plain text chunks via the kernel scheduler.
     """
     if not transport_manager:
         return JSONResponse({"error": "Server not ready"}, status_code=503)
@@ -474,27 +485,48 @@ async def chat_endpoint(request: Request):
     if not last_user_msg:
         return JSONResponse({"error": "No user message found"}, status_code=400)
 
-    # Get or create a session via the core handler
-    core: CoreHandler = transport_manager.core  # type: ignore[assignment]
+    # Get core and session
+    core: KernelCore = transport_manager.core  # type: ignore[assignment]
     session_id = f"http-{user_id or 'anon'}"
     session = core._get_session(session_id, mode="text")
     await core._ensure_session_started(session)
 
     async def generate():
-        """Stream plain text tokens for AI SDK text transport."""
+        """Stream plain text via scheduler."""
+        from aether.kernel.contracts import JobPriority, KernelRequest
+
         try:
-            # Gather memory context
-            pre_frames = await core._gather_pre_frames(last_user_msg, session)
-
-            for pf in pre_frames:
-                async for llm_frame in session.llm.process(pf):
-                    if (
-                        llm_frame.type == FrameType.TEXT
-                        and llm_frame.metadata.get("role") == "assistant"
-                    ):
-                        yield llm_frame.data
-
             session.turn_count += 1
+            request = KernelRequest(
+                kind="reply_text",
+                modality="text",
+                user_id=user_id or "anon",
+                session_id=session_id,
+                payload={
+                    "text": last_user_msg,
+                    "history": list(session.conversation_history),
+                },
+                priority=JobPriority.INTERACTIVE.value,
+            )
+
+            job_id = await core._scheduler.submit(request)
+            collected_text: list[str] = []
+
+            async for event in core._scheduler.stream(job_id):
+                if event.stream_type == "text_chunk":
+                    chunk = event.payload.get("text", "")
+                    collected_text.append(chunk)
+                    yield chunk
+
+            # Update session history
+            session.conversation_history.append(
+                {"role": "user", "content": last_user_msg}
+            )
+            assistant_text = " ".join(collected_text).strip()
+            if assistant_text:
+                session.conversation_history.append(
+                    {"role": "assistant", "content": assistant_text}
+                )
 
         except Exception as e:
             logger.error(f"Chat stream error: {e}", exc_info=True)
@@ -569,9 +601,10 @@ async def browse_workspace(path: str = ""):
 
 @app.get("/health")
 async def health():
-    """Health check — reports provider status, memory stats, transport status."""
+    """Health check — providers, memory, transport, and metrics snapshot."""
     # Transport status includes core health
     transport_status: dict = {"enabled": False}
+    core_health: dict = {}
     if transport_manager:
         try:
             status = await transport_manager.get_status()
@@ -580,13 +613,9 @@ async def health():
                 "transports": list(status.get("transports", {}).keys()),
                 "connections": len(status.get("connections", {})),
             }
-            # Extract provider health from core status
             core_health = status.get("core", {})
         except Exception as e:
             transport_status = {"enabled": True, "error": str(e)}
-            core_health = {}
-    else:
-        core_health = {}
 
     # Fallback: direct provider health if core didn't report
     providers = core_health.get("providers", {})
@@ -603,7 +632,7 @@ async def health():
     return JSONResponse(
         {
             "status": "ok",
-            "version": "0.0.8",
+            "version": "0.0.9",
             "providers": providers,
             "memory": {
                 "facts_count": len(facts),
@@ -612,6 +641,66 @@ async def health():
             "tools": tool_registry.tool_names(),
             "skills": [s.name for s in skill_loader.all()],
             "transport": transport_status,
+            "metrics": metrics.snapshot(),
+        }
+    )
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Full in-process metrics snapshot (counters, gauges, histogram percentiles)."""
+    return JSONResponse(metrics.snapshot())
+
+
+@app.get("/metrics/latency")
+async def latency_metrics():
+    """SLO-focused latency metrics — p50/p95 for all critical paths.
+
+    Compare against SLO thresholds from REFACTOR.md:
+        /chat TTFT p95      ≤ 1800ms  (fail > 2000ms)
+        Voice TTFT p95      ≤ 2200ms  (fail > 2500ms)
+        Voice audio p95     ≤  900ms  (fail > 1100ms)
+        Tool execution p95  ≤ +15% baseline
+        Notification p95    ≤ 1200ms  (fail > 1500ms)
+    """
+    return JSONResponse(
+        {
+            "chat": {
+                "ttft_p50_ms": metrics.percentile(
+                    "llm.ttft_ms", 50, labels={"kind": "reply_text"}
+                ),
+                "ttft_p95_ms": metrics.percentile(
+                    "llm.ttft_ms", 95, labels={"kind": "reply_text"}
+                ),
+            },
+            "voice": {
+                "ttft_p50_ms": metrics.percentile(
+                    "llm.ttft_ms", 50, labels={"kind": "reply_voice"}
+                ),
+                "ttft_p95_ms": metrics.percentile(
+                    "llm.ttft_ms", 95, labels={"kind": "reply_voice"}
+                ),
+                "tts_p50_ms": metrics.percentile("provider.tts.latency_ms", 50),
+                "tts_p95_ms": metrics.percentile("provider.tts.latency_ms", 95),
+            },
+            "kernel": {
+                "job_duration_p50_ms": metrics.percentile("kernel.job.duration_ms", 50),
+                "job_duration_p95_ms": metrics.percentile("kernel.job.duration_ms", 95),
+                "enqueue_delay_p95_ms": metrics.percentile(
+                    "kernel.enqueue_delay_ms", 95
+                ),
+            },
+            "services": {
+                "notification_decision_p95_ms": metrics.percentile(
+                    "service.notification.decision_ms", 95
+                ),
+                "tool_execution_p95_ms": metrics.percentile(
+                    "service.tool.duration_ms", 95
+                ),
+                "memory_extraction_p95_ms": metrics.percentile(
+                    "service.memory.extraction_ms", 95
+                ),
+            },
         }
     )
 

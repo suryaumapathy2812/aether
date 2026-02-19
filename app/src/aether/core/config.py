@@ -184,6 +184,31 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class KernelConfig:
+    """Kernel scheduler settings."""
+
+    workers_interactive: int = 2  # P-Core workers (user-facing replies)
+    workers_background: int = 2  # E-Core workers (memory, notifications)
+    interactive_queue_limit: int = 20  # Raise QueueFullError when exceeded
+    background_queue_limit: int = 50  # Shed oldest job when exceeded
+
+    @classmethod
+    def from_env(cls) -> "KernelConfig":
+        return cls(
+            workers_interactive=int(
+                os.getenv("AETHER_KERNEL_WORKERS_INTERACTIVE", "2")
+            ),
+            workers_background=int(os.getenv("AETHER_KERNEL_WORKERS_BACKGROUND", "2")),
+            interactive_queue_limit=int(
+                os.getenv("AETHER_INTERACTIVE_QUEUE_LIMIT", "20")
+            ),
+            background_queue_limit=int(
+                os.getenv("AETHER_BACKGROUND_QUEUE_LIMIT", "50")
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class AetherConfig:
     """Root configuration — one object to rule them all."""
 
@@ -193,6 +218,7 @@ class AetherConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    kernel: KernelConfig = field(default_factory=KernelConfig)
 
     @classmethod
     def from_env(cls) -> AetherConfig:
@@ -203,6 +229,7 @@ class AetherConfig:
             memory=MemoryConfig.from_env(),
             personality=PersonalityConfig.from_env(),
             server=ServerConfig.from_env(),
+            kernel=KernelConfig.from_env(),
         )
 
 

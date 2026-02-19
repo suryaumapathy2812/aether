@@ -1,7 +1,7 @@
 """
 Vision Processor — passes vision frames through to LLM context.
 
-In v0.01 this is a simple pass-through. The LLMProcessor handles
+In v0.01 this is a simple pass-through. The LLM handles
 multimodal messages directly with GPT-4o.
 
 This processor exists as a boundary — future versions will add
@@ -27,6 +27,8 @@ class VisionProcessor(Processor):
         """Pass vision frames through. Log for observability."""
         if frame.type == FrameType.VISION:
             size_kb = len(frame.data) / 1024
-            logger.info(f"Vision: received image ({size_kb:.1f} KB, {frame.metadata.get('mime_type', 'unknown')})")
+            logger.info(
+                f"Vision: received image ({size_kb:.1f} KB, {frame.metadata.get('mime_type', 'unknown')})"
+            )
 
         yield frame

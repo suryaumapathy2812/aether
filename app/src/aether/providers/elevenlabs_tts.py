@@ -9,10 +9,12 @@ Uses httpx (already a transitive dep via openai).
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
 from aether.core.config import config
+from aether.core.metrics import metrics
 from aether.providers.base import TTSProvider
 
 logger = logging.getLogger(__name__)
@@ -51,16 +53,31 @@ class ElevenLabsTTSProvider(TTSProvider):
         if not self.client:
             raise RuntimeError("ElevenLabs TTS not started")
 
-        url = f"{ELEVENLABS_TTS_URL}/{config.tts.elevenlabs_voice_id}"
-        response = await self.client.post(
-            url,
-            json={
-                "text": text,
-                "model_id": config.tts.elevenlabs_model,
-            },
-        )
-        response.raise_for_status()
-        return response.content
+        started = time.time()
+        metrics.inc("provider.tts.requests", labels={"provider": "elevenlabs"})
+
+        try:
+            url = f"{ELEVENLABS_TTS_URL}/{config.tts.elevenlabs_voice_id}"
+            response = await self.client.post(
+                url,
+                json={
+                    "text": text,
+                    "model_id": config.tts.elevenlabs_model,
+                },
+            )
+            response.raise_for_status()
+            audio = response.content
+
+            elapsed_ms = (time.time() - started) * 1000
+            metrics.observe(
+                "provider.tts.latency_ms",
+                elapsed_ms,
+                labels={"provider": "elevenlabs"},
+            )
+            return audio
+        except Exception:
+            metrics.inc("provider.tts.errors", labels={"provider": "elevenlabs"})
+            raise
 
     async def health_check(self) -> dict:
         status = "ready" if self.client else "not_started"

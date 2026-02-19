@@ -17,7 +17,7 @@ class CoreInterface(ABC):
     """
     Abstract interface that the transport layer uses to communicate with the Core.
 
-    The Core (LLMProcessor, Memory, Tools, Plugins) doesn't know about transports.
+    The Core (LLM, Memory, Tools, Plugins) doesn't know about transports.
     It only understands this interface.
     """
 

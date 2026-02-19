@@ -62,6 +62,8 @@ class WebSocketTransport(Transport):
         self._sessions: dict[str, dict[str, Any]] = {}
         # user_id → session_id
         self._user_sessions: dict[str, str] = {}
+        # Optional scheduler reference — set by TransportManager when kernel is enabled
+        self._scheduler: Any = None
 
     # ─── Transport Interface ─────────────────────────────────────
 
@@ -150,6 +152,9 @@ class WebSocketTransport(Transport):
         except Exception as e:
             logger.error(f"WS error: {e}", exc_info=True)
         finally:
+            # Cancel any pending/running scheduler jobs for this session
+            await self._cancel_session_jobs(session_id)
+
             # Notify core of disconnect so it can summarize session, etc.
             disconnect_msg = CoreMsg.event(
                 event_type="disconnect",
@@ -166,6 +171,23 @@ class WebSocketTransport(Transport):
             self._user_sessions.pop(user_id, None)
             await self._notify_connection(user_id, ConnectionState.DISCONNECTED)
             logger.info(f"WS cleaned up: session={session_id}")
+
+    async def _cancel_session_jobs(self, session_id: str) -> None:
+        """Cancel all pending/running scheduler jobs for a disconnecting session.
+
+        The scheduler reference is injected at startup. No-ops when scheduler
+        is not yet wired (e.g. during tests).
+        """
+        if self._scheduler is None:
+            return
+        try:
+            canceled = await self._scheduler.cancel_by_session(session_id)
+            if canceled:
+                logger.info(
+                    f"Canceled {canceled} scheduler jobs for session {session_id}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to cancel jobs for session {session_id}: {e}")
 
     # ─── Message Loop (Inbound: Wire Protocol → CoreMsg) ─────────
 
