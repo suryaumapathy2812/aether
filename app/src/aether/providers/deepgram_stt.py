@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import AsyncGenerator
 
 from deepgram import AsyncDeepgramClient
@@ -38,10 +39,12 @@ class DeepgramSTTProvider(STTProvider):
         self._interim_text: str = ""
         self._event_queue: asyncio.Queue[Frame] = asyncio.Queue()
         self._listen_task: asyncio.Task | None = None
+        self._keepalive_task: asyncio.Task | None = None
         self._connected = False
         self._reconnecting = False
         self._should_be_connected = False
         self._audio_chunks_sent = 0
+        self._last_send_at: float = 0.0
 
     async def start(self) -> None:
         if self.client:
@@ -132,9 +135,17 @@ class DeepgramSTTProvider(STTProvider):
 
             self._listen_task.add_done_callback(_on_listen_done)
 
+            # Keepalive loop prevents net0001 timeouts during long silence/
+            # suppression windows by sending protocol keepalive frames.
+            self._keepalive_task = asyncio.create_task(
+                self._keepalive_loop(),
+                name="deepgram-keepalive",
+            )
+
             self._connected = True
             self._transcript_buffer = ""
             self._interim_text = ""
+            self._last_send_at = time.monotonic()
             logger.info("Deepgram live connection opened")
 
         except Exception as e:
@@ -155,6 +166,15 @@ class DeepgramSTTProvider(STTProvider):
             except (asyncio.CancelledError, Exception):
                 pass
             self._listen_task = None
+
+        # Cancel keepalive task
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            try:
+                await self._keepalive_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._keepalive_task = None
 
         # Send CloseStream control and exit context manager
         if self._socket:
@@ -205,6 +225,7 @@ class DeepgramSTTProvider(STTProvider):
                         "Deepgram audio chunks sent: %d", self._audio_chunks_sent
                     )
                 await self._socket.send_media(chunk)
+                self._last_send_at = time.monotonic()
             except Exception as e:
                 logger.error("Send audio failed: %s", e)
                 if self._should_be_connected:
@@ -327,6 +348,29 @@ class DeepgramSTTProvider(STTProvider):
 
     # ─── Auto-reconnect ──────────────────────────────────────────
 
+    async def _keepalive_loop(self) -> None:
+        """Send Deepgram keepalive frames when media is idle."""
+        try:
+            while self._should_be_connected:
+                await asyncio.sleep(2.0)
+                if not self._connected or not self._socket or self._reconnecting:
+                    continue
+
+                idle_for = time.monotonic() - self._last_send_at
+                if idle_for < 4.0:
+                    continue
+
+                try:
+                    await self._socket.send_keep_alive()
+                    self._last_send_at = time.monotonic()
+                    logger.debug("Deepgram keepalive sent (idle_for=%.1fs)", idle_for)
+                except Exception as e:
+                    logger.warning("Deepgram keepalive failed: %s", e)
+                    if self._should_be_connected and not self._reconnecting:
+                        asyncio.create_task(self._reconnect())
+        except asyncio.CancelledError:
+            pass
+
     async def _reconnect(self) -> None:
         """Reconnect with exponential backoff."""
         if self._reconnecting:
@@ -345,6 +389,14 @@ class DeepgramSTTProvider(STTProvider):
             except (asyncio.CancelledError, Exception):
                 pass
             self._listen_task = None
+
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            try:
+                await self._keepalive_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._keepalive_task = None
 
         if self._socket:
             try:
