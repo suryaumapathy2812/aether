@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import aether.core.config as _config_mod
@@ -68,6 +68,15 @@ try:
     WebRTCVoiceTransport = _WebRTCVoiceTransport
 except ImportError:
     AIORTC_AVAILABLE = False
+
+# Optional: Telephony transport
+TelephonyTransport = None
+try:
+    from aether.voice.telephony import TelephonyTransport as _TelephonyTransport
+
+    TelephonyTransport = _TelephonyTransport
+except ImportError:
+    pass
 
 # --- Setup ---
 setup_logging()
@@ -227,11 +236,33 @@ if AIORTC_AVAILABLE and WebRTCVoiceTransport is not None:
             await _set_keep_alive(False)
 
         webrtc_transport.on_sessions_empty = _on_sessions_empty
+        # Wire transport reference for spoken notification delivery
+        agent_core._voice_transport = webrtc_transport
         logger.info("WebRTC voice transport initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize WebRTC transport: {e}")
 else:
     logger.info("WebRTC transport not available (aiortc not installed)")
+
+# --- Telephony Transport (optional) ---
+telephony_transport = None
+if config.telephony.enabled and TelephonyTransport is not None:
+    try:
+        telephony_transport = TelephonyTransport(
+            agent=agent_core,
+            tts_provider=tts_provider,
+        )
+        logger.info(
+            "Telephony transport initialized (provider=%s)",
+            config.telephony.provider,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to initialize telephony transport: {e}")
+else:
+    if not config.telephony.enabled:
+        logger.info("Telephony transport disabled (AETHER_TELEPHONY_ENABLED=false)")
+    elif TelephonyTransport is None:
+        logger.info("Telephony transport not available (import failed)")
 
 
 # ── Orchestrator helpers ───────────────────────────────────────
@@ -403,6 +434,10 @@ async def startup() -> None:
     # Start AgentCore (starts the scheduler worker pools)
     await agent_core.start()
 
+    # Start WebRTC session TTL sweep
+    if webrtc_transport:
+        await webrtc_transport.start_session_ttl_sweep()
+
     logger.info(
         "Aether v0.10 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, "
         "tools=%s, skills=%s, plugin_ctx=%s, webrtc=%s)",
@@ -505,6 +540,75 @@ async def webrtc_ice(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"WebRTC ICE error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Telephony endpoints ───────────────────────────────────────
+
+
+@app.websocket("/telephony/ws")
+async def telephony_ws(ws: WebSocket) -> None:
+    """WebSocket endpoint for telephony media streams (Twilio/Telnyx/Vobiz)."""
+    if not telephony_transport:
+        await ws.close(code=1008, reason="Telephony transport not available")
+        return
+
+    await telephony_transport.handle_call(ws)
+
+
+@app.post("/telephony/webhook")
+async def telephony_webhook(request: Request) -> Response:
+    """Webhook for telephony call lifecycle events (incoming call, etc.).
+
+    Returns TwiML/XML that instructs the provider to connect a media stream
+    to our WebSocket endpoint.
+    """
+    if not telephony_transport:
+        return JSONResponse(
+            {"error": "Telephony transport not available"}, status_code=404
+        )
+
+    _ = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+
+    # Determine WebSocket URL for the media stream
+    host = request.headers.get("host", f"localhost:{config.server.port}")
+    scheme = "wss" if request.url.scheme == "https" else "ws"
+    ws_url = f"{scheme}://{host}/telephony/ws"
+
+    provider = config.telephony.provider
+
+    if provider == "twilio":
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{ws_url}" />
+    </Connect>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+    if provider == "vobiz":
+        # Vobiz XML Stream format (not Twilio wire format)
+        stream_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">{ws_url}</Stream>
+</Response>"""
+        return Response(content=stream_xml, media_type="application/xml")
+
+    elif provider == "telnyx":
+        # TeXML for Telnyx bidirectional RTP stream.
+        texml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="{ws_url}" bidirectionalMode="rtp"></Stream>
+  </Connect>
+  <Pause length="40"/>
+</Response>"""
+        return Response(content=texml, media_type="application/xml")
+
+    return JSONResponse({"ws_url": ws_url})
 
 
 # ── Legacy /chat endpoint (backward compat) ───────────────────
@@ -659,6 +763,7 @@ async def health() -> JSONResponse:
             "transports": {
                 "http": True,
                 "webrtc": webrtc_transport is not None,
+                "telephony": telephony_transport is not None,
                 "ws_sidecar": True,
                 "ws_connections": ws_sidecar.connection_count,
             },
@@ -840,15 +945,20 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
     # Broadcast notification to WS sidecar clients via AgentCore
     if decision.action in ("surface", "action_required"):
         level = "speak" if decision.action == "action_required" else "nudge"
-        await agent_core.broadcast_notification(
-            {
-                "event_id": event.id,
-                "plugin": event.plugin,
-                "level": level,
-                "text": decision.notification,
-                "actions": event.available_actions,
-            }
-        )
+
+        # For "speak" level, deliver through active voice sessions
+        if level == "speak" and decision.notification:
+            await agent_core.speak_notification(decision.notification)
+        else:
+            await agent_core.broadcast_notification(
+                {
+                    "event_id": event.id,
+                    "plugin": event.plugin,
+                    "level": level,
+                    "text": decision.notification,
+                    "actions": event.available_actions,
+                }
+            )
 
     # Report decision back to orchestrator
     if ORCHESTRATOR_URL and body.get("event_id"):
