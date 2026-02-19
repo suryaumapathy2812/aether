@@ -15,7 +15,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from aether.core.config import config
 from aether.voice.session import VoiceSession
@@ -57,17 +57,24 @@ class WebRTCConnection:
     vad: Any | None = None
     vad_mode: str = "off"
     _audio_frame_count: int = field(default=0, repr=False)
+    is_reconnect: bool = False  # True if reusing an existing VoiceSession
+    session_key: str = ""  # Key into WebRTCVoiceTransport._sessions
 
 
 class WebRTCVoiceTransport:
     """
-    Simplified WebRTC transport.
+    Simplified WebRTC transport with persistent session support.
 
-    Creates a VoiceSession per connection. Handles:
+    Creates a VoiceSession per user (not per connection). On disconnect,
+    the VoiceSession is paused but kept alive — reconnecting reuses it
+    instantly without losing dialog history or agent state.
+
+    Handles:
     - SDP offer/answer exchange
     - ICE candidate trickle
     - Audio frame routing (inbound mic → STT, outbound TTS → speaker)
     - Data channel for text events (transcript, status, tool_result)
+    - Pause/resume on disconnect/reconnect (persistent session)
     """
 
     def __init__(
@@ -83,6 +90,11 @@ class WebRTCVoiceTransport:
         self.tts_provider = tts_provider
         self.ice_servers = ice_servers or [{"urls": "stun:stun.l.google.com:19302"}]
         self._connections: dict[str, WebRTCConnection] = {}
+        # Persistent sessions keyed by user_id — survive WebRTC disconnects
+        self._sessions: dict[str, VoiceSession] = {}
+        # Optional callback: called with False when all persistent sessions are gone.
+        # Wire this up in main.py to clear the orchestrator keep_alive flag.
+        self.on_sessions_empty: Callable[[], Any] | None = None
 
     async def handle_offer(
         self,
@@ -112,12 +124,22 @@ class WebRTCVoiceTransport:
 
         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_list))
 
-        # Create voice session
-        voice_session = VoiceSession(
-            agent=self.agent,
-            tts_provider=self.tts_provider,
-            session_id=f"webrtc-{pc_id}",
-        )
+        # Reuse existing session for this user if one exists (persistent session).
+        # This preserves dialog history and agent state across reconnects.
+        session_key = user_id or pc_id
+        is_reconnect = session_key in self._sessions
+        if is_reconnect:
+            voice_session = self._sessions[session_key]
+            logger.info(
+                "WebRTC reconnect for %s — reusing existing VoiceSession", session_key
+            )
+        else:
+            voice_session = VoiceSession(
+                agent=self.agent,
+                tts_provider=self.tts_provider,
+                session_id=f"webrtc-{pc_id}",
+            )
+            self._sessions[session_key] = voice_session
 
         # Create outbound audio track
         audio_out = AudioOutputTrack()
@@ -184,6 +206,8 @@ class WebRTCVoiceTransport:
             voice_session=voice_session,
             audio_out_track=audio_out,
             vad_mode=config.vad.mode,
+            is_reconnect=is_reconnect,
+            session_key=session_key,
         )
 
         if config.vad.mode in ("shadow", "active"):
@@ -250,8 +274,14 @@ class WebRTCVoiceTransport:
             logger.info("WebRTC %s state: %s", conn.pc_id, state)
 
             if state in ("disconnected", "failed", "closed"):
-                await conn.voice_session.stop()
+                # Pause (not stop) — keep session alive for fast reconnect.
+                # The session's dialog history and agent state are preserved.
+                await conn.voice_session.pause()
                 self._connections.pop(conn.pc_id, None)
+                logger.info(
+                    "WebRTC %s disconnected — session paused, ready for reconnect",
+                    conn.pc_id,
+                )
 
         @pc.on("track")
         async def on_track(track: Any) -> None:
@@ -347,10 +377,24 @@ class WebRTCVoiceTransport:
         msg_type = data.get("type", "")
         try:
             if msg_type == "stream_start":
-                await conn.voice_session.start()
+                if conn.voice_session.is_streaming:
+                    # Already streaming — ignore duplicate start
+                    pass
+                elif conn.is_reconnect:
+                    # Reconnect: resume existing session (no greeting, keep history)
+                    await conn.voice_session.resume()
+                else:
+                    # First connect: full start with greeting
+                    await conn.voice_session.start()
 
             elif msg_type == "stream_stop":
+                # Explicit stop from client — fully tear down
                 await conn.voice_session.stop()
+                # Remove from persistent sessions so next connect starts fresh
+                self._sessions.pop(conn.session_key, None)
+                # If no sessions remain, clear the orchestrator keep_alive flag
+                if not self._sessions and self.on_sessions_empty:
+                    asyncio.create_task(self.on_sessions_empty())
 
             elif msg_type == "mute":
                 conn.voice_session.mute()

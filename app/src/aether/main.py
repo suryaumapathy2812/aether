@@ -222,6 +222,11 @@ if AIORTC_AVAILABLE and WebRTCVoiceTransport is not None:
             tts_provider=tts_provider,
             ice_servers=ice_servers or None,
         )
+
+        async def _on_sessions_empty() -> None:
+            await _set_keep_alive(False)
+
+        webrtc_transport.on_sessions_empty = _on_sessions_empty
         logger.info("WebRTC voice transport initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize WebRTC transport: {e}")
@@ -316,6 +321,28 @@ async def _heartbeat_loop() -> None:
                 )
         except Exception:
             logger.warning("Heartbeat to orchestrator failed")
+
+
+async def _set_keep_alive(enabled: bool) -> None:
+    """Tell the orchestrator to exempt this agent from idle-kill.
+
+    Called when a WebRTC session becomes active (enabled=True) or when
+    all WebRTC sessions are torn down (enabled=False).
+    """
+    if not ORCHESTRATOR_URL:
+        return
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{ORCHESTRATOR_URL}/api/agents/{AGENT_ID}/keep_alive",
+                params={"enabled": str(enabled).lower()},
+                headers=_agent_auth_headers(),
+            )
+        logger.info("keep_alive=%s signalled to orchestrator", enabled)
+    except Exception as e:
+        logger.warning("Failed to set keep_alive=%s: %s", enabled, e)
 
 
 async def _fetch_plugin_configs() -> None:
@@ -440,6 +467,9 @@ async def webrtc_offer(request: Request) -> JSONResponse:
             user_id=user_id,
             pc_id=pc_id,
         )
+        # Exempt this agent from idle-kill while a WebRTC session is active.
+        # Fire-and-forget — don't block the offer response on this.
+        asyncio.create_task(_set_keep_alive(True))
         return JSONResponse(answer)
     except Exception as e:
         logger.error(f"WebRTC offer error: {e}", exc_info=True)

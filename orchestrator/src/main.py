@@ -110,13 +110,18 @@ async def shutdown():
 
 
 async def _idle_reaper():
-    """Background task: stop agent containers that haven't sent a heartbeat."""
+    """Background task: stop agent containers that haven't sent a heartbeat.
+
+    Agents with keep_alive = true are exempt — they hold an active WebRTC
+    session and must not be killed between reconnects.
+    """
     while True:
         await asyncio.sleep(60)  # Check every minute
         try:
             pool = await get_pool()
             idle_agents = await pool.fetch(
                 "SELECT id, user_id FROM agents WHERE status = 'running' "
+                "AND keep_alive = false "
                 "AND last_health < now() - make_interval(mins := $1)",
                 IDLE_TIMEOUT_MINUTES,
             )
@@ -380,6 +385,25 @@ async def heartbeat(agent_id: str):
         agent_id,
     )
     return {"status": "ok"}
+
+
+@app.post(
+    "/api/agents/{agent_id}/keep_alive", dependencies=[Depends(verify_agent_secret)]
+)
+async def set_keep_alive(agent_id: str, enabled: bool = True):
+    """Set or clear the keep_alive flag for an agent.
+
+    When keep_alive=true the idle reaper will not stop this agent even if
+    its heartbeat lapses — used while a WebRTC session is active so the
+    container survives brief network disconnects between reconnects.
+    """
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE agents SET keep_alive = $1 WHERE id = $2",
+        enabled,
+        agent_id,
+    )
+    return {"status": "ok", "keep_alive": enabled}
 
 
 # ── Device Pairing ─────────────────────────────────────────

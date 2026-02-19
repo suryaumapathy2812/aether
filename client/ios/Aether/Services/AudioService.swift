@@ -357,16 +357,16 @@ class AudioService: NSObject, ObservableObject {
             }
 
         case "text_chunk":
-            let index = json["index"] as? Int ?? 0
-            print("[AudioService] Text chunk [\(index)]: \(payload.prefix(60))")
+            print("[AudioService] Text chunk: \(payload.prefix(60))")
             DispatchQueue.main.async {
                 self.state = .speaking
                 self.statusText = "speaking..."
                 self.bumpAgentSpeechLevel(for: payload)
-                if index == 0 {
+                // Accumulate chunks into lastResponse (displayed in VoiceOrbView)
+                if self.lastResponse.isEmpty {
                     self.lastResponse = payload
                 } else {
-                    self.lastResponse += " " + payload
+                    self.lastResponse += payload
                 }
             }
 

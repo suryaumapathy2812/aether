@@ -107,6 +107,7 @@ async def bootstrap_schema():
                 host            TEXT NOT NULL,
                 port            INTEGER NOT NULL,
                 status          TEXT DEFAULT 'starting',
+                keep_alive      BOOLEAN DEFAULT false,
                 registered_at   TIMESTAMPTZ DEFAULT now(),
                 last_health     TIMESTAMPTZ,
                 created_at      TIMESTAMPTZ DEFAULT now()
@@ -185,6 +186,7 @@ async def bootstrap_schema():
             -- Migration: add columns if they don't exist (for existing tables)
             ALTER TABLE plugin_events ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
             ALTER TABLE plugin_events ADD COLUMN IF NOT EXISTS batch_notification TEXT;
+            ALTER TABLE agents ADD COLUMN IF NOT EXISTS keep_alive BOOLEAN DEFAULT false;
 
             CREATE INDEX IF NOT EXISTS idx_plugin_events_user
                 ON plugin_events(user_id, created_at DESC);
