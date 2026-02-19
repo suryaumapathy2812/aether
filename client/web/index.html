@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aether</title>
+    <title>Aether — Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -17,26 +17,136 @@
             overflow: hidden;
         }
 
-        /* --- Layout: two columns --- */
-        .app-layout {
-            display: flex;
-            height: 100vh;
-            width: 100%;
-        }
+        .app-layout { display: flex; height: 100vh; width: 100%; }
 
-        /* Left: conversation + orb */
-        .main-panel {
+        /* Left: chat panel */
+        .chat-panel {
             flex: 1;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            position: relative;
         }
+
+        .chat-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #1a1a1a;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .chat-header h1 {
+            font-size: 1rem;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        .chat-header .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 1rem;
+            font-size: 0.65rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            background: rgba(78, 205, 196, 0.1);
+            color: #4ecdc4;
+        }
+
+        .chat-header .voice-link {
+            margin-left: auto;
+            color: #555;
+            font-size: 0.75rem;
+            text-decoration: none;
+            border: 1px solid #333;
+            padding: 0.3rem 0.8rem;
+            border-radius: 1rem;
+            transition: all 0.2s;
+        }
+        .chat-header .voice-link:hover { border-color: #4ecdc4; color: #4ecdc4; }
+
+        /* Messages */
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .msg {
+            max-width: 80%;
+            line-height: 1.6;
+            font-size: 0.9rem;
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: #1a1a2e;
+            color: #c0c0c0;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.assistant {
+            align-self: flex-start;
+            background: #111;
+            color: #e0e0e0;
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.assistant.streaming {
+            border-left: 2px solid #4ecdc4;
+        }
+
+        .msg.error {
+            align-self: center;
+            background: rgba(255, 107, 107, 0.1);
+            color: #ff6b6b;
+            font-size: 0.8rem;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Input */
+        .input-area {
+            padding: 1rem 1.5rem;
+            border-top: 1px solid #1a1a1a;
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .input-area input {
+            flex: 1;
+            background: #111;
+            border: 1px solid #222;
+            color: #e0e0e0;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .input-area input:focus { border-color: #4ecdc4; }
+        .input-area input::placeholder { color: #444; }
+
+        .input-area button {
+            background: #4ecdc4;
+            color: #0a0a0a;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .input-area button:hover { opacity: 0.85; }
+        .input-area button:disabled { opacity: 0.3; cursor: not-allowed; }
 
         /* Right: activity panel */
         .activity-panel {
-            width: 360px;
+            width: 340px;
             border-left: 1px solid #1a1a1a;
             display: flex;
             flex-direction: column;
@@ -52,13 +162,8 @@
             letter-spacing: 0.1em;
         }
 
-        .activity-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 0.5rem;
-        }
+        .activity-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
 
-        /* --- Activity items --- */
         .activity-item {
             padding: 0.6rem 0.8rem;
             border-radius: 6px;
@@ -67,651 +172,210 @@
             animation: slideIn 0.2s ease;
         }
 
+        .activity-item.notification {
+            color: #f59e0b;
+            background: rgba(245, 158, 11, 0.05);
+        }
         .activity-item.status {
             color: #a78bfa;
             background: rgba(167, 139, 250, 0.05);
         }
-
-        .activity-item.tool-call {
-            color: #4ecdc4;
-            background: rgba(78, 205, 196, 0.05);
-            font-family: 'SF Mono', 'Fira Code', monospace;
-        }
-
-        .activity-item.tool-result {
-            color: #888;
+        .activity-item.info {
+            color: #555;
             background: rgba(255, 255, 255, 0.02);
-            font-family: 'SF Mono', 'Fira Code', monospace;
             font-size: 0.75rem;
-            max-height: 80px;
-            overflow: hidden;
         }
 
-        .activity-item.tool-result.error {
-            color: #ff6b6b;
-            background: rgba(255, 107, 107, 0.05);
-        }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
-        .spinner {
-            display: inline-block;
-            width: 12px;
-            text-align: center;
-            animation: spin 0.8s steps(8) infinite;
-        }
-
-        .checkmark { color: #4ecdc4; }
-        .crossmark { color: #ff6b6b; }
-
-        @keyframes spin {
-            0% { content: '⠋'; } 12.5% { content: '⠙'; } 25% { content: '⠹'; }
-            37.5% { content: '⠸'; } 50% { content: '⠼'; } 62.5% { content: '⠴'; }
-            75% { content: '⠦'; } 87.5% { content: '⠧'; }
-        }
-
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(-4px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* --- Orb (same as before) --- */
-        #status {
-            font-size: 0.85rem;
-            color: #666;
-            margin-bottom: 1rem;
-            min-height: 1.2rem;
-            transition: color 0.3s;
-        }
-        #status.active { color: #4ecdc4; }
-        #status.error { color: #ff6b6b; }
-
-        #live-transcript {
-            font-size: 0.85rem;
-            color: #4ecdc4;
-            margin-bottom: 1.5rem;
-            min-height: 1.2rem;
-            max-width: 500px;
-            text-align: center;
-            opacity: 0.7;
-            font-style: italic;
-            transition: opacity 0.2s;
-        }
-        #live-transcript.active { opacity: 1; font-style: normal; }
-
-        #orb-container {
-            position: relative;
-            width: 160px;
-            height: 160px;
-            margin-bottom: 2rem;
-            cursor: pointer;
-        }
-
-        #orb {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: radial-gradient(circle at 35% 35%, #1a1a2e, #0a0a15);
-            border: 1px solid #1a1a2e;
-            transition: all 0.4s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #orb:hover { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.1); }
-        #orb.listening { border-color: #4ecdc4; box-shadow: 0 0 60px rgba(78, 205, 196, 0.2); animation: pulse 2s ease-in-out infinite; }
-        #orb.thinking { border-color: #a78bfa; box-shadow: 0 0 60px rgba(167, 139, 250, 0.2); animation: pulse 1.2s ease-in-out infinite; }
-        #orb.speaking { border-color: #f59e0b; box-shadow: 0 0 60px rgba(245, 158, 11, 0.2); animation: pulse 0.8s ease-in-out infinite; }
-        #orb.connecting { border-color: #666; animation: breathe 3s ease-in-out infinite; }
-        #orb.working { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.15); animation: pulse 1.5s ease-in-out infinite; }
-        #orb.muted { border-color: #333; box-shadow: none; opacity: 0.4; animation: none; }
-
-        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
-        @keyframes breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
-
-        #orb-label { font-size: 0.75rem; color: #444; letter-spacing: 0.1em; text-transform: uppercase; }
-
-        /* --- Conversation --- */
-        #conversation {
-            position: absolute;
-            bottom: 100px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 600px;
-            max-height: 250px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            padding: 1rem;
-        }
-
-        .message {
-            font-size: 0.9rem;
-            line-height: 1.5;
-            padding: 0.5rem 0;
-            opacity: 0;
-            animation: fadeIn 0.3s ease forwards;
-        }
-        .message.user { color: #888; text-align: right; }
-        .message.assistant { color: #e0e0e0; }
-
-        @keyframes fadeIn { to { opacity: 1; } }
-
-        /* --- Controls --- */
-        #controls {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            gap: 1rem;
-        }
-
-        .ctrl-btn {
-            background: none;
-            border: 1px solid #333;
-            color: #666;
-            padding: 0.5rem 1rem;
-            border-radius: 2rem;
-            font-size: 0.75rem;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
-
-        #text-input-container {
-            position: absolute;
-            bottom: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 500px;
-            display: none;
-        }
-
-        #text-input {
-            width: 100%;
-            background: #111;
-            border: 1px solid #333;
-            color: #e0e0e0;
-            padding: 0.75rem 1rem;
-            border-radius: 2rem;
-            font-size: 0.9rem;
-            outline: none;
-        }
-        #text-input:focus { border-color: #4ecdc4; }
-
-        /* --- Responsive: hide activity panel on small screens --- */
-        @media (max-width: 768px) {
-            .activity-panel { display: none; }
-        }
+        @media (max-width: 768px) { .activity-panel { display: none; } }
     </style>
 </head>
 <body>
     <div class="app-layout">
-        <!-- Main conversation panel -->
-        <div class="main-panel">
-            <div id="status">connecting...</div>
-            <div id="live-transcript"></div>
-
-            <div id="orb-container" onclick="toggleStreaming()">
-                <div id="orb" class="connecting">
-                    <span id="orb-label">aether</span>
-                </div>
+        <div class="chat-panel">
+            <div class="chat-header">
+                <h1>Aether</h1>
+                <span class="badge">v0.10</span>
+                <a href="/webrtc" class="voice-link">voice mode</a>
             </div>
 
-            <div id="conversation"></div>
+            <div class="messages" id="messages"></div>
 
-            <div id="text-input-container">
-                <input id="text-input" type="text" placeholder="Type a message..."
-                       onkeydown="if(event.key==='Enter')sendText()">
-            </div>
-
-            <div id="controls">
-                <button class="ctrl-btn" id="mute-btn" onclick="toggleMute()" style="display:none">mute</button>
-                <button class="ctrl-btn" onclick="toggleTextMode()">text</button>
-                <button class="ctrl-btn" onclick="captureImage()">camera</button>
+            <div class="input-area">
+                <input id="chat-input" type="text" placeholder="Message Aether..."
+                       onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendMessage();}">
+                <button id="send-btn" onclick="sendMessage()">Send</button>
             </div>
         </div>
 
-        <!-- Activity panel (tool calls, status) -->
         <div class="activity-panel">
-            <div class="activity-header">Activity</div>
+            <div class="activity-header">Notifications</div>
             <div class="activity-list" id="activity-list"></div>
         </div>
     </div>
 
     <script>
-        // --- State ---
-        let ws = null;
-        let isTextMode = false;
-        let audioContext = null;
-        let isStreaming = false;
-        let audioStream = null;
-        let audioProcessor = null;
-        let streamSource = null;
-        let streamingMessageEl = null;
-        const audioQueue = [];
-        let isPlaying = false;
-        let isMuted = false;
-        let reconnectAttempts = 0;
-        const MAX_RECONNECT_ATTEMPTS = 10;
-        const BASE_RECONNECT_DELAY = 1000;
-        let wasStreaming = false;
-        let isReconnect = false;
+    // ─── State ───────────────────────────────────────────────────
+    let isStreaming = false;
+    let abortController = null;
+    let ws = null;
+    let wsReconnectAttempts = 0;
 
-        // Spinner frames for tool status
-        const SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-        let spinnerIndex = 0;
-        let spinnerInterval = null;
-        const activeSpinners = new Map(); // callId -> element
+    const messagesEl = document.getElementById('messages');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const activityList = document.getElementById('activity-list');
 
-        // --- Elements ---
-        const orb = document.getElementById('orb');
-        const orbLabel = document.getElementById('orb-label');
-        const statusEl = document.getElementById('status');
-        const liveTranscript = document.getElementById('live-transcript');
-        const conversation = document.getElementById('conversation');
-        const textContainer = document.getElementById('text-input-container');
-        const textInput = document.getElementById('text-input');
-        const muteBtn = document.getElementById('mute-btn');
-        const activityList = document.getElementById('activity-list');
+    // Conversation history (sent with each request for context)
+    const history = [];
 
-        // --- Spinner animation ---
-        function startSpinnerAnimation() {
-            if (spinnerInterval) return;
-            spinnerInterval = setInterval(() => {
-                spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
-                activeSpinners.forEach((el) => {
-                    const spinEl = el.querySelector('.spinner');
-                    if (spinEl) spinEl.textContent = SPINNER_FRAMES[spinnerIndex];
-                });
-            }, 80);
-        }
+    // ─── Chat via /v1/chat/completions (SSE streaming) ──────────
 
-        function stopSpinnerAnimation() {
-            if (activeSpinners.size === 0 && spinnerInterval) {
-                clearInterval(spinnerInterval);
-                spinnerInterval = null;
-            }
-        }
+    async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text || isStreaming) return;
 
-        // --- Activity panel ---
-        function addActivity(type, content, id) {
-            const item = document.createElement('div');
-            item.className = `activity-item ${type}`;
-            item.innerHTML = content;
-            if (id) item.dataset.id = id;
-            activityList.appendChild(item);
-            activityList.scrollTop = activityList.scrollHeight;
+        chatInput.value = '';
+        addMessage(text, 'user');
+        history.push({ role: 'user', content: text });
 
-            // Keep max 50 items
-            while (activityList.children.length > 50) activityList.removeChild(activityList.firstChild);
-            return item;
-        }
+        isStreaming = true;
+        sendBtn.disabled = true;
+        const assistantEl = addMessage('', 'assistant', true);
 
-        function handleToolStatus(text) {
-            addActivity('status', `<span class="spinner">${SPINNER_FRAMES[0]}</span> ${text}`);
-            setOrbState('working');
-        }
+        abortController = new AbortController();
 
-        function handleToolCall(data) {
-            const parsed = JSON.parse(data);
-            const el = addActivity('tool-call',
-                `<span class="spinner">${SPINNER_FRAMES[0]}</span> <strong>${parsed.name}</strong>`,
-                parsed.call_id
-            );
-            activeSpinners.set(parsed.call_id, el);
-            startSpinnerAnimation();
-        }
+        try {
+            const resp = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'aether',
+                    messages: history,
+                    stream: true,
+                }),
+                signal: abortController.signal,
+            });
 
-        function handleToolResult(data) {
-            const parsed = JSON.parse(data);
-            const callId = parsed.call_id || '';
-
-            // Replace spinner with check/cross in the tool-call item
-            if (activeSpinners.has(callId)) {
-                const el = activeSpinners.get(callId);
-                const spinEl = el.querySelector('.spinner');
-                if (spinEl) {
-                    spinEl.classList.remove('spinner');
-                    spinEl.textContent = parsed.error ? '✗' : '✓';
-                    spinEl.className = parsed.error ? 'crossmark' : 'checkmark';
-                }
-                activeSpinners.delete(callId);
-                stopSpinnerAnimation();
+            if (!resp.ok) {
+                const err = await resp.json();
+                throw new Error(err.error?.message || `HTTP ${resp.status}`);
             }
 
-            // Show result preview
-            const preview = parsed.output.length > 120
-                ? parsed.output.substring(0, 120) + '...'
-                : parsed.output;
-            addActivity(
-                `tool-result ${parsed.error ? 'error' : ''}`,
-                preview
-            );
-        }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let fullText = '';
 
-        // --- WebSocket ---
-        function connect() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/ws`);
-            setOrbState('connecting');
-            setStatus('connecting...');
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-            ws.onopen = () => {
-                reconnectAttempts = 0;
-                if (isReconnect && wasStreaming) {
-                    setStatus('reconnected — resuming...', true);
-                    resumeStreaming();
-                } else if (!isReconnect) {
-                    setStatus('tap the orb to speak');
-                    setOrbState('idle');
-                } else {
-                    setStatus('reconnected');
-                    setOrbState('idle');
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const data = line.slice(6).trim();
+                    if (data === '[DONE]') continue;
+
+                    try {
+                        const chunk = JSON.parse(data);
+                        const delta = chunk.choices?.[0]?.delta;
+                        if (delta?.content) {
+                            fullText += delta.content;
+                            assistantEl.textContent = fullText;
+                            messagesEl.scrollTop = messagesEl.scrollHeight;
+                        }
+                    } catch {}
                 }
-                isReconnect = true;
-            };
+            }
 
-            ws.onmessage = (event) => {
+            assistantEl.classList.remove('streaming');
+            if (fullText) {
+                history.push({ role: 'assistant', content: fullText });
+            }
+
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                assistantEl.textContent = `Error: ${err.message}`;
+                assistantEl.className = 'msg error';
+            }
+        } finally {
+            isStreaming = false;
+            sendBtn.disabled = false;
+            abortController = null;
+            chatInput.focus();
+        }
+    }
+
+    // ─── WS Notification Sidecar ─────────────────────────────────
+
+    function connectWS() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+        ws.onopen = () => {
+            wsReconnectAttempts = 0;
+            addActivity('info', 'Connected to notification sidecar');
+        };
+
+        ws.onmessage = (event) => {
+            try {
                 const msg = JSON.parse(event.data);
-                switch (msg.type) {
-                    case 'transcript':
-                        handleTranscript(msg.data, msg.interim);
-                        break;
-                    case 'text_chunk':
-                        handleTextChunk(msg.data, msg.index);
-                        break;
-                    case 'audio_chunk':
-                        queueAudio(msg.data, msg.status_audio || false);
-                        break;
-                    case 'stream_end':
-                        handleStreamEnd();
-                        break;
-                    case 'status':
-                        handleToolStatus(msg.data);
-                        setStatus(msg.data, true);
-                        break;
-                    case 'tool_call':
-                        handleToolCall(msg.data);
-                        break;
-                    case 'tool_result':
-                        handleToolResult(msg.data);
-                        break;
+                if (msg.type === 'notification') {
+                    const notif = msg.data;
+                    const text = notif.text || notif.summary || JSON.stringify(notif);
+                    addActivity('notification', `${notif.plugin || ''}: ${text}`);
+                } else if (msg.type === 'pong') {
+                    // keepalive response
                 }
-            };
+            } catch {}
+        };
 
-            ws.onclose = () => handleDisconnect();
-            ws.onerror = (err) => console.error('WebSocket error:', err);
-        }
-
-        function handleDisconnect() {
-            wasStreaming = isStreaming;
-            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
-            if (streamSource) { streamSource.disconnect(); streamSource = null; }
-            isStreaming = false;
-            audioQueue.length = 0;
-            isPlaying = false;
-
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                reconnectAttempts++;
-                const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), 30000);
-                setOrbState('connecting');
-                setStatus(`reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                setTimeout(connect, delay);
-            } else {
-                setStatus('connection lost — refresh to retry', false, true);
-                setOrbState('idle');
+        ws.onclose = () => {
+            if (wsReconnectAttempts < 10) {
+                wsReconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts - 1), 30000);
+                setTimeout(connectWS, delay);
             }
-        }
+        };
 
-        async function resumeStreaming() {
-            try {
-                if (!audioStream || audioStream.getTracks().every(t => t.readyState === 'ended')) {
-                    audioStream = await navigator.mediaDevices.getUserMedia({
-                        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
-                    });
-                }
-                ws.send(JSON.stringify({ type: 'stream_start', reconnect: true }));
-                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                if (audioContext.state === 'suspended') await audioContext.resume();
-                streamSource = audioContext.createMediaStreamSource(audioStream);
-                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-                audioProcessor.onaudioprocess = sendAudioChunk;
-                streamSource.connect(audioProcessor);
-                audioProcessor.connect(audioContext.destination);
-                isStreaming = true;
-                setOrbState('listening');
-                setStatus('listening...', true);
-            } catch (err) {
-                console.error('Resume error:', err);
-                setOrbState('idle');
-                wasStreaming = false;
-            }
-        }
+        ws.onerror = () => {};
+    }
 
-        function sendAudioChunk(e) {
-            if (!isStreaming || isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
-            const inputData = e.inputBuffer.getChannelData(0);
-            const pcm16 = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[i]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            const bytes = new Uint8Array(pcm16.buffer);
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-            ws.send(JSON.stringify({ type: 'audio_chunk', data: btoa(binary) }));
+    // WS keepalive
+    setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
         }
+    }, 25000);
 
-        function toggleMute() {
-            if (!isStreaming) return;
-            isMuted = !isMuted;
-            if (isMuted) {
-                ws.send(JSON.stringify({ type: 'mute' }));
-                setOrbState('muted');
-                muteBtn.textContent = 'unmute';
-                muteBtn.style.borderColor = '#ff6b6b';
-                muteBtn.style.color = '#ff6b6b';
-                liveTranscript.textContent = '';
-            } else {
-                ws.send(JSON.stringify({ type: 'unmute' }));
-                setOrbState('listening');
-                setStatus('listening...', true);
-                muteBtn.textContent = 'mute';
-                muteBtn.style.borderColor = '';
-                muteBtn.style.color = '';
-            }
-        }
+    // ─── UI Helpers ──────────────────────────────────────────────
 
-        async function toggleStreaming() {
-            if (isTextMode) return;
-            if (isMuted) { toggleMute(); return; }
-            if (isStreaming) stopStreaming();
-            else await startStreaming();
-        }
+    function addMessage(text, role, streaming = false) {
+        const div = document.createElement('div');
+        div.className = `msg ${role}${streaming ? ' streaming' : ''}`;
+        div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+    }
 
-        async function startStreaming() {
-            if (!ws || ws.readyState !== WebSocket.OPEN) { setStatus('not connected', false, true); return; }
-            try {
-                audioStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
-                });
-                ws.send(JSON.stringify({ type: 'stream_start' }));
-                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                if (audioContext.state === 'suspended') await audioContext.resume();
-                streamSource = audioContext.createMediaStreamSource(audioStream);
-                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-                audioProcessor.onaudioprocess = sendAudioChunk;
-                streamSource.connect(audioProcessor);
-                audioProcessor.connect(audioContext.destination);
-                isStreaming = true;
-                isMuted = false;
-                muteBtn.style.display = '';
-                setOrbState('listening');
-                liveTranscript.textContent = '';
-            } catch (err) {
-                console.error('Streaming start error:', err);
-                setStatus('microphone access denied', false, true);
-            }
-        }
+    function addActivity(type, content) {
+        const item = document.createElement('div');
+        item.className = `activity-item ${type}`;
+        item.textContent = content;
+        activityList.appendChild(item);
+        activityList.scrollTop = activityList.scrollHeight;
+        while (activityList.children.length > 50) activityList.removeChild(activityList.firstChild);
+    }
 
-        function stopStreaming() {
-            isStreaming = false;
-            isMuted = false;
-            wasStreaming = false;
-            muteBtn.style.display = 'none';
-            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
-            if (streamSource) { streamSource.disconnect(); streamSource = null; }
-            if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
-            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stream_stop' }));
-            liveTranscript.textContent = '';
-            setOrbState('idle');
-        }
-
-        function handleTranscript(text, interim) {
-            if (interim) {
-                liveTranscript.textContent = text;
-                liveTranscript.className = 'active';
-            } else {
-                liveTranscript.textContent = '';
-                liveTranscript.className = '';
-                addMessage(text, 'user');
-                setOrbState('thinking');
-                setStatus('thinking...', true);
-            }
-        }
-
-        function handleTextChunk(text, index) {
-            if (index === 0) {
-                streamingMessageEl = document.createElement('div');
-                streamingMessageEl.className = 'message assistant';
-                streamingMessageEl.textContent = text;
-                conversation.appendChild(streamingMessageEl);
-                setOrbState('speaking');
-                setStatus('speaking...', true);
-            } else if (streamingMessageEl) {
-                streamingMessageEl.textContent += ' ' + text;
-            }
-            conversation.scrollTop = conversation.scrollHeight;
-        }
-
-        function handleStreamEnd() {
-            streamingMessageEl = null;
-            while (conversation.children.length > 20) conversation.removeChild(conversation.firstChild);
-            if (isStreaming) {
-                setTimeout(() => {
-                    if (isStreaming && !isPlaying) {
-                        setOrbState('listening');
-                        setStatus('listening...', true);
-                    }
-                }, 500);
-            }
-        }
-
-        function queueAudio(base64Data, isStatus = false) {
-            audioQueue.push({ data: base64Data, isStatus });
-            if (!isPlaying) playNextInQueue();
-        }
-
-        async function playNextInQueue() {
-            if (audioQueue.length === 0) {
-                isPlaying = false;
-                if (!streamingMessageEl) {
-                    if (isStreaming) { setOrbState('listening'); setStatus('listening...', true); }
-                    else setOrbState('idle');
-                }
-                return;
-            }
-            isPlaying = true;
-            setOrbState('speaking');
-            const item = audioQueue.shift();
-            try {
-                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                if (audioContext.state === 'suspended') await audioContext.resume();
-                const binaryStr = atob(item.data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
-                const source = audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
-                source.onended = () => {
-                    // Pause after status audio so it doesn't blend into the response
-                    if (item.isStatus) {
-                        setTimeout(() => playNextInQueue(), 400);
-                    } else {
-                        playNextInQueue();
-                    }
-                };
-                source.start();
-            } catch (err) {
-                console.error('Audio playback error:', err);
-                playNextInQueue();
-            }
-        }
-
-        function toggleTextMode() {
-            isTextMode = !isTextMode;
-            textContainer.style.display = isTextMode ? 'block' : 'none';
-            if (isTextMode) { if (isStreaming) stopStreaming(); textInput.focus(); }
-        }
-
-        function sendText() {
-            const text = textInput.value.trim();
-            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-            addMessage(text, 'user');
-            ws.send(JSON.stringify({ type: 'text', data: text }));
-            textInput.value = '';
-            setOrbState('thinking');
-            setStatus('thinking...', true);
-        }
-
-        async function captureImage() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-                const video = document.createElement('video');
-                video.srcObject = stream;
-                video.play();
-                await new Promise(r => video.onloadedmetadata = r);
-                await new Promise(r => setTimeout(r, 500));
-                const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                stream.getTracks().forEach(t => t.stop());
-                const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
-                    setStatus('image sent — now speak your question', true);
-                }
-            } catch (err) { setStatus('camera access denied', false, true); }
-        }
-
-        function setOrbState(state) {
-            orb.className = state === 'idle' ? '' : state;
-            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '\u266A', connecting: '\u00B7\u00B7\u00B7', muted: 'muted', working: '\u2699' };
-            orbLabel.textContent = labels[state] || 'aether';
-            if (state === 'idle') setStatus('tap the orb to speak');
-        }
-
-        function setStatus(text, active = false, error = false) {
-            statusEl.textContent = text;
-            statusEl.className = error ? 'error' : (active ? 'active' : '');
-        }
-
-        function addMessage(text, role) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            div.textContent = text;
-            conversation.appendChild(div);
-            conversation.scrollTop = conversation.scrollHeight;
-            while (conversation.children.length > 20) conversation.removeChild(conversation.firstChild);
-        }
-
-        connect();
+    // ─── Init ────────────────────────────────────────────────────
+    chatInput.focus();
+    connectWS();
     </script>
 </body>
 </html>

@@ -3,33 +3,38 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728985C43549280D7EE48F1B /* VoiceOrbView.swift */; };
-		9E6EDED8E588657281641D0D /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 26F3CDC54B03743FE4792B40 /* WebRTC */; settings = {ATTRIBUTES = (Required, ); }; };
+		8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E72DC6F87F8AB249C304B76 /* AudioService.swift */; };
 		A21BF8D298679D261E473934 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4B279EFBA85A2B5140ED04 /* PairingView.swift */; };
 		B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC9C2F61237F70A4030DD272 /* PairingService.swift */; };
 		CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */; };
+		D214CF928A099372643E374F /* Pods_Aether.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */; };
 		E3724BB607C2D4F2836A5BBB /* WebRTCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.release.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.release.xcconfig"; sourceTree = "<group>"; };
+		4E72DC6F87F8AB249C304B76 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		728985C43549280D7EE48F1B /* VoiceOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOrbView.swift; sourceTree = "<group>"; };
 		7A4B279EFBA85A2B5140ED04 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCService.swift; sourceTree = "<group>"; };
 		AF079DE4E9E495EEF6637D03 /* Aether.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Aether.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AetherApp.swift; sourceTree = "<group>"; };
+		E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.debug.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.debug.xcconfig"; sourceTree = "<group>"; };
+		F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Aether.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FC9C2F61237F70A4030DD272 /* PairingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		5046DF9BFF3D37DCD73624CE /* Frameworks */ = {
+		F0AA3F27472F0CFC0A0E3460 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9E6EDED8E588657281641D0D /* WebRTC in Frameworks */,
+				D214CF928A099372643E374F /* Pods_Aether.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -54,11 +59,23 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		19492C5216FE3DDA8055E3D3 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */,
+				32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
 		7CCE34B3C0A23C3EA91514B0 = {
 			isa = PBXGroup;
 			children = (
 				01EBE4DD8916DF7BB0D0EAD5 /* Aether */,
 				8A93DD82B280EDA489D217FB /* Products */,
+				19492C5216FE3DDA8055E3D3 /* Pods */,
+				93CF6A2C5FDA3A42B248696C /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -70,9 +87,18 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		93CF6A2C5FDA3A42B248696C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		984DA071728CC425F5BBE1CC /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				4E72DC6F87F8AB249C304B76 /* AudioService.swift */,
 				FC9C2F61237F70A4030DD272 /* PairingService.swift */,
 				93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */,
 			);
@@ -95,17 +121,16 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1098AD2A372F4DD2918AFFA /* Build configuration list for PBXNativeTarget "Aether" */;
 			buildPhases = (
+				E4DC708E7439CE4089DAD121 /* [CP] Check Pods Manifest.lock */,
 				E885CAA05B4AF3999B54E2C7 /* Sources */,
-				5046DF9BFF3D37DCD73624CE /* Frameworks */,
+				F0AA3F27472F0CFC0A0E3460 /* Frameworks */,
+				3869B46611F49E613BD5CA1B /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = Aether;
-			packageProductDependencies = (
-				26F3CDC54B03743FE4792B40 /* WebRTC */,
-			);
 			productName = Aether;
 			productReference = AF079DE4E9E495EEF6637D03 /* Aether.app */;
 			productType = "com.apple.product-type.application";
@@ -134,10 +159,8 @@
 			);
 			mainGroup = 7CCE34B3C0A23C3EA91514B0;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				1294277F0434ED0AC13F7891 /* XCRemoteSwiftPackageReference "WebRTC-SPM" */,
-				B20501BF2F4634CA0086A0E6 /* XCRemoteSwiftPackageReference "WebRTC" */,
-			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 8A93DD82B280EDA489D217FB /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -146,12 +169,55 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		3869B46611F49E613BD5CA1B /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		E4DC708E7439CE4089DAD121 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Aether-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		E885CAA05B4AF3999B54E2C7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */,
+				8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */,
 				B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */,
 				A21BF8D298679D261E473934 /* PairingView.swift in Sources */,
 				6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */,
@@ -211,7 +277,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
@@ -220,6 +286,7 @@
 		};
 		8F65DEFA5F0FDB923D7B6E4B /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
@@ -232,13 +299,18 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.aether.app;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
 		D117200E3E6E0A8910494FAE /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
@@ -251,7 +323,11 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.aether.app;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -312,7 +388,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
@@ -341,33 +417,6 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		1294277F0434ED0AC13F7891 /* XCRemoteSwiftPackageReference "WebRTC-SPM" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/nicklama/WebRTC-SPM";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 130.0.0;
-			};
-		};
-		B20501BF2F4634CA0086A0E6 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/stasel/WebRTC";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 141.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		26F3CDC54B03743FE4792B40 /* WebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1294277F0434ED0AC13F7891 /* XCRemoteSwiftPackageReference "WebRTC-SPM" */;
-			productName = WebRTC;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E7C705F7C33D8C121C974109 /* Project object */;
 }

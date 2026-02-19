@@ -430,10 +430,10 @@
 
         switch (msg.type) {
             case 'transcript':
-                handleTranscript(msg.data, msg.interim);
+                handleTranscript(msg.data, msg.interim, msg.role);
                 break;
             case 'text_chunk':
-                handleTextChunk(msg.data, msg.index);
+                handleTextChunk(msg.data);
                 break;
             case 'audio_chunk':
                 // Audio comes via WebRTC track, not data channel.
@@ -567,29 +567,34 @@
     }
 
     // ─── Message Handlers ────────────────────────────────────────
-    function handleTranscript(text, interim) {
-        if (interim) {
+    function handleTranscript(text, interim, role) {
+        if (role === 'assistant') {
+            // Greeting or assistant transcript
+            addMessage(text, 'assistant');
+            setOrbState('speaking');
+            setStatus('speaking...', true);
+        } else if (interim) {
             liveTranscript.textContent = text;
             liveTranscript.className = 'active';
         } else {
             liveTranscript.textContent = '';
             liveTranscript.className = '';
-            addMessage(text, 'user');
+            if (text) addMessage(text, 'user');
             setOrbState('thinking');
             setStatus('thinking...', true);
         }
     }
 
-    function handleTextChunk(text, index) {
-        if (index === 0) {
+    function handleTextChunk(text) {
+        if (!streamingMessageEl) {
             streamingMessageEl = document.createElement('div');
             streamingMessageEl.className = 'message assistant';
             streamingMessageEl.textContent = text;
             conversation.appendChild(streamingMessageEl);
             setOrbState('speaking');
             setStatus('speaking...', true);
-        } else if (streamingMessageEl) {
-            streamingMessageEl.textContent += ' ' + text;
+        } else {
+            streamingMessageEl.textContent += text;
         }
         conversation.scrollTop = conversation.scrollHeight;
     }

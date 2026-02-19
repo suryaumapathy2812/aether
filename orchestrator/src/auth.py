@@ -32,15 +32,16 @@ async def get_user_id(request: Request) -> str:
 
     Raises HTTPException(401) if no valid session is found.
     """
-    token = _extract_token_from_request(request)
-    if not token:
+    tokens = _extract_tokens_from_request(request)
+    if not tokens:
         raise HTTPException(401, "Missing authorization")
 
-    user_id = await _validate_token(token)
-    if not user_id:
-        raise HTTPException(401, "Invalid or expired session")
+    for token in tokens:
+        user_id = await _validate_token(token)
+        if user_id:
+            return user_id
 
-    return user_id
+    raise HTTPException(401, "Invalid or expired session")
 
 
 async def get_user_id_from_ws(ws: WebSocket) -> str | None:
@@ -65,31 +66,41 @@ async def get_user_id_from_ws(ws: WebSocket) -> str | None:
     return await _validate_token(token)
 
 
-def _extract_token_from_request(request: Request) -> str | None:
-    """Extract session token from Authorization header, cookie, or query param.
+def _extract_tokens_from_request(request: Request) -> list[str]:
+    """Extract candidate tokens from Authorization header, cookies, or query.
 
     Priority:
       1. Authorization: Bearer <token> header
-      2. better-auth session cookie (same-origin requests via Caddy)
-      3. ?token= query param (OAuth redirect flows)
+      2. __Secure-better-auth session cookie
+      3. better-auth session cookie
+      4. ?token= query param (OAuth redirect flows)
     """
+    tokens: list[str] = []
+
     # 1. Authorization header
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        return auth_header[7:]
+        tokens.append(auth_header[7:])
 
-    # 2. better-auth session cookie (sent by browser on same-origin requests)
+    # 2/3. better-auth session cookies (sent by browser on same-origin requests)
     # The cookie value is URL-encoded: token.signature
-    cookie_token = request.cookies.get(
-        "better-auth.session_token"
-    ) or request.cookies.get("__Secure-better-auth.session_token")
-    if cookie_token:
-        # Cookie format: "token.signature" — we only need the token part
+    for cookie_name in (
+        "__Secure-better-auth.session_token",
+        "better-auth.session_token",
+    ):
+        cookie_token = request.cookies.get(cookie_name)
+        if not cookie_token:
+            continue
         token_part = cookie_token.split(".")[0] if "." in cookie_token else cookie_token
-        return token_part
+        tokens.append(token_part)
 
-    # 3. Fallback: query param (used by OAuth redirect flows)
-    return request.query_params.get("token")
+    # 4. Fallback: query param (used by OAuth redirect flows)
+    query_token = request.query_params.get("token")
+    if query_token:
+        tokens.append(query_token)
+
+    # Deduplicate while preserving priority order.
+    return list(dict.fromkeys(tokens))
 
 
 async def _validate_token(token: str) -> str | None:

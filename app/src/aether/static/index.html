@@ -3,608 +3,289 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aether</title>
+    <title>Aether Voice</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
             background: #0a0a0a;
-            color: #e0e0e0;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-        }
-
-        #status {
-            font-size: 0.85rem;
-            color: #666;
-            margin-bottom: 1rem;
-            min-height: 1.2rem;
-            transition: color 0.3s;
-        }
-        #status.active { color: #4ecdc4; }
-        #status.error { color: #ff6b6b; }
-
-        #live-transcript {
-            font-size: 0.85rem;
-            color: #4ecdc4;
-            margin-bottom: 1.5rem;
-            min-height: 1.2rem;
-            max-width: 500px;
-            text-align: center;
-            opacity: 0.7;
-            font-style: italic;
-            transition: opacity 0.2s;
-        }
-        #live-transcript.active { opacity: 1; font-style: normal; }
-
-        #orb-container {
-            position: relative;
-            width: 180px;
-            height: 180px;
-            margin-bottom: 2rem;
-            cursor: pointer;
-        }
-
-        #orb {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: radial-gradient(circle at 35% 35%, #1a1a2e, #0a0a15);
-            border: 1px solid #1a1a2e;
-            transition: all 0.4s ease;
+            color: #e7e7e7;
+            min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 20px;
         }
-
-        #orb:hover { border-color: #4ecdc4; box-shadow: 0 0 40px rgba(78, 205, 196, 0.1); }
-
-        #orb.listening {
-            border-color: #4ecdc4;
-            box-shadow: 0 0 60px rgba(78, 205, 196, 0.2);
-            animation: pulse 2s ease-in-out infinite;
-        }
-        #orb.thinking {
-            border-color: #a78bfa;
-            box-shadow: 0 0 60px rgba(167, 139, 250, 0.2);
-            animation: pulse 1.2s ease-in-out infinite;
-        }
-        #orb.speaking {
-            border-color: #f59e0b;
-            box-shadow: 0 0 60px rgba(245, 158, 11, 0.2);
-            animation: pulse 0.8s ease-in-out infinite;
-        }
-        #orb.connecting {
-            border-color: #666;
-            box-shadow: 0 0 30px rgba(100, 100, 100, 0.1);
-            animation: breathe 3s ease-in-out infinite;
-        }
-        #orb.muted {
-            border-color: #333;
-            box-shadow: none;
-            opacity: 0.4;
-            animation: none;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.03); }
-        }
-        @keyframes breathe {
-            0%, 100% { opacity: 0.5; }
-            50% { opacity: 1; }
-        }
-
-        #orb-label {
-            font-size: 0.75rem;
-            color: #444;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        #conversation {
-            position: fixed;
-            bottom: 100px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 600px;
-            max-height: 200px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            padding: 1rem;
-        }
-
-        .message {
-            font-size: 0.9rem;
-            line-height: 1.5;
-            padding: 0.5rem 0;
-            opacity: 0;
-            animation: fadeIn 0.3s ease forwards;
-        }
-        .message.user { color: #888; text-align: right; }
-        .message.assistant { color: #e0e0e0; }
-        .message.streaming { opacity: 1; }
-
-        @keyframes fadeIn { to { opacity: 1; } }
-
-        #controls {
-            position: fixed;
-            bottom: 30px;
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-        }
-
-        .ctrl-btn {
-            background: none;
-            border: 1px solid #333;
-            color: #666;
-            padding: 0.5rem 1rem;
-            border-radius: 2rem;
-            font-size: 0.75rem;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .ctrl-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
-
-        #text-input-container {
-            position: fixed;
-            bottom: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 500px;
-            display: none;
-        }
-
-        #text-input {
-            width: 100%;
+        .app {
+            width: min(820px, 100%);
+            border: 1px solid #222;
+            border-radius: 14px;
             background: #111;
-            border: 1px solid #333;
-            color: #e0e0e0;
-            padding: 0.75rem 1rem;
-            border-radius: 2rem;
-            font-size: 0.9rem;
+            padding: 18px;
+            display: grid;
+            gap: 14px;
+        }
+        .status {
+            font-size: 13px;
+            color: #9ca3af;
+            min-height: 18px;
+        }
+        .status.active { color: #4ecdc4; }
+        .status.error { color: #ff6b6b; }
+        .controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        button {
+            background: #1a1a1a;
+            color: #d1d5db;
+            border: 1px solid #2a2a2a;
+            border-radius: 999px;
+            padding: 8px 14px;
+            cursor: pointer;
+        }
+        button:hover { border-color: #4ecdc4; color: #4ecdc4; }
+        #text {
+            width: 100%;
+            border-radius: 999px;
+            border: 1px solid #2a2a2a;
+            background: #0b0b0b;
+            color: #e7e7e7;
+            padding: 10px 14px;
             outline: none;
         }
-        #text-input:focus { border-color: #4ecdc4; }
+        #text:focus { border-color: #4ecdc4; }
+        .log {
+            border: 1px solid #222;
+            border-radius: 10px;
+            background: #080808;
+            min-height: 320px;
+            max-height: 320px;
+            overflow: auto;
+            padding: 12px;
+            display: grid;
+            gap: 8px;
+        }
+        .msg { line-height: 1.4; }
+        .msg.user { color: #9ca3af; text-align: right; }
+        .msg.assistant { color: #f3f4f6; }
+        .hint { color: #6b7280; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div id="status">connecting...</div>
-    <div id="live-transcript"></div>
-
-    <div id="orb-container" onclick="toggleStreaming()">
-        <div id="orb" class="connecting">
-            <span id="orb-label">aether</span>
+    <div class="app">
+        <div id="status" class="status">Tap Connect to start WebRTC</div>
+        <div class="controls">
+            <button id="connect">Connect</button>
+            <button id="start">Start Voice</button>
+            <button id="stop">Stop Voice</button>
+            <button id="mute">Mute</button>
+            <button id="unmute">Unmute</button>
         </div>
-    </div>
-
-    <div id="conversation"></div>
-
-    <div id="text-input-container">
-        <input id="text-input" type="text" placeholder="Type a message..."
-               onkeydown="if(event.key==='Enter')sendText()">
-    </div>
-
-    <div id="controls">
-        <button class="ctrl-btn" id="mute-btn" onclick="toggleMute()" style="display:none">mute</button>
-        <button class="ctrl-btn" onclick="toggleTextMode()">text</button>
-        <button class="ctrl-btn" onclick="captureImage()">camera</button>
+        <input id="text" placeholder="Type and press Enter to send text over data channel" />
+        <div class="hint">Signaling: <code>/webrtc/offer</code> and <code>/webrtc/ice</code></div>
+        <div id="log" class="log"></div>
     </div>
 
     <script>
-        // --- State ---
-        let ws = null;
-        let isTextMode = false;
-        let audioContext = null;
+    let pc = null;
+    let dc = null;
+    let localStream = null;
+    let remoteAudio = null;
+    let pcId = null;
+    let partial = null;
 
-        // --- Streaming STT state ---
-        let isStreaming = false;
-        let audioStream = null;
-        let audioProcessor = null;
-        let streamSource = null;
-        let streamingMessageEl = null;
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
 
-        // --- Audio playback queue ---
-        const audioQueue = [];
-        let isPlaying = false;
+    function setStatus(text, level = "") {
+        statusEl.textContent = text;
+        statusEl.className = `status ${level}`.trim();
+    }
 
-        // --- Mute state ---
-        let isMuted = false;
-        const muteBtn = document.getElementById('mute-btn');
+    function addMsg(text, role = "assistant") {
+        const div = document.createElement("div");
+        div.className = `msg ${role}`;
+        div.textContent = text;
+        logEl.appendChild(div);
+        logEl.scrollTop = logEl.scrollHeight;
+        while (logEl.children.length > 60) {
+            logEl.removeChild(logEl.firstChild);
+        }
+    }
 
-        // --- Reconnect state ---
-        let reconnectAttempts = 0;
-        const MAX_RECONNECT_ATTEMPTS = 10;
-        const BASE_RECONNECT_DELAY = 1000;
-        let wasStreaming = false;
-        let isReconnect = false;
+    function ensureRemoteAudio() {
+        if (!remoteAudio) {
+            remoteAudio = document.createElement("audio");
+            remoteAudio.autoplay = true;
+            document.body.appendChild(remoteAudio);
+        }
+    }
 
-        // --- Elements ---
-        const orb = document.getElementById('orb');
-        const orbLabel = document.getElementById('orb-label');
-        const statusEl = document.getElementById('status');
-        const liveTranscript = document.getElementById('live-transcript');
-        const conversation = document.getElementById('conversation');
-        const textContainer = document.getElementById('text-input-container');
-        const textInput = document.getElementById('text-input');
+    async function connect() {
+        try {
+            setStatus("Requesting microphone...", "active");
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 48000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                },
+            });
 
-        // --- WebSocket ---
-        function connect() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            });
 
-            setOrbState('connecting');
-            setStatus('connecting...');
+            localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
 
-            ws.onopen = () => {
-                console.log(`WebSocket connected (reconnect: ${isReconnect})`);
-                reconnectAttempts = 0;
+            dc = pc.createDataChannel("aether", { ordered: true });
+            dc.onopen = () => setStatus("Connected", "active");
+            dc.onmessage = onMessage;
 
-                if (isReconnect && wasStreaming) {
-                    setStatus('reconnected — resuming...', true);
-                    resumeStreaming();
-                } else if (!isReconnect) {
-                    setStatus('tap the orb to speak');
-                    setOrbState('idle');
-                } else {
-                    setStatus('reconnected');
-                    setOrbState('idle');
-                }
-
-                isReconnect = true;
+            pc.ontrack = (event) => {
+                if (event.track.kind !== "audio") return;
+                ensureRemoteAudio();
+                remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
             };
 
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-
-                switch (msg.type) {
-                    case 'transcript':
-                        handleTranscript(msg.data, msg.interim);
-                        break;
-                    case 'text_chunk':
-                        handleTextChunk(msg.data, msg.index);
-                        break;
-                    case 'audio_chunk':
-                        queueAudio(msg.data);
-                        break;
-                    case 'stream_end':
-                        handleStreamEnd();
-                        break;
-                    case 'status':
-                        setStatus(msg.data, true);
-                        break;
-                }
-            };
-
-            ws.onclose = () => handleDisconnect();
-            ws.onerror = (err) => console.error('WebSocket error:', err);
-        }
-
-        function handleDisconnect() {
-            wasStreaming = isStreaming;
-
-            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
-            if (streamSource) { streamSource.disconnect(); streamSource = null; }
-            isStreaming = false;
-
-            audioQueue.length = 0;
-            isPlaying = false;
-
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                reconnectAttempts++;
-                const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), 30000);
-                setOrbState('connecting');
-                setStatus(`reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                setTimeout(connect, delay);
-            } else {
-                setStatus('connection lost — refresh to retry', false, true);
-                setOrbState('idle');
-            }
-        }
-
-        async function resumeStreaming() {
-            try {
-                if (!audioStream || audioStream.getTracks().every(t => t.readyState === 'ended')) {
-                    audioStream = await navigator.mediaDevices.getUserMedia({
-                        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
-                    });
-                }
-
-                ws.send(JSON.stringify({ type: 'stream_start', reconnect: true }));
-
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                }
-                if (audioContext.state === 'suspended') await audioContext.resume();
-
-                streamSource = audioContext.createMediaStreamSource(audioStream);
-                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-                audioProcessor.onaudioprocess = sendAudioChunk;
-                streamSource.connect(audioProcessor);
-                audioProcessor.connect(audioContext.destination);
-
-                isStreaming = true;
-                setOrbState('listening');
-                setStatus('listening...', true);
-            } catch (err) {
-                console.error('Resume error:', err);
-                setOrbState('idle');
-                wasStreaming = false;
-            }
-        }
-
-        function sendAudioChunk(e) {
-            if (!isStreaming || isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
-            const inputData = e.inputBuffer.getChannelData(0);
-            const pcm16 = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[i]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            const bytes = new Uint8Array(pcm16.buffer);
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-            ws.send(JSON.stringify({ type: 'audio_chunk', data: btoa(binary) }));
-        }
-
-        // --- Mute ---
-        function toggleMute() {
-            if (!isStreaming) return;
-
-            isMuted = !isMuted;
-
-            if (isMuted) {
-                ws.send(JSON.stringify({ type: 'mute' }));
-                setOrbState('muted');
-                muteBtn.textContent = 'unmute';
-                muteBtn.style.borderColor = '#ff6b6b';
-                muteBtn.style.color = '#ff6b6b';
-                liveTranscript.textContent = '';
-            } else {
-                ws.send(JSON.stringify({ type: 'unmute' }));
-                setOrbState('listening');
-                setStatus('listening...', true);
-                muteBtn.textContent = 'mute';
-                muteBtn.style.borderColor = '';
-                muteBtn.style.color = '';
-            }
-        }
-
-        // --- Streaming STT ---
-        async function toggleStreaming() {
-            if (isTextMode) return;
-            if (isMuted) { toggleMute(); return; } // Unmute on orb tap
-            if (isStreaming) stopStreaming();
-            else await startStreaming();
-        }
-
-        async function startStreaming() {
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                setStatus('not connected', false, true);
-                return;
-            }
-
-            try {
-                audioStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+            const gathered = [];
+            pc.onicecandidate = (event) => {
+                if (!event.candidate) return;
+                gathered.push({
+                    candidate: event.candidate.candidate,
+                    sdpMid: event.candidate.sdpMid,
+                    sdpMLineIndex: event.candidate.sdpMLineIndex,
                 });
+            };
 
-                ws.send(JSON.stringify({ type: 'stream_start' }));
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
 
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === "complete") {
+                    resolve();
+                    return;
                 }
-                if (audioContext.state === 'suspended') await audioContext.resume();
+                const timer = setTimeout(resolve, 3000);
+                pc.onicegatheringstatechange = () => {
+                    if (pc.iceGatheringState === "complete") {
+                        clearTimeout(timer);
+                        resolve();
+                    }
+                };
+            });
 
-                streamSource = audioContext.createMediaStreamSource(audioStream);
-                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-                audioProcessor.onaudioprocess = sendAudioChunk;
-                streamSource.connect(audioProcessor);
-                audioProcessor.connect(audioContext.destination);
+            const offerResp = await fetch("/webrtc/offer", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                    user_id: "web-rtc-test",
+                }),
+            });
+            if (!offerResp.ok) throw new Error(`Offer failed (${offerResp.status})`);
 
-                isStreaming = true;
-                isMuted = false;
-                muteBtn.style.display = '';
-                muteBtn.textContent = 'mute';
-                muteBtn.style.borderColor = '';
-                muteBtn.style.color = '';
-                setOrbState('listening');
-                setStatus('listening...', true);
-                liveTranscript.textContent = '';
-            } catch (err) {
-                console.error('Streaming start error:', err);
-                setStatus('microphone access denied', false, true);
-            }
-        }
+            const answer = await offerResp.json();
+            pcId = answer.pc_id;
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
 
-        function stopStreaming() {
-            isStreaming = false;
-            isMuted = false;
-            wasStreaming = false;
-            muteBtn.style.display = 'none';
-
-            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
-            if (streamSource) { streamSource.disconnect(); streamSource = null; }
-            if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
-
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'stream_stop' }));
+            if (gathered.length > 0) {
+                await fetch("/webrtc/ice", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ pc_id: pcId, candidates: gathered }),
+                });
             }
 
-            liveTranscript.textContent = '';
-            setOrbState('idle');
+            setStatus("Connected. Press Start Voice.", "active");
+        } catch (err) {
+            setStatus(`Connection error: ${err.message}`, "error");
+        }
+    }
+
+    function onMessage(event) {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch {
+            return;
         }
 
-        // --- Handle live transcription ---
-        function handleTranscript(text, interim) {
-            if (interim) {
-                liveTranscript.textContent = text;
-                liveTranscript.className = 'active';
+        if (msg.type === "transcript") {
+            if (msg.role === "assistant") {
+                addMsg(msg.data, "assistant");
+            } else if (!msg.interim && msg.data) {
+                addMsg(msg.data, "user");
+            }
+            return;
+        }
+
+        if (msg.type === "text_chunk") {
+            if (!partial) {
+                partial = document.createElement("div");
+                partial.className = "msg assistant";
+                partial.textContent = msg.data;
+                logEl.appendChild(partial);
             } else {
-                liveTranscript.textContent = '';
-                liveTranscript.className = '';
-                addMessage(text, 'user');
-                setOrbState('thinking');
-                setStatus('thinking...', true);
+                partial.textContent += msg.data;
             }
+            logEl.scrollTop = logEl.scrollHeight;
+            return;
         }
 
-        // --- Streaming LLM response ---
-        function handleTextChunk(text, index) {
-            if (index === 0) {
-                streamingMessageEl = document.createElement('div');
-                streamingMessageEl.className = 'message assistant streaming';
-                streamingMessageEl.textContent = text;
-                conversation.appendChild(streamingMessageEl);
-                setOrbState('speaking');
-                setStatus('speaking...', true);
-            } else if (streamingMessageEl) {
-                streamingMessageEl.textContent += ' ' + text;
-            }
-            conversation.scrollTop = conversation.scrollHeight;
+        if (msg.type === "stream_end") {
+            partial = null;
+            return;
         }
 
-        function handleStreamEnd() {
-            if (streamingMessageEl) {
-                streamingMessageEl.classList.remove('streaming');
-                streamingMessageEl = null;
-            }
-            while (conversation.children.length > 10) {
-                conversation.removeChild(conversation.firstChild);
-            }
-            if (isStreaming) {
-                setTimeout(() => {
-                    if (isStreaming && !isPlaying) {
-                        setOrbState('listening');
-                        setStatus('listening...', true);
-                    }
-                }, 500);
-            }
+        if (msg.type === "error" && msg.data) {
+            setStatus(`Error: ${msg.data}`, "error");
+            addMsg(`Error: ${msg.data}`, "assistant");
+            partial = null;
+            return;
         }
 
-        // --- Audio Queue ---
-        function queueAudio(base64Data) {
-            audioQueue.push(base64Data);
-            if (!isPlaying) playNextInQueue();
+        if (msg.type === "status" && msg.data) {
+            setStatus(msg.data, "active");
         }
+    }
 
-        async function playNextInQueue() {
-            if (audioQueue.length === 0) {
-                isPlaying = false;
-                if (!streamingMessageEl) {
-                    if (isStreaming) {
-                        setOrbState('listening');
-                        setStatus('listening...', true);
-                    } else {
-                        setOrbState('idle');
-                    }
-                }
-                return;
-            }
-
-            isPlaying = true;
-            setOrbState('speaking');
-
-            const base64Data = audioQueue.shift();
-            try {
-                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                if (audioContext.state === 'suspended') await audioContext.resume();
-
-                const binaryStr = atob(base64Data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-
-                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
-                const source = audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
-                source.onended = () => playNextInQueue();
-                source.start();
-            } catch (err) {
-                console.error('Audio playback error:', err);
-                playNextInQueue();
-            }
+    function send(type, data = undefined) {
+        if (!dc || dc.readyState !== "open") {
+            setStatus("Data channel is not ready (state=" + (dc ? dc.readyState : "null") + ")", "error");
+            return;
         }
+        const payload = data === undefined ? { type } : { type, data };
+        const msg = JSON.stringify(payload);
+        console.log("DC send:", msg, "buffered:", dc.bufferedAmount);
+        dc.send(msg);
+        setStatus("Sent: " + type, "active");
+    }
 
-        // --- Text Mode ---
-        function toggleTextMode() {
-            isTextMode = !isTextMode;
-            textContainer.style.display = isTextMode ? 'block' : 'none';
-            if (isTextMode) {
-                if (isStreaming) stopStreaming();
-                textInput.focus();
-            }
-        }
+    document.getElementById("connect").addEventListener("click", connect);
+    document.getElementById("start").addEventListener("click", () => send("stream_start"));
+    document.getElementById("stop").addEventListener("click", () => send("stream_stop"));
+    document.getElementById("mute").addEventListener("click", () => {
+        send("mute");
+        if (localStream) localStream.getAudioTracks().forEach((t) => { t.enabled = false; });
+    });
+    document.getElementById("unmute").addEventListener("click", () => {
+        send("unmute");
+        if (localStream) localStream.getAudioTracks().forEach((t) => { t.enabled = true; });
+    });
 
-        function sendText() {
-            const text = textInput.value.trim();
-            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-            addMessage(text, 'user');
-            ws.send(JSON.stringify({ type: 'text', data: text }));
-            textInput.value = '';
-            setOrbState('thinking');
-            setStatus('thinking...', true);
-        }
-
-        // --- Camera ---
-        async function captureImage() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-                const video = document.createElement('video');
-                video.srcObject = stream;
-                video.play();
-                await new Promise(resolve => video.onloadedmetadata = resolve);
-                await new Promise(resolve => setTimeout(resolve, 500));
-                const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                stream.getTracks().forEach(t => t.stop());
-                const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'image', data: base64, mime: 'image/jpeg' }));
-                    setStatus('image sent — now speak your question', true);
-                }
-            } catch (err) {
-                setStatus('camera access denied', false, true);
-            }
-        }
-
-        // --- UI Helpers ---
-        function setOrbState(state) {
-            orb.className = state === 'idle' ? '' : state;
-            const labels = { idle: 'aether', listening: 'listening', thinking: '...', speaking: '\u266A', connecting: '\u00B7\u00B7\u00B7', muted: 'muted' };
-            orbLabel.textContent = labels[state] || 'aether';
-            if (state === 'idle') setStatus('tap the orb to speak');
-            if (state === 'muted') setStatus('muted — tap orb or unmute to resume');
-        }
-
-        function setStatus(text, active = false, error = false) {
-            statusEl.textContent = text;
-            statusEl.className = error ? 'error' : (active ? 'active' : '');
-        }
-
-        function addMessage(text, role) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            div.textContent = text;
-            conversation.appendChild(div);
-            conversation.scrollTop = conversation.scrollHeight;
-            while (conversation.children.length > 10) conversation.removeChild(conversation.firstChild);
-        }
-
-        // --- Init ---
-        connect();
+    document.getElementById("text").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        const value = e.target.value.trim();
+        if (!value) return;
+        send("text", value);
+        e.target.value = "";
+    });
     </script>
 </body>
 </html>

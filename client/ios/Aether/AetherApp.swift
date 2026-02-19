@@ -14,18 +14,17 @@ struct AetherApp: App {
                     VoiceOrbView()
                         .environmentObject(pairingService)
                         .opacity(showOrb ? 1 : 0)
-                        .scaleEffect(showOrb ? 1 : 0.8)
+                        .scaleEffect(showOrb ? 1 : 0.92)
                 } else {
                     PairingView()
                         .environmentObject(pairingService)
                         .opacity(showOrb ? 0 : 1)
-                        .scaleEffect(showOrb ? 1.05 : 1)
+                        .scaleEffect(showOrb ? 1.04 : 1)
                 }
             }
-            .animation(.easeInOut(duration: 0.8), value: showOrb)
+            .animation(.easeInOut(duration: 0.7), value: showOrb)
             .onChange(of: pairingService.isPaired) {
                 if pairingService.isPaired {
-                    // Brief pause, then crossfade to orb
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                         showOrb = true
                     }
@@ -34,7 +33,6 @@ struct AetherApp: App {
                 }
             }
             .onAppear {
-                // If already paired on launch, skip animation
                 if pairingService.isPaired {
                     showOrb = true
                 }

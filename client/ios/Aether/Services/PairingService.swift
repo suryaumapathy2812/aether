@@ -17,7 +17,7 @@ class PairingService: ObservableObject {
     init() {
         // Load from UserDefaults or use default
         self.orchestratorURL = UserDefaults.standard.string(forKey: "orchestrator_url")
-            ?? "http://localhost:9000"
+            ?? "http://localhost:3080"
 
         // Check if already paired (try Keychain, also try UserDefaults as fallback)
         if let token = KeychainHelper.load(key: "device_token") {

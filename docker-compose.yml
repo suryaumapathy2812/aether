@@ -19,6 +19,7 @@ services:
       - "${CADDY_HTTPS_PORT:-443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./app/src/aether/static:/srv/agent-static:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -57,6 +58,15 @@ services:
       - AGENT_NETWORK=${AGENT_NETWORK:-core-ai_default}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      # Shared model cache for all per-user agent containers
+      - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}
+      - AGENT_SHARED_MODELS_ORCH_PATH=${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
+      - AGENT_SHARED_MODELS_CONTAINER_PATH=${AGENT_SHARED_MODELS_CONTAINER_PATH:-/models}
+      # VAD bootstrap defaults (download-if-missing)
+      - AETHER_VAD_MODE_DEFAULT=${AETHER_VAD_MODE_DEFAULT:-off}
+      - AETHER_VAD_MODEL_RELATIVE_PATH=${AETHER_VAD_MODEL_RELATIVE_PATH:-silero/silero_vad.onnx}
+      - AETHER_VAD_MODEL_URL=${AETHER_VAD_MODEL_URL:-}
+      - AETHER_VAD_MODEL_SHA256=${AETHER_VAD_MODEL_SHA256:-}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys (used when user hasn't set their own)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -74,6 +84,7 @@ services:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For container management
+      - ${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}:${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
     restart: unless-stopped
 
   # --- Dashboard (Next.js) ---

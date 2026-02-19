@@ -62,6 +62,7 @@ async def verify_agent_secret(request: Request) -> None:
 
 from .agent_manager import (
     IDLE_TIMEOUT_MINUTES,
+    ensure_shared_models,
     provision_agent,
     stop_agent,
     get_agent_status,
@@ -88,6 +89,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await bootstrap_schema()
+    await ensure_shared_models()
 
     # Reconcile orphaned containers on startup
     if not AGENT_SECRET:
@@ -639,7 +641,18 @@ async def _get_agent_for_user(user_id: str) -> dict | None:
         user_id,
     )
     if agent:
-        return agent
+        # Guard against stale DB state (row says running but container is gone).
+        container_status = await get_agent_status(user_id)
+        if container_status == "running":
+            return agent
+        log.warning(
+            "Agent row stale for user %s (db=running, container=%s); reprovisioning",
+            user_id,
+            container_status,
+        )
+        await pool.execute(
+            "UPDATE agents SET status = 'stopped' WHERE user_id = $1", user_id
+        )
 
     # No running agent — try to provision one
     await _ensure_agent(user_id)

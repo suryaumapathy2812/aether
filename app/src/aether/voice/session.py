@@ -60,6 +60,7 @@ class VoiceSession:
         self._tts_playing = False  # Echo suppression: mute STT input during TTS
         self._tts_cooldown_until: float = 0.0  # Timestamp: ignore mic until echo fades
         self._assistant_speaking_until: float = 0.0
+        self._last_barge_in_at: float = 0.0
         self._audio_in_count = 0
         self._audio_in_dropped = 0
         self.accumulated_transcript = ""
@@ -69,6 +70,7 @@ class VoiceSession:
 
         # Callbacks (set by WebRTC transport)
         self.on_audio_out: Callable[[bytes], Awaitable[None]] | None = None
+        self.on_barge_in: Callable[[], Awaitable[None]] | None = None
         self.on_text_event: Callable[[dict], Awaitable[None]] | None = None
 
     # ─── Lifecycle ───────────────────────────────────────────────
@@ -141,6 +143,27 @@ class VoiceSession:
             )
         await self.stt.send_audio(pcm_bytes)
 
+    async def on_vad_event(self, event: dict[str, Any], mode: str) -> None:
+        """Handle optional VAD events from WebRTC layer.
+
+        - shadow: log only
+        - active: allow barge-in cancellation when assistant is actively speaking
+        """
+        action = event.get("action", "")
+        probability = float(event.get("probability", 0.0))
+
+        if mode == "shadow":
+            logger.debug("VAD %s (p=%.3f)", action, probability)
+            return
+
+        if mode != "active":
+            return
+
+        if action != "speech_started":
+            return
+
+        await self._handle_barge_in("vad", probability=probability)
+
     # ─── STT Event Loop ──────────────────────────────────────────
 
     async def _stt_event_loop(self) -> None:
@@ -188,24 +211,12 @@ class VoiceSession:
                         )
 
                     elif action == "speech_started":
-                        is_assistant_speaking = (
-                            time.time() < self._assistant_speaking_until
-                        )
                         logger.info(
                             "STT speech_started (responding=%s, assistant_speaking=%s)",
                             self.is_responding,
-                            is_assistant_speaking,
+                            time.time() < self._assistant_speaking_until,
                         )
-                        # Barge-in only while assistant audio is actively playing.
-                        # Avoid canceling during thinking phase due ambient speech/noise.
-                        if (
-                            self.is_responding
-                            and self._response_task
-                            and is_assistant_speaking
-                        ):
-                            self._response_task.cancel()
-                            self.is_responding = False
-                            await self.agent.cancel_session(self.session_id)
+                        await self._handle_barge_in("stt")
 
         except asyncio.CancelledError:
             pass
@@ -287,6 +298,47 @@ class VoiceSession:
             self.is_responding = False
             if self.is_streaming:
                 await self._send_text_event("status", "listening...")
+
+    async def _handle_barge_in(
+        self, source: str, probability: float | None = None
+    ) -> None:
+        """Interrupt assistant playback when user starts speaking."""
+        now = time.time()
+        if now - self._last_barge_in_at < 0.8:
+            return
+
+        is_assistant_speaking = time.time() < self._assistant_speaking_until
+        if not is_assistant_speaking:
+            return
+
+        self._last_barge_in_at = now
+
+        if probability is not None:
+            logger.info(
+                "Barge-in (%s, p=%.3f): interrupting assistant playback",
+                source,
+                probability,
+            )
+        else:
+            logger.info("Barge-in (%s): interrupting assistant playback", source)
+
+        if self.on_barge_in:
+            await self.on_barge_in()
+
+        # We interrupted playback, so drop long synthetic cooldown that was
+        # based on full TTS length. Keep only a short echo tail guard.
+        self._assistant_speaking_until = 0.0
+        self._tts_playing = False
+        self._tts_cooldown_until = time.time() + 0.35
+
+        if self._response_task and not self._response_task.done():
+            self._response_task.cancel()
+
+        self.is_responding = False
+        await self.agent.cancel_session(self.session_id)
+
+        if self.is_streaming:
+            await self._send_text_event("status", "listening...")
 
     # ─── TTS ─────────────────────────────────────────────────────
 

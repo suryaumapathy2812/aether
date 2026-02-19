@@ -209,6 +209,39 @@ class KernelConfig:
 
 
 @dataclass(frozen=True)
+class VADConfig:
+    """Voice activity detection settings (Silero ONNX)."""
+
+    mode: str = "off"  # off | shadow | active
+    model_path: str = ""
+    sample_rate: int = 16000
+    activation_threshold: float = 0.5
+    deactivation_threshold: float = 0.35
+    min_speech_duration: float = 0.05
+    min_silence_duration: float = 0.55
+
+    @classmethod
+    def from_env(cls) -> "VADConfig":
+        return cls(
+            mode=os.getenv("AETHER_VAD_MODE", "off").lower(),
+            model_path=os.getenv("AETHER_VAD_MODEL_PATH", ""),
+            sample_rate=int(os.getenv("AETHER_VAD_SAMPLE_RATE", "16000")),
+            activation_threshold=float(
+                os.getenv("AETHER_VAD_ACTIVATION_THRESHOLD", "0.5")
+            ),
+            deactivation_threshold=float(
+                os.getenv("AETHER_VAD_DEACTIVATION_THRESHOLD", "0.35")
+            ),
+            min_speech_duration=float(
+                os.getenv("AETHER_VAD_MIN_SPEECH_DURATION", "0.05")
+            ),
+            min_silence_duration=float(
+                os.getenv("AETHER_VAD_MIN_SILENCE_DURATION", "0.55")
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class AetherConfig:
     """Root configuration — one object to rule them all."""
 
@@ -219,6 +252,7 @@ class AetherConfig:
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     kernel: KernelConfig = field(default_factory=KernelConfig)
+    vad: VADConfig = field(default_factory=VADConfig)
 
     @classmethod
     def from_env(cls) -> AetherConfig:
@@ -230,6 +264,7 @@ class AetherConfig:
             personality=PersonalityConfig.from_env(),
             server=ServerConfig.from_env(),
             kernel=KernelConfig.from_env(),
+            vad=VADConfig.from_env(),
         )
 
 

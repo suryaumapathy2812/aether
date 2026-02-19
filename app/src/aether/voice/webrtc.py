@@ -17,7 +17,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from aether.core.config import config
 from aether.voice.session import VoiceSession
+from aether.voice.vad import VADSettings, build_vad
 
 if TYPE_CHECKING:
     from aether.agent import AgentCore
@@ -52,6 +54,8 @@ class WebRTCConnection:
     voice_session: VoiceSession
     audio_out_track: Any  # AudioOutputTrack
     data_channel: Any | None = None
+    vad: Any | None = None
+    vad_mode: str = "off"
     _audio_frame_count: int = field(default=0, repr=False)
 
 
@@ -150,7 +154,12 @@ class WebRTCVoiceTransport:
                 audio_out._queue.qsize(),
             )
 
+        async def on_barge_in() -> None:
+            audio_out.clear_audio()
+            logger.info("AudioOutputTrack: cleared buffered audio on barge-in")
+
         voice_session.on_audio_out = send_audio
+        voice_session.on_barge_in = on_barge_in
 
         # Store connection
         conn = WebRTCConnection(
@@ -158,7 +167,22 @@ class WebRTCVoiceTransport:
             pc=pc,
             voice_session=voice_session,
             audio_out_track=audio_out,
+            vad_mode=config.vad.mode,
         )
+
+        if config.vad.mode in ("shadow", "active"):
+            conn.vad = build_vad(
+                VADSettings(
+                    mode=config.vad.mode,
+                    model_path=config.vad.model_path,
+                    sample_rate=config.vad.sample_rate,
+                    activation_threshold=config.vad.activation_threshold,
+                    deactivation_threshold=config.vad.deactivation_threshold,
+                    min_speech_duration=config.vad.min_speech_duration,
+                    min_silence_duration=config.vad.min_silence_duration,
+                )
+            )
+
         self._connections[pc_id] = conn
 
         # Setup event handlers
@@ -280,6 +304,10 @@ class WebRTCVoiceTransport:
                             frame.sample_rate,
                         )
 
+                    if conn.vad is not None:
+                        for event in conn.vad.process_pcm16(pcm_bytes):
+                            await conn.voice_session.on_vad_event(event, conn.vad_mode)
+
                     await conn.voice_session.on_audio_in(pcm_bytes)
 
         except asyncio.CancelledError:
@@ -374,6 +402,15 @@ class AudioOutputTrack(MediaStreamTrack):
     def add_audio(self, audio_bytes: bytes) -> None:
         """Queue TTS audio bytes for playback."""
         self._queue.put_nowait(audio_bytes)
+
+    def clear_audio(self) -> None:
+        """Drop all queued and buffered outbound audio (barge-in)."""
+        self._buffer = b""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     async def recv(self) -> "AudioFrame":
         """Called by aiortc to get the next audio frame.

@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
+import tempfile
+import urllib.request
+from pathlib import Path
 
 log = logging.getLogger("orchestrator.agent_manager")
 
@@ -26,6 +30,47 @@ AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 # When set, agent containers get source + plugin mounts with --reload.
 # Example: /Users/you/code/core-ai/app
 AGENT_DEV_ROOT = os.getenv("AGENT_DEV_ROOT", "")
+
+# Shared model cache (host path mounted into orchestrator + agent containers)
+AGENT_SHARED_MODELS_HOST_PATH = os.getenv("AGENT_SHARED_MODELS_HOST_PATH", "")
+AGENT_SHARED_MODELS_ORCH_PATH = os.getenv("AGENT_SHARED_MODELS_ORCH_PATH", "")
+AGENT_SHARED_MODELS_CONTAINER_PATH = os.getenv(
+    "AGENT_SHARED_MODELS_CONTAINER_PATH", "/models"
+)
+
+# VAD model bootstrap defaults
+AETHER_VAD_MODE_DEFAULT = os.getenv("AETHER_VAD_MODE_DEFAULT", "off")
+AETHER_VAD_MODEL_RELATIVE_PATH = os.getenv(
+    "AETHER_VAD_MODEL_RELATIVE_PATH", "silero/silero_vad.onnx"
+)
+AETHER_VAD_MODEL_URL = os.getenv("AETHER_VAD_MODEL_URL", "")
+AETHER_VAD_MODEL_SHA256 = os.getenv("AETHER_VAD_MODEL_SHA256", "")
+
+
+def _resolve_models_host_path() -> str:
+    """Return absolute host path for shared model mounts.
+
+    Docker SDK requires an absolute host path for bind mounts.
+    In dev, resolve relative paths against the parent of AGENT_DEV_ROOT.
+    """
+    if not AGENT_SHARED_MODELS_HOST_PATH:
+        return ""
+
+    p = Path(AGENT_SHARED_MODELS_HOST_PATH)
+    if p.is_absolute():
+        return str(p)
+
+    if AGENT_DEV_ROOT:
+        try:
+            return str((Path(AGENT_DEV_ROOT).resolve().parent / p).resolve())
+        except Exception:
+            pass
+
+    # Fallback: keep as-is (may fail if Docker daemon cannot resolve it)
+    return str(p)
+
+
+AGENT_SHARED_MODELS_HOST_PATH_ABS = _resolve_models_host_path()
 
 # System-wide fallback API keys (from orchestrator's own env)
 SYSTEM_API_KEYS = {
@@ -49,6 +94,33 @@ def _get_docker():
     return _docker_client
 
 
+def _get_container_ip(container) -> str | None:
+    """Get a container's IP address by inspecting its network settings.
+
+    For host-network containers on OrbStack/Docker Desktop, the IP is on
+    the Linux VM's network — which is reachable from other containers but
+    not from the Mac host.  This is the correct address for orchestrator→agent
+    communication.
+    """
+    try:
+        container.reload()
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        # Prefer the compose network if attached
+        for net_name, net_info in networks.items():
+            ip = net_info.get("IPAddress", "")
+            if ip and net_name != "host":
+                return ip
+        # Fallback: exec hostname -I inside the container
+        exit_code, output = container.exec_run("hostname -I")
+        if exit_code == 0:
+            ip = output.decode().strip().split()[0]
+            if ip:
+                return ip
+    except Exception as e:
+        log.warning(f"Could not determine container IP: {e}")
+    return None
+
+
 def _provider_to_env(provider: str) -> str | None:
     """Map provider name (from api_keys table) to env var name."""
     mapping = {
@@ -58,6 +130,101 @@ def _provider_to_env(provider: str) -> str | None:
         "sarvam": "SARVAM_API_KEY",
     }
     return mapping.get(provider.lower())
+
+
+def _compute_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _is_lfs_pointer_file(path: Path) -> bool:
+    """Detect Git LFS pointer text file masquerading as model binary."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(256)
+        return b"git-lfs.github.com/spec/v1" in head
+    except Exception:
+        return False
+
+
+def _resolve_model_paths() -> tuple[Path | None, str | None]:
+    """Return (orchestrator-local-path, agent-container-path)."""
+    if not AGENT_SHARED_MODELS_ORCH_PATH or not AGENT_SHARED_MODELS_CONTAINER_PATH:
+        return None, None
+
+    rel = AETHER_VAD_MODEL_RELATIVE_PATH.strip("/")
+    orch_model = Path(AGENT_SHARED_MODELS_ORCH_PATH) / rel
+    agent_model = f"{AGENT_SHARED_MODELS_CONTAINER_PATH.rstrip('/')}/{rel}"
+    return orch_model, agent_model
+
+
+def _ensure_vad_model_file() -> Path | None:
+    """Ensure VAD model exists in shared cache. Returns local model path or None."""
+    orch_model, _ = _resolve_model_paths()
+    if orch_model is None:
+        return None
+
+    orch_model.parent.mkdir(parents=True, exist_ok=True)
+
+    if orch_model.exists():
+        if _is_lfs_pointer_file(orch_model):
+            log.warning("VAD model is a Git LFS pointer, re-downloading binary")
+        elif AETHER_VAD_MODEL_SHA256:
+            actual = _compute_sha256(orch_model)
+            if actual.lower() == AETHER_VAD_MODEL_SHA256.lower():
+                return orch_model
+            log.warning("VAD model checksum mismatch, re-downloading")
+        else:
+            return orch_model
+
+    if not AETHER_VAD_MODEL_URL:
+        log.warning(
+            "VAD model missing and AETHER_VAD_MODEL_URL not set; skipping download"
+        )
+        return None
+
+    suffix = f".{orch_model.name}.tmp"
+    with tempfile.NamedTemporaryFile(
+        delete=False, dir=str(orch_model.parent), suffix=suffix
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        log.info("Downloading VAD model: %s", AETHER_VAD_MODEL_URL)
+        urllib.request.urlretrieve(AETHER_VAD_MODEL_URL, str(tmp_path))
+
+        if _is_lfs_pointer_file(tmp_path):
+            raise RuntimeError("Downloaded VAD model is a Git LFS pointer, not binary")
+
+        if AETHER_VAD_MODEL_SHA256:
+            actual = _compute_sha256(tmp_path)
+            if actual.lower() != AETHER_VAD_MODEL_SHA256.lower():
+                raise RuntimeError("Downloaded VAD model checksum mismatch")
+
+        tmp_path.replace(orch_model)
+        log.info("VAD model ready at %s", orch_model)
+        return orch_model
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        raise
+
+
+async def ensure_shared_models() -> None:
+    """Bootstrap shared model artifacts used by agent containers."""
+    try:
+        _ensure_vad_model_file()
+    except Exception as e:
+        log.warning("Shared model bootstrap failed: %s", e)
 
 
 # ── Container lifecycle ────────────────────────────────────
@@ -93,9 +260,29 @@ async def provision_agent(
         "AETHER_WORKING_DIR": "/workspace",
         "AETHER_HOST": "0.0.0.0",
         "AETHER_PORT": "8000",
-        "ORCHESTRATOR_URL": "http://orchestrator:9000",
+        # In dev/host-network mode, agent reaches orchestrator via Caddy on host;
+        # in production, via Docker DNS name.
+        "ORCHESTRATOR_URL": "http://localhost:3080"
+        if AGENT_DEV_ROOT
+        else "http://orchestrator:9000",
+        # Tell the agent what host the orchestrator should use to reach it.
+        # In host-network mode, socket.gethostname() returns the Mac hostname
+        # (e.g. "orbstack") which is unresolvable from inside Docker.
+        **({"AETHER_AGENT_HOST": "host.docker.internal"} if AGENT_DEV_ROOT else {}),
         **({"AGENT_SECRET": AGENT_SECRET} if AGENT_SECRET else {}),
     }
+
+    # Configure VAD defaults at container level; user prefs can override.
+    if "AETHER_VAD_MODE" not in environment:
+        environment["AETHER_VAD_MODE"] = AETHER_VAD_MODE_DEFAULT
+
+    _, agent_model_path = _resolve_model_paths()
+    if agent_model_path:
+        environment["AETHER_VAD_MODEL_PATH"] = agent_model_path
+
+    # Download model if configured and missing.
+    if AETHER_VAD_MODE_DEFAULT in ("shadow", "active"):
+        _ensure_vad_model_file()
 
     docker_client = _get_docker()
 
@@ -104,21 +291,23 @@ async def provision_agent(
         existing = docker_client.containers.get(container_name)
         if existing.status == "running":
             log.info(f"Agent {agent_id} already running")
+            is_host_net = (
+                existing.attrs.get("HostConfig", {}).get("NetworkMode") == "host"
+            )
+            if is_host_net:
+                agent_host = _get_container_ip(existing) or "host.docker.internal"
+            else:
+                agent_host = container_name
             return {
                 "agent_id": agent_id,
-                "host": container_name,
+                "host": agent_host,
                 "port": 8000,
                 "container_id": existing.id[:12],
             }
-        # Restart stopped container
-        log.info(f"Restarting stopped agent {agent_id}")
-        existing.start()
-        return {
-            "agent_id": agent_id,
-            "host": container_name,
-            "port": 8000,
-            "container_id": existing.id[:12],
-        }
+        # Stopped container — remove and recreate to pick up latest image,
+        # env vars, and volume mounts (especially important for dev hot-reload).
+        log.info(f"Removing stopped agent {agent_id} for fresh recreation")
+        existing.remove(force=True)
     except Exception:
         pass  # Container doesn't exist — create it
 
@@ -139,6 +328,13 @@ async def provision_agent(
         workspace_vol: {"bind": "/workspace", "mode": "rw"},
     }
 
+    # Shared models mount (read-only in agent containers)
+    if AGENT_SHARED_MODELS_HOST_PATH_ABS and AGENT_SHARED_MODELS_CONTAINER_PATH:
+        vol_mounts[AGENT_SHARED_MODELS_HOST_PATH_ABS] = {
+            "bind": AGENT_SHARED_MODELS_CONTAINER_PATH,
+            "mode": "ro",
+        }
+
     # Dev: mount host source for hot-reload
     command = None
     if AGENT_DEV_ROOT:
@@ -151,26 +347,55 @@ async def provision_agent(
             "--reload --reload-dir /app/src"
         )
 
-    # Create and start container
-    container = docker_client.containers.run(
-        AGENT_IMAGE,
-        name=container_name,
-        detach=True,
-        environment=environment,
-        volumes=vol_mounts,
-        network=AGENT_NETWORK,
-        command=command,
-        # Resource limits
-        mem_limit="512m",
-        cpu_period=100000,
-        cpu_quota=100000,  # 1.0 CPU
-    )
+    # Dev mode: use host networking so WebRTC ICE candidates use the
+    # host's real IP (reachable from iOS simulator / local clients).
+    # Trade-off: only one agent at a time (port 8000 on host).
+    use_host_network = bool(AGENT_DEV_ROOT)
 
-    log.info(f"Created agent container {container_name} ({container.id[:12]})")
+    run_kwargs: dict = {
+        "name": container_name,
+        "detach": True,
+        "environment": environment,
+        "volumes": vol_mounts,
+        "command": command,
+        "mem_limit": "512m",
+        "cpu_period": 100000,
+        "cpu_quota": 100000,  # 1.0 CPU
+    }
+
+    if use_host_network:
+        run_kwargs["network_mode"] = "host"
+        log.info("Dev mode: agent using host networking (WebRTC-friendly)")
+    else:
+        run_kwargs["network"] = AGENT_NETWORK
+
+    container = docker_client.containers.run(AGENT_IMAGE, **run_kwargs)
+
+    # Determine the host the orchestrator should use to reach the agent.
+    if use_host_network:
+        # On OrbStack / Docker Desktop for Mac, network_mode=host puts the
+        # container on the Linux VM's network — not the Mac's.
+        # host.docker.internal points to the Mac, so it can't reach the agent.
+        # Instead, inspect the container to get its actual IP on the VM.
+        agent_host = _get_container_ip(container) or "host.docker.internal"
+
+        # Also try to attach to the compose network for DNS-based fallback.
+        try:
+            net = docker_client.networks.get(AGENT_NETWORK)
+            net.connect(container, aliases=[container_name])
+            log.info(f"Attached {container_name} to {AGENT_NETWORK}")
+        except Exception as e:
+            log.warning(f"Could not attach to {AGENT_NETWORK}: {e} — using IP only")
+    else:
+        agent_host = container_name
+
+    log.info(
+        f"Created agent container {container_name} ({container.id[:12]}, host={agent_host})"
+    )
 
     return {
         "agent_id": agent_id,
-        "host": container_name,
+        "host": agent_host,
         "port": 8000,
         "container_id": container.id[:12],
     }

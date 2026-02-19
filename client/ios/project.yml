@@ -10,15 +10,10 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
 
-packages:
-  WebRTC:
-    url: https://github.com/nicklama/WebRTC-SPM
-    from: "130.0.0"
-
 targets:
   Aether:
     type: application
-    platform: iOS
+    supportedDestinations: [iOS]
     sources:
       - path: Aether
         excludes:
@@ -33,6 +28,11 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIStatusBarStyle: UIStatusBarStyleLightContent
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
         NSMicrophoneUsageDescription: "Aether needs microphone access for voice conversations"
     settings:
       base:
@@ -42,5 +42,3 @@ targets:
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    dependencies:
-      - package: WebRTC

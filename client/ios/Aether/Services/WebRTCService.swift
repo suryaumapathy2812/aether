@@ -23,6 +23,8 @@ class WebRTCService: NSObject, ObservableObject {
     var onMessage: (([String: Any]) -> Void)?
     /// Called when connection state changes
     var onConnectionStateChange: ((RTCIceConnectionState) -> Void)?
+    /// Called when data channel readiness changes
+    var onDataChannelReady: ((Bool) -> Void)?
 
     // MARK: - Private
 
@@ -34,17 +36,46 @@ class WebRTCService: NSObject, ObservableObject {
     private let factory: RTCPeerConnectionFactory
     private let audioQueue = DispatchQueue(label: "com.aether.webrtc.audio")
 
-    private var baseURL = "http://localhost:9000"
+    private var baseURL = "http://localhost:3080"
     private var token = ""
 
     /// Keep-alive ping timer
     private var pingTimer: Timer?
 
+    var isDataChannelOpen: Bool {
+        dataChannel?.readyState == .open
+    }
+
     // MARK: - Init
 
     override init() {
-        // Initialize WebRTC factory
         RTCInitializeSSL()
+
+        // The LiveKit WebRTC-SDK always routes audio through RTCAudioSession
+        // internally. We must configure it (not just AVAudioSession) and use
+        // useManualAudio=true so we control exactly when the audio unit starts —
+        // this prevents the race condition where the audio unit tries to start
+        // before the peer connection is ready.
+        let rtcAudio = RTCAudioSession.sharedInstance()
+        rtcAudio.lockForConfiguration()
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.defaultToSpeaker, .allowBluetoothHFP]
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+            try rtcAudio.setActive(true)
+        } catch {
+            print("[WebRTC] RTCAudioSession config error: \(error)")
+        }
+        rtcAudio.unlockForConfiguration()
+
+        // useManualAudio=true: we call isAudioEnabled=true ourselves once
+        // the peer connection is established and we're ready to capture.
+        rtcAudio.useManualAudio = true
+        rtcAudio.isAudioEnabled = false  // will be enabled in setMicEnabled(true)
+
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
         factory = RTCPeerConnectionFactory(
@@ -66,10 +97,27 @@ class WebRTCService: NSObject, ObservableObject {
         self.baseURL = orchestratorURL
     }
 
+    // MARK: - Microphone Permission
+
+    /// Request microphone access. Calls completion on the main thread.
+    static func requestMicrophonePermission(completion: @escaping (Bool) -> Void) {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            completion(true)
+        case .denied:
+            completion(false)
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async { completion(granted) }
+            }
+        @unknown default:
+            completion(false)
+        }
+    }
+
     // MARK: - Connect
 
     func connect() async throws {
-        // ICE servers
         let iceServers = [
             RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
         ]
@@ -93,7 +141,7 @@ class WebRTCService: NSObject, ObservableObject {
         }
         peerConnection = pc
 
-        // Add local audio track (mic → server)
+        // Add local audio track (mic → server). Starts disabled; enabled when streaming begins.
         addLocalAudioTrack(to: pc)
 
         // Create data channel (text/events — same JSON protocol as WebSocket)
@@ -164,21 +212,31 @@ class WebRTCService: NSObject, ObservableObject {
 
     private func addLocalAudioTrack(to pc: RTCPeerConnection) {
         let audioConstraints = RTCMediaConstraints(
-            mandatoryConstraints: nil,
+            mandatoryConstraints: [
+                // Enable echo cancellation and noise suppression
+                "googEchoCancellation": "true",
+                "googNoiseSuppression": "true",
+                "googAutoGainControl": "true",
+                "googHighpassFilter": "true"
+            ],
             optionalConstraints: nil
         )
         let audioSource = factory.audioSource(with: audioConstraints)
         let audioTrack = factory.audioTrack(with: audioSource, trackId: "audio0")
-        audioTrack.isEnabled = true
+        // Start disabled — enabled explicitly when user starts streaming
+        audioTrack.isEnabled = false
         localAudioTrack = audioTrack
 
-        // Add track to peer connection (creates a transceiver)
         pc.add(audioTrack, streamIds: ["stream0"])
     }
 
-    /// Enable/disable the local mic track (mute/unmute)
+    /// Enable/disable the local mic track (mute/unmute).
+    /// Must also toggle RTCAudioSession.isAudioEnabled — this is what actually
+    /// starts/stops the WebRTC internal audio unit (Voice Processing IO).
     func setMicEnabled(_ enabled: Bool) {
         localAudioTrack?.isEnabled = enabled
+        RTCAudioSession.sharedInstance().isAudioEnabled = enabled
+        print("[WebRTC] setMicEnabled(\(enabled)) — track=\(enabled), audioUnit=\(enabled)")
     }
 
     // MARK: - HTTP Signaling
@@ -283,7 +341,6 @@ extension WebRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
         print("[WebRTC] Remote stream added: \(stream.streamId)")
         // Remote audio track is automatically played by WebRTC
-        // (the server sends TTS audio via its RawAudioTrack)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
@@ -308,7 +365,6 @@ extension WebRTCService: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        // Send ICE candidate to server
         Task {
             await sendIceCandidates([candidate])
         }
@@ -320,7 +376,6 @@ extension WebRTCService: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         print("[WebRTC] Remote data channel opened: \(dataChannel.label)")
-        // We created the data channel locally, so this is for server-initiated channels
     }
 }
 
@@ -330,6 +385,7 @@ extension WebRTCService: RTCDataChannelDelegate {
 
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         print("[WebRTC] Data channel state: \(dataChannel.readyState.rawValue)")
+        onDataChannelReady?(dataChannel.readyState == .open)
         if dataChannel.readyState == .open {
             startPingTimer()
         } else {
