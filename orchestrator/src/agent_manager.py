@@ -46,6 +46,39 @@ AETHER_VAD_MODEL_RELATIVE_PATH = os.getenv(
 AETHER_VAD_MODEL_URL = os.getenv("AETHER_VAD_MODEL_URL", "")
 AETHER_VAD_MODEL_SHA256 = os.getenv("AETHER_VAD_MODEL_SHA256", "")
 
+# Turn detector defaults (LiveKit model adapter)
+AETHER_TURN_DETECTION_MODE_DEFAULT = os.getenv(
+    "AETHER_TURN_DETECTION_MODE_DEFAULT", "off"
+)
+AETHER_TURN_MODEL_TYPE = os.getenv("AETHER_TURN_MODEL_TYPE", "en")
+AETHER_TURN_MODEL_REPO = os.getenv("AETHER_TURN_MODEL_REPO", "livekit/turn-detector")
+# v1.2.2-en has model.onnx (float32) which works correctly on ARM/aarch64.
+# v0.4.1-intl only has model_q8.onnx (INT8 quantized for x86) which produces
+# near-zero probabilities on ARM due to quantization incompatibility.
+AETHER_TURN_MODEL_REVISION = os.getenv("AETHER_TURN_MODEL_REVISION", "v1.2.2-en")
+AETHER_TURN_MODEL_FILENAME = os.getenv("AETHER_TURN_MODEL_FILENAME", "model.onnx")
+AETHER_TURN_MODEL_RELATIVE_DIR = os.getenv(
+    "AETHER_TURN_MODEL_RELATIVE_DIR", "turn-detector"
+)
+AETHER_TURN_MODEL_FILES = [
+    p.strip()
+    for p in os.getenv(
+        "AETHER_TURN_MODEL_FILES",
+        "onnx/model.onnx,tokenizer.json,tokenizer_config.json,special_tokens_map.json",
+    ).split(",")
+    if p.strip()
+]
+AETHER_TURN_MIN_ENDPOINTING_DELAY = os.getenv(
+    "AETHER_TURN_MIN_ENDPOINTING_DELAY", "0.5"
+)
+AETHER_TURN_MAX_ENDPOINTING_DELAY = os.getenv(
+    "AETHER_TURN_MAX_ENDPOINTING_DELAY", "3.0"
+)
+# float32 model.onnx on ARM takes ~5-110ms — 2.0s is more than enough
+AETHER_TURN_INFERENCE_TIMEOUT_SECONDS = os.getenv(
+    "AETHER_TURN_INFERENCE_TIMEOUT_SECONDS", "2.0"
+)
+
 
 def _resolve_models_host_path() -> str:
     """Return absolute host path for shared model mounts.
@@ -164,6 +197,64 @@ def _resolve_model_paths() -> tuple[Path | None, str | None]:
     return orch_model, agent_model
 
 
+def _resolve_turn_model_paths() -> tuple[Path | None, str | None]:
+    """Return (orchestrator-local-turn-model-dir, agent-container-dir)."""
+    if not AGENT_SHARED_MODELS_ORCH_PATH or not AGENT_SHARED_MODELS_CONTAINER_PATH:
+        return None, None
+
+    rel = AETHER_TURN_MODEL_RELATIVE_DIR.strip("/")
+    orch_dir = Path(AGENT_SHARED_MODELS_ORCH_PATH) / rel
+    agent_dir = f"{AGENT_SHARED_MODELS_CONTAINER_PATH.rstrip('/')}/{rel}"
+    return orch_dir, agent_dir
+
+
+def _turn_model_file_url(path: str) -> str:
+    return (
+        f"https://huggingface.co/{AETHER_TURN_MODEL_REPO}/resolve/"
+        f"{AETHER_TURN_MODEL_REVISION}/{path}"
+    )
+
+
+def _ensure_turn_model_files() -> Path | None:
+    """Ensure LiveKit turn-detector assets exist in shared cache."""
+    orch_dir, _ = _resolve_turn_model_paths()
+    if orch_dir is None:
+        return None
+
+    orch_dir.mkdir(parents=True, exist_ok=True)
+    missing = [p for p in AETHER_TURN_MODEL_FILES if not (orch_dir / p).exists()]
+    if not missing:
+        return orch_dir
+
+    for rel_path in missing:
+        dest = orch_dir / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        suffix = f".{dest.name}.tmp"
+        with tempfile.NamedTemporaryFile(
+            delete=False, dir=str(dest.parent), suffix=suffix
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            url = _turn_model_file_url(rel_path)
+            log.info("Downloading turn model file: %s", rel_path)
+            urllib.request.urlretrieve(url, str(tmp_path))
+            if _is_lfs_pointer_file(tmp_path):
+                raise RuntimeError(
+                    f"Downloaded turn model file is LFS pointer: {rel_path}"
+                )
+            tmp_path.replace(dest)
+        except Exception:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
+            raise
+
+    log.info("Turn detector assets ready at %s", orch_dir)
+    return orch_dir
+
+
 def _ensure_vad_model_file() -> Path | None:
     """Ensure VAD model exists in shared cache. Returns local model path or None."""
     orch_model, _ = _resolve_model_paths()
@@ -223,6 +314,7 @@ async def ensure_shared_models() -> None:
     """Bootstrap shared model artifacts used by agent containers."""
     try:
         _ensure_vad_model_file()
+        _ensure_turn_model_files()
     except Exception as e:
         log.warning("Shared model bootstrap failed: %s", e)
 
@@ -283,6 +375,29 @@ async def provision_agent(
     # Download model if configured and missing.
     if AETHER_VAD_MODE_DEFAULT in ("shadow", "active"):
         _ensure_vad_model_file()
+
+    if "AETHER_TURN_DETECTION_MODE" not in environment:
+        environment["AETHER_TURN_DETECTION_MODE"] = AETHER_TURN_DETECTION_MODE_DEFAULT
+    environment.setdefault("AETHER_TURN_MODEL_TYPE", AETHER_TURN_MODEL_TYPE)
+    environment.setdefault("AETHER_TURN_MODEL_REPO", AETHER_TURN_MODEL_REPO)
+    environment.setdefault("AETHER_TURN_MODEL_REVISION", AETHER_TURN_MODEL_REVISION)
+    environment.setdefault("AETHER_TURN_MODEL_FILENAME", AETHER_TURN_MODEL_FILENAME)
+    _, agent_turn_dir = _resolve_turn_model_paths()
+    if agent_turn_dir:
+        environment.setdefault("AETHER_TURN_MODEL_DIR", agent_turn_dir)
+    environment.setdefault(
+        "AETHER_TURN_MIN_ENDPOINTING_DELAY", AETHER_TURN_MIN_ENDPOINTING_DELAY
+    )
+    environment.setdefault(
+        "AETHER_TURN_MAX_ENDPOINTING_DELAY", AETHER_TURN_MAX_ENDPOINTING_DELAY
+    )
+    environment.setdefault(
+        "AETHER_TURN_INFERENCE_TIMEOUT_SECONDS",
+        AETHER_TURN_INFERENCE_TIMEOUT_SECONDS,
+    )
+
+    if AETHER_TURN_DETECTION_MODE_DEFAULT in ("shadow", "active"):
+        _ensure_turn_model_files()
 
     docker_client = _get_docker()
 
