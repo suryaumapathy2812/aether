@@ -38,11 +38,11 @@ struct VoiceOrbView: View {
 
     private var orbOpacity: Double {
         switch audio.state {
-        case .idle:       return 0.06
-        case .connecting: return 0.04
-        case .listening:  return 0.18
-        case .thinking:   return 0.12
-        case .speaking:   return 0.26
+        case .idle:       return 0.07
+        case .connecting: return 0.05
+        case .listening:  return 0.2
+        case .thinking:   return 0.13
+        case .speaking:   return 0.3
         case .muted:      return 0.03
         }
     }
@@ -70,11 +70,62 @@ struct VoiceOrbView: View {
     /// Accent colour tint — shifts subtly per state
     private var orbTint: Color {
         switch audio.state {
-        case .listening: return Color(red: 0.85, green: 0.95, blue: 1.0)   // cool blue-white
-        case .thinking:  return Color(red: 0.95, green: 0.90, blue: 1.0)   // soft lavender
-        case .speaking:  return Color(red: 1.0,  green: 0.97, blue: 0.88)  // warm cream
-        case .muted:     return Color(red: 1.0,  green: 0.5,  blue: 0.5)   // muted red
+        case .listening: return Color(red: 0.86, green: 0.93, blue: 1.0)
+        case .thinking:  return Color(red: 0.91, green: 0.93, blue: 0.99)
+        case .speaking:  return Color(red: 1.0,  green: 0.96, blue: 0.88)
+        case .muted:     return Color(red: 1.0,  green: 0.55, blue: 0.55)
         default:         return .white
+        }
+    }
+
+    private var sceneBackground: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.03, green: 0.04, blue: 0.05),
+                    Color(red: 0.05, green: 0.07, blue: 0.09),
+                    Color(red: 0.04, green: 0.05, blue: 0.07)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [Color.white.opacity(0.1), .clear],
+                        center: .center,
+                        startRadius: 10,
+                        endRadius: 320
+                    )
+                )
+                .frame(width: 360, height: 360)
+                .offset(x: -160, y: -300)
+                .blur(radius: 12)
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [orbTint.opacity(0.14), .clear],
+                        center: .center,
+                        startRadius: 20,
+                        endRadius: 310
+                    )
+                )
+                .frame(width: 380, height: 380)
+                .offset(x: 170, y: 260)
+                .blur(radius: 16)
+
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.52), .clear, Color.black.opacity(0.64)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .ignoresSafeArea()
         }
     }
 
@@ -82,7 +133,7 @@ struct VoiceOrbView: View {
 
     var body: some View {
         ZStack {
-            Color(hex: "111111").ignoresSafeArea()
+            sceneBackground
 
             VStack(spacing: 0) {
                 Spacer()
@@ -127,50 +178,58 @@ struct VoiceOrbView: View {
     private var orbSection: some View {
         Button(action: { audio.toggleStreaming() }) {
             ZStack {
-                // Outermost ambient halo — only when active
                 if audio.state == .listening || audio.state == .speaking {
                     Circle()
-                        .fill(orbTint.opacity(orbOpacity * 0.12))
-                        .frame(width: orbBaseSize + 80, height: orbBaseSize + 80)
-                        .blur(radius: 30)
+                        .fill(orbTint.opacity(orbOpacity * 0.14))
+                        .frame(width: orbBaseSize + 96, height: orbBaseSize + 96)
+                        .blur(radius: 34)
                         .scaleEffect(orbScale * 1.15)
                         .animation(.easeInOut(duration: pulseSpeed), value: breathe)
                 }
 
-                // Outer glow ring
                 Circle()
-                    .fill(orbTint.opacity(orbOpacity * 0.3))
-                    .frame(width: orbBaseSize + 40, height: orbBaseSize + 40)
-                    .blur(radius: 20)
+                    .fill(orbTint.opacity(orbOpacity * 0.36))
+                    .frame(width: orbBaseSize + 46, height: orbBaseSize + 46)
+                    .blur(radius: 22)
                     .scaleEffect(orbScale * 1.1)
                     .animation(.easeInOut(duration: pulseSpeed), value: breathe)
 
-                // Rotating ring — visible when listening or speaking
                 if audio.state == .listening || audio.state == .speaking || audio.state == .thinking {
                     RotatingRingView(
-                        diameter: orbBaseSize + 28,
+                        diameter: orbBaseSize + 32,
                         tint: orbTint,
-                        opacity: orbOpacity * 0.6,
+                        opacity: orbOpacity * 0.55,
                         state: audio.state
                     )
                     .scaleEffect(orbScale)
                     .animation(.easeInOut(duration: 0.5), value: audio.state)
                 }
 
-                // Main orb
                 Circle()
-                    .fill(orbTint.opacity(orbOpacity))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                orbTint.opacity(orbOpacity * 1.06),
+                                orbTint.opacity(orbOpacity * 0.64)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .frame(width: orbBaseSize, height: orbBaseSize)
-                    .shadow(color: orbTint.opacity(orbOpacity * 0.8), radius: glowRadius)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.8)
+                    )
+                    .shadow(color: orbTint.opacity(orbOpacity * 0.9), radius: glowRadius)
                     .scaleEffect(orbScale)
                     .animation(.easeInOut(duration: pulseSpeed), value: breathe)
 
-                // Inner highlight — small bright core
                 Circle()
-                    .fill(orbTint.opacity(orbOpacity * 0.5))
-                    .frame(width: orbBaseSize * 0.35, height: orbBaseSize * 0.35)
-                    .blur(radius: 6)
-                    .offset(x: -orbBaseSize * 0.12, y: -orbBaseSize * 0.12)
+                    .fill(Color.white.opacity(orbOpacity * 0.56))
+                    .frame(width: orbBaseSize * 0.31, height: orbBaseSize * 0.31)
+                    .blur(radius: 7)
+                    .offset(x: -orbBaseSize * 0.17, y: -orbBaseSize * 0.17)
                     .scaleEffect(orbScale)
                     .animation(.easeInOut(duration: pulseSpeed), value: breathe)
             }
@@ -184,30 +243,27 @@ struct VoiceOrbView: View {
 
     private var statusSection: some View {
         VStack(spacing: 10) {
-            // Primary status label
             Text(audio.statusText)
-                .font(.system(size: 10, weight: .light))
-                .tracking(3)
-                .foregroundStyle(.white.opacity(0.25))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .tracking(3.2)
+                .foregroundStyle(.white.opacity(0.34))
                 .padding(.top, 28)
                 .animation(.easeInOut(duration: 0.4), value: audio.statusText)
 
-            // Live transcript — user's words appearing in real time
             if !audio.liveTranscript.isEmpty {
                 Text(audio.liveTranscript)
-                    .font(.system(size: 13, weight: .light))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(.system(size: 13, weight: .light, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.52))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .padding(.horizontal, 40)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            // Agent response text
             if !audio.lastResponse.isEmpty {
                 Text(audio.lastResponse)
-                    .font(.system(size: 15, weight: .light))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(.system(size: 16, weight: .light, design: .serif))
+                    .foregroundStyle(.white.opacity(0.72))
                     .multilineTextAlignment(.center)
                     .lineLimit(5)
                     .padding(.horizontal, 32)
@@ -223,20 +279,23 @@ struct VoiceOrbView: View {
 
     private var bottomControls: some View {
         VStack(spacing: 0) {
-            // Mute button — only when streaming
             if audio.isStreaming {
                 Button(action: { audio.toggleMute() }) {
                     ZStack {
                         Circle()
-                            .strokeBorder(
-                                audio.isMuted ? Color.red.opacity(0.4) : Color.white.opacity(0.12),
-                                lineWidth: 1
-                            )
+                            .fill(Color.white.opacity(0.04))
                             .frame(width: 48, height: 48)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(
+                                        audio.isMuted ? Color.red.opacity(0.45) : Color.white.opacity(0.2),
+                                        lineWidth: 1
+                                    )
+                            )
 
                         Image(systemName: audio.isMuted ? "mic.slash" : "mic")
                             .font(.system(size: 15, weight: .light))
-                            .foregroundStyle(audio.isMuted ? Color.red.opacity(0.6) : Color.white.opacity(0.3))
+                            .foregroundStyle(audio.isMuted ? Color.red.opacity(0.68) : Color.white.opacity(0.44))
                     }
                 }
                 .buttonStyle(.plain)
@@ -245,15 +304,13 @@ struct VoiceOrbView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.85)))
             }
 
-            // Text input
             textInputRow
                 .padding(.bottom, 12)
 
-            // Brand
             Text("aether")
-                .font(.system(size: 11, weight: .ultraLight))
-                .tracking(8)
-                .foregroundStyle(.white.opacity(0.1))
+                .font(.system(size: 11, weight: .ultraLight, design: .serif))
+                .tracking(9)
+                .foregroundStyle(.white.opacity(0.17))
                 .padding(.bottom, 40)
         }
         .animation(.easeInOut(duration: 0.3), value: audio.isStreaming)
@@ -263,12 +320,16 @@ struct VoiceOrbView: View {
         HStack(spacing: 8) {
             TextField("type a message...", text: $textInput)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .light))
-                .foregroundStyle(.white.opacity(0.7))
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.74))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.white.opacity(0.06))
+                .background(Color.white.opacity(0.07))
                 .clipShape(.rect(cornerRadius: 20))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                )
                 .focused($isTextFieldFocused)
                 .onSubmit { sendTextMessage() }
 
@@ -276,7 +337,7 @@ struct VoiceOrbView: View {
                 Button(action: { sendTextMessage() }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(.white.opacity(0.46))
                 }
                 .buttonStyle(.plain)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
