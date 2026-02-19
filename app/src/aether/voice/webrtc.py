@@ -52,6 +52,7 @@ class WebRTCConnection:
     voice_session: VoiceSession
     audio_out_track: Any  # AudioOutputTrack
     data_channel: Any | None = None
+    _audio_frame_count: int = field(default=0, repr=False)
 
 
 class WebRTCVoiceTransport:
@@ -119,8 +120,22 @@ class WebRTCVoiceTransport:
         pc.addTrack(audio_out)
 
         # Wire voice session audio output → outbound track
+        # Stateful resampler: 24kHz mono s16 → 48kHz mono s16 (matches inbound path)
+        from av import AudioResampler as _OutResampler
+
+        tts_resampler = _OutResampler(format="s16", layout="mono", rate=48000)
+
         async def send_audio(audio_bytes: bytes) -> None:
-            audio_out.add_audio(audio_bytes)
+            # TTS provider returns 24kHz PCM16 mono; WebRTC track expects 48kHz.
+            # Build an AudioFrame from the raw PCM so av can resample it properly.
+            sample_count = len(audio_bytes) // 2  # 16-bit = 2 bytes per sample
+            src_frame = AudioFrame(format="s16", layout="mono", samples=sample_count)
+            src_frame.sample_rate = 24000
+            src_frame.planes[0].update(audio_bytes)
+
+            resampled_frames = tts_resampler.resample(src_frame)
+            for rf in resampled_frames:
+                audio_out.add_audio(rf.planes[0].to_bytes())
 
         voice_session.on_audio_out = send_audio
 
@@ -162,17 +177,15 @@ class WebRTCVoiceTransport:
         if not conn:
             raise ValueError(f"Unknown pc_id: {pc_id}")
 
-        from aiortc import RTCIceCandidate
+        from aiortc.sdp import candidate_from_sdp
 
         # Parse candidate string — aiortc expects specific format
         if candidate:
-            await conn.pc.addIceCandidate(
-                RTCIceCandidate(
-                    sdpMid=sdp_mid,
-                    sdpMLineIndex=sdp_mline_index,
-                    candidate=candidate,
-                )
-            )
+            raw = candidate[10:] if candidate.startswith("candidate:") else candidate
+            parsed = candidate_from_sdp(raw)
+            parsed.sdpMid = sdp_mid
+            parsed.sdpMLineIndex = sdp_mline_index
+            await conn.pc.addIceCandidate(parsed)
 
     def _setup_handlers(self, conn: WebRTCConnection) -> None:
         """Wire up WebRTC event handlers for a connection."""
@@ -196,7 +209,8 @@ class WebRTCVoiceTransport:
                 )
 
         @pc.on("datachannel")
-        async def on_datachannel(channel: Any) -> None:
+        def on_datachannel(channel: Any) -> None:
+            logger.info("Data channel opened: %s", conn.pc_id)
             conn.data_channel = channel
 
             # Wire text events from VoiceSession → data channel
@@ -207,36 +221,74 @@ class WebRTCVoiceTransport:
             conn.voice_session.on_text_event = send_event
 
             @channel.on("message")
-            async def on_message(message: str) -> None:
-                await self._handle_data_message(conn, message)
+            def on_message(message: str) -> None:
+                logger.debug("DC recv [%s]: %s", conn.pc_id, message[:80])
+                asyncio.create_task(self._handle_data_message(conn, message))
 
     async def _read_audio_loop(self, conn: WebRTCConnection, track: Any) -> None:
-        """Read audio frames from WebRTC inbound track → VoiceSession STT."""
+        """Read audio frames from WebRTC inbound track → VoiceSession STT.
+
+        Uses PyAV's AudioResampler for proper stateful streaming conversion:
+        - Stereo → Mono (proper downmix, not just left channel)
+        - 48kHz → 16kHz (anti-aliased, no per-chunk edge artifacts)
+        - Any format → s16
+        This matches pipecat's proven approach.
+        """
+        from av import AudioResampler
+
+        resampler = AudioResampler(format="s16", layout="mono", rate=16000)
+
         try:
             while True:
                 frame = await track.recv()
                 if not conn.voice_session.is_streaming:
                     continue  # Drop until stream_start
 
-                # Convert to PCM16 mono at 16kHz for STT
-                pcm = frame.to_ndarray().flatten()
+                conn._audio_frame_count += 1
 
-                # Resample if needed (WebRTC typically sends 48kHz)
-                if frame.sample_rate != 16000:
-                    pcm = _resample(pcm, frame.sample_rate, 16000)
+                # Resample: stereo 48kHz → mono 16kHz s16 (stateful, no edge artifacts)
+                resampled_frames = resampler.resample(frame)
 
-                pcm_bytes = (pcm * 32767).astype(np.int16).tobytes()
-                await conn.voice_session.on_audio_in(pcm_bytes)
+                for resampled in resampled_frames:
+                    pcm_bytes = resampled.to_ndarray().tobytes()
 
-        except Exception:
-            pass  # Connection closed
+                    if conn._audio_frame_count <= 3:
+                        samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+                        rms = float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
+                        logger.debug(
+                            "Audio frame #%d: %d bytes, %d samples, rms=%.1f "
+                            "(src: %s %s %dHz)",
+                            conn._audio_frame_count,
+                            len(pcm_bytes),
+                            len(samples),
+                            rms,
+                            frame.format.name,
+                            frame.layout.name,
+                            frame.sample_rate,
+                        )
+
+                    await conn.voice_session.on_audio_in(pcm_bytes)
+
+        except asyncio.CancelledError:
+            pass  # Expected on connection close
+        except Exception as e:
+            logger.error(
+                "Audio read loop error for %s: %s", conn.pc_id, e, exc_info=True
+            )
 
     async def _handle_data_message(self, conn: WebRTCConnection, message: str) -> None:
         """Handle data channel messages from the client."""
+        # Ignore non-JSON keepalives (e.g. bare "ping")
+        if not message.startswith("{"):
+            return
+
         try:
             data = json.loads(message)
-            msg_type = data.get("type", "")
+        except json.JSONDecodeError:
+            return
 
+        msg_type = data.get("type", "")
+        try:
             if msg_type == "stream_start":
                 await conn.voice_session.start()
 
@@ -250,13 +302,18 @@ class WebRTCVoiceTransport:
                 conn.voice_session.unmute()
 
             elif msg_type == "text":
-                # Text input via data channel (rare but supported)
+                # Text input via data channel
                 text = data.get("data", "")
                 if text:
                     await conn.voice_session._trigger_response(text)
 
-        except json.JSONDecodeError:
-            pass
+        except Exception as e:
+            logger.error(
+                "Data channel handler error (%s): %s", msg_type, e, exc_info=True
+            )
+            # Send error back to client so it's visible
+            if conn.data_channel and conn.data_channel.readyState == "open":
+                conn.data_channel.send(json.dumps({"type": "error", "data": str(e)}))
 
     async def close_all(self) -> None:
         """Close all connections (shutdown)."""
@@ -278,6 +335,13 @@ class AudioOutputTrack(MediaStreamTrack):
 
     TTS audio bytes are queued and served as 20ms frames at 48kHz
     (standard WebRTC audio frame size).
+
+    CRITICAL: recv() must pace itself at real-time (~20ms per frame).
+    aiortc's RTP sender calls recv() in a tight loop with no pacing —
+    it relies on the track to block for the correct duration. Without
+    pacing, silence frames burn through PTS at thousands-of-x realtime,
+    and when real audio arrives the RTP timestamps are discontinuous,
+    causing the browser to drop all audio.
     """
 
     kind = "audio"
@@ -287,15 +351,36 @@ class AudioOutputTrack(MediaStreamTrack):
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._sample_rate = 48000
         self._samples_per_frame = 960  # 20ms at 48kHz
+        self._frame_duration = self._samples_per_frame / self._sample_rate  # 0.02s
         self._buffer = b""
         self._pts = 0
+        self._start_time: float | None = None  # Wall-clock anchor for pacing
 
     def add_audio(self, audio_bytes: bytes) -> None:
         """Queue TTS audio bytes for playback."""
         self._queue.put_nowait(audio_bytes)
 
     async def recv(self) -> "AudioFrame":
-        """Called by aiortc to get the next audio frame."""
+        """Called by aiortc to get the next audio frame.
+
+        Paces output at real-time by sleeping until the next frame is due.
+        This keeps PTS aligned with wall-clock time so the browser's jitter
+        buffer receives audio at the expected rate.
+        """
+        import time as _time
+
+        # Anchor wall-clock on first call
+        if self._start_time is None:
+            self._start_time = _time.monotonic()
+
+        # Calculate when this frame should be emitted
+        frame_number = self._pts // self._samples_per_frame
+        target_time = self._start_time + frame_number * self._frame_duration
+        now = _time.monotonic()
+        sleep_duration = target_time - now
+        if sleep_duration > 0:
+            await asyncio.sleep(sleep_duration)
+
         frame_size = self._samples_per_frame * 2  # 16-bit = 2 bytes per sample
 
         # Fill buffer from queue
@@ -326,12 +411,32 @@ class AudioOutputTrack(MediaStreamTrack):
 
 # ─── Audio Helpers ───────────────────────────────────────────────
 
+# Use scipy for proper anti-aliased resampling (no aliasing artifacts).
+# Falls back to numpy linear interp if scipy is somehow missing.
+try:
+    from math import gcd
 
-def _resample(pcm: "np.ndarray", src_rate: int, dst_rate: int) -> "np.ndarray":
-    """Simple linear resampling. For production, use scipy or soxr."""
-    if src_rate == dst_rate:
-        return pcm
-    ratio = dst_rate / src_rate
-    n_samples = int(len(pcm) * ratio)
-    indices = np.linspace(0, len(pcm) - 1, n_samples)
-    return np.interp(indices, np.arange(len(pcm)), pcm)
+    from scipy.signal import resample_poly as _scipy_resample_poly
+
+    def _resample(pcm: "np.ndarray", src_rate: int, dst_rate: int) -> "np.ndarray":
+        """Resample audio using polyphase anti-aliased filter (scipy)."""
+        if src_rate == dst_rate:
+            return pcm
+        g = gcd(src_rate, dst_rate)
+        up = dst_rate // g
+        down = src_rate // g
+        return _scipy_resample_poly(pcm, up, down).astype(pcm.dtype)
+
+except ImportError:
+    logger.warning(
+        "scipy not installed — using linear interpolation for resampling (lower quality)"
+    )
+
+    def _resample(pcm: "np.ndarray", src_rate: int, dst_rate: int) -> "np.ndarray":  # type: ignore[misc]
+        """Fallback linear resampling (no anti-aliasing)."""
+        if src_rate == dst_rate:
+            return pcm
+        ratio = dst_rate / src_rate
+        n_samples = int(len(pcm) * ratio)
+        indices = np.linspace(0, len(pcm) - 1, n_samples)
+        return np.interp(indices, np.arange(len(pcm)), pcm)

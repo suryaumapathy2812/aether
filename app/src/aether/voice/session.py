@@ -57,6 +57,8 @@ class VoiceSession:
         self.is_streaming = False
         self.is_responding = False
         self.is_muted = False
+        self._tts_playing = False  # Echo suppression: mute STT input during TTS
+        self._tts_cooldown_until: float = 0.0  # Timestamp: ignore mic until echo fades
         self.accumulated_transcript = ""
         self._debounce_task: asyncio.Task | None = None
         self._stt_event_task: asyncio.Task | None = None
@@ -70,11 +72,13 @@ class VoiceSession:
 
     async def start(self) -> None:
         """Called on stream_start. Connect STT, start listening."""
-        self.is_streaming = True
-
-        # Start per-session STT
+        # Start per-session STT — must connect before enabling audio flow
         await self.stt.start()
         await self.stt.connect_stream()
+
+        # Now enable audio flow (audio frames are dropped until this is True)
+        self.is_streaming = True
+
         self._stt_event_task = asyncio.create_task(
             self._stt_event_loop(), name=f"stt-events-{self.session_id}"
         )
@@ -86,6 +90,7 @@ class VoiceSession:
             await self._synthesize_and_send(greeting)
             await self._send_text_event("stream_end", "")
 
+        await self._send_text_event("status", "listening...")
         logger.info("VoiceSession %s started", self.session_id)
 
     async def stop(self) -> None:
@@ -112,6 +117,9 @@ class VoiceSession:
     async def on_audio_in(self, pcm_bytes: bytes) -> None:
         """Raw PCM from WebRTC audio track → STT."""
         if not self.is_streaming or self.is_muted:
+            return
+        # Echo suppression: drop mic audio while TTS is playing (+ 300ms cooldown)
+        if self._tts_playing or time.time() < self._tts_cooldown_until:
             return
         await self.stt.send_audio(pcm_bytes)
 
@@ -254,10 +262,17 @@ class VoiceSession:
         if not text.strip() or not self.on_audio_out:
             return
         try:
+            self._tts_playing = True
             audio_bytes = await self.tts_provider.synthesize(text)
             await self.on_audio_out(audio_bytes)
+            # Estimate playback duration: 24kHz 16-bit mono = 48000 bytes/sec
+            playback_secs = len(audio_bytes) / 48000.0
+            # Set cooldown: wait for audio to finish playing + 300ms for echo tail
+            self._tts_cooldown_until = time.time() + playback_secs + 0.3
         except Exception as e:
             logger.warning("TTS failed: %s", e)
+        finally:
+            self._tts_playing = False
 
     # ─── Event Helpers ───────────────────────────────────────────
 
@@ -266,8 +281,8 @@ class VoiceSession:
         if self.on_text_event:
             try:
                 await self.on_text_event({"type": event_type, "data": data, **kwargs})
-            except Exception:
-                pass  # Data channel may be closed
+            except Exception as e:
+                logger.debug("Failed to send text event %s: %s", event_type, e)
 
     # ─── Control ─────────────────────────────────────────────────
 
