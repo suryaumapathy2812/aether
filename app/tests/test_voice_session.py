@@ -18,7 +18,9 @@ class _DummyAgent:
     def __init__(self) -> None:
         self.cancel_calls = 0
 
-    async def generate_greeting(self):
+    async def generate_greeting(
+        self, session_id: str | None = None, is_resume: bool = False
+    ):
         return None
 
     async def cancel_session(self, _session_id: str) -> None:

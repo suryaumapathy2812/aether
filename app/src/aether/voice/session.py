@@ -164,7 +164,10 @@ class VoiceSession:
         )
         self._ensure_watchdog_running()
 
-        greeting = await self.agent.generate_greeting()
+        greeting = await self.agent.generate_greeting(
+            session_id=self.session_id,
+            is_resume=False,
+        )
         if greeting:
             logger.info("[pipeline] %s greeting: %r", self.session_id, greeting[:60])
             await self._send_text_event("transcript", greeting, role="assistant")
@@ -257,7 +260,10 @@ class VoiceSession:
         self._ensure_watchdog_running()
 
         # Generate greeting if appropriate (time-aware)
-        greeting = await self.agent.generate_greeting()
+        greeting = await self.agent.generate_greeting(
+            session_id=self.session_id,
+            is_resume=True,
+        )
         if greeting:
             logger.info(
                 "[pipeline] %s resume greeting: %r", self.session_id, greeting[:60]

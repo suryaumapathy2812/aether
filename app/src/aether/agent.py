@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, AsyncGenerator, Callable
+import re
+import time
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
 from aether.kernel.contracts import (
     JobKind,
@@ -71,8 +73,14 @@ class AgentCore:
         # Notification subscribers (WS sidecar connections)
         self._notification_subscribers: list[Callable] = []
 
-        # Voice greeting flag — only greet on first WebRTC connection
-        self._has_greeted = False
+        # Voice transport reference for spoken notifications
+        self._voice_transport: Any = None
+
+        # Track last greeting time for time-gap logic
+        self._last_greeting_at: float = 0.0
+
+        # Briefing queue for temporal greetings (notifications/weather)
+        self._briefing_items: list[dict[str, Any]] = []
 
     # ─── Lifecycle ───────────────────────────────────────────────
 
@@ -213,17 +221,94 @@ class AgentCore:
 
     # ─── Greeting ────────────────────────────────────────────────
 
-    async def generate_greeting(self) -> str | None:
+    async def generate_greeting(
+        self,
+        session_id: str,
+        is_resume: bool = False,
+    ) -> str | None:
         """
-        Generate a personalized voice greeting.
+        Generate a contextual, temporal greeting for voice sessions.
 
-        Returns greeting text on first call, None on subsequent calls.
-        Only used by WebRTC voice — not HTTP text chat.
+        Rules:
+        - Fast reconnect/resume: silent continuation.
+        - No conversation context and no meaningful briefing: silent.
+        - Morning long-gap reconnect: short briefing with notifications/weather.
+        - Otherwise: contextual welcome based on recent memory/session history.
         """
-        if self._has_greeted:
+        now = time.time()
+
+        # Determine gap since last session
+        last_session_end = await self._memory_store.get_last_session_end()
+        if last_session_end:
+            gap_seconds = now - last_session_end
+        elif self._last_greeting_at > 0:
+            gap_seconds = now - self._last_greeting_at
+        else:
+            gap_seconds = float("inf")  # First time ever
+
+        self._last_greeting_at = now
+        gap_minutes = gap_seconds / 60.0
+
+        logger.info(
+            "Greeting gap: %.1f min (last_session_end=%s)",
+            gap_minutes,
+            last_session_end,
+        )
+
+        # Fast reconnect/resume: continue silently where user left off.
+        if is_resume and gap_minutes < 30:
+            logger.info("Greeting: silent resume (gap < 30 min)")
             return None
-        self._has_greeted = True
 
+        history = self._sessions.get(session_id, [])
+        has_conversation = bool(history)
+
+        # Extract known user name for greeting personalization.
+        name = None
+        try:
+            facts = await self._memory_store.get_facts()
+            name = self._extract_name_from_facts(facts)
+        except Exception:
+            facts = []
+
+        # Build a compact morning briefing when meaningful.
+        briefing_text, has_weather, has_notifications = self._build_briefing_text(now)
+
+        from datetime import datetime
+
+        hour = datetime.now().hour
+        is_morning = 5 <= hour < 12
+        if is_morning and gap_seconds > 6 * 3600 and (has_weather or has_notifications):
+            who = f", {name}" if name else ""
+            greeting = f"Good morning{who}. {briefing_text}".strip()
+            logger.info("Greeting: morning briefing")
+            return greeting
+
+        # If we have no context and no briefing value, remain silent.
+        if not has_conversation and not has_notifications and not has_weather:
+            logger.info("Greeting: silent (no prior conversation context)")
+            return None
+
+        # Medium gap: contextual continuation from recent session summary.
+        if 30 <= gap_minutes < 8 * 60:
+            try:
+                sessions = await self._memory_store.get_session_summaries(limit=1)
+                if sessions:
+                    summary = str(sessions[0].get("summary", "")).strip()
+                    if summary:
+                        summary = re.sub(r"\s+", " ", summary)
+                        summary = summary[:120].rstrip(" ,.;")
+                        prefix = f"Welcome back{', ' + name if name else ''}."
+                        return f"{prefix} Last time: {summary}."
+            except Exception:
+                pass
+
+        # If we have briefing items but it is not a long-gap morning, keep it short.
+        if has_notifications or has_weather:
+            who = f", {name}" if name else ""
+            return f"Welcome back{who}. {briefing_text}".strip()
+
+        # Final fallback: memory-aware LLM greeting.
         try:
             from aether.greeting import generate_greeting
 
@@ -231,11 +316,20 @@ class AgentCore:
                 memory=self._memory_store,
                 llm_provider=self._llm_provider,
             )
+            if not greeting or greeting.lower() in {
+                "welcome back",
+                "welcome back.",
+                "hello",
+                "hello.",
+                "hi",
+                "hi.",
+            }:
+                return None
             logger.info("Voice greeting: '%s'", greeting[:80])
             return greeting
         except Exception as e:
             logger.error("Greeting generation failed: %s", e)
-            return "Hey there, good to see you."
+            return None
 
     # ─── Session Management ──────────────────────────────────────
 
@@ -266,6 +360,7 @@ class AgentCore:
 
     async def broadcast_notification(self, notification: dict) -> None:
         """Push a notification to all subscribed WS sidecar connections."""
+        self._record_briefing_item(notification)
         for cb in self._notification_subscribers:
             try:
                 await cb(notification)
@@ -273,6 +368,94 @@ class AgentCore:
                 logger.debug(
                     "Notification broadcast failed for subscriber", exc_info=True
                 )
+
+    def _record_briefing_item(self, notification: dict[str, Any]) -> None:
+        text = str(notification.get("text", "")).strip()
+        if not text:
+            return
+        level = str(notification.get("level", "")).lower()
+        if level not in {"speak", "nudge", "batch"}:
+            return
+
+        kind = "weather" if self._looks_like_weather(text) else "notification"
+        self._briefing_items.append({"ts": time.time(), "kind": kind, "text": text})
+
+        # Keep only recent compact window.
+        cutoff = time.time() - (24 * 3600)
+        self._briefing_items = [i for i in self._briefing_items if i["ts"] >= cutoff][
+            -30:
+        ]
+
+    def _build_briefing_text(self, now: float) -> tuple[str, bool, bool]:
+        cutoff = now - (12 * 3600)
+        items = [i for i in self._briefing_items if i["ts"] >= cutoff]
+        weather_items = [i for i in items if i["kind"] == "weather"]
+        notif_items = [i for i in items if i["kind"] != "weather"]
+
+        parts: list[str] = []
+        has_weather = bool(weather_items)
+        has_notifications = bool(notif_items)
+
+        if has_notifications:
+            n = len(notif_items)
+            parts.append(f"You have {n} new notification{'s' if n != 1 else ''}.")
+        if has_weather:
+            latest_weather = str(weather_items[-1]["text"]).strip()
+            latest_weather = re.sub(r"\s+", " ", latest_weather)
+            parts.append(f"Weather update: {latest_weather[:120].rstrip(' ,.;')}.")
+
+        return " ".join(parts).strip(), has_weather, has_notifications
+
+    def _extract_name_from_facts(self, facts: list[str]) -> str | None:
+        for fact in facts[:20]:
+            text = fact.strip().rstrip(".")
+            m = re.search(
+                r"user(?:'s)?\s+name\s+is\s+([A-Za-z][A-Za-z\-']{1,30})",
+                text,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(1)
+        return None
+
+    def _looks_like_weather(self, text: str) -> bool:
+        low = text.lower()
+        weather_terms = (
+            "weather",
+            "forecast",
+            "temperature",
+            "rain",
+            "sunny",
+            "cloud",
+            "wind",
+            "humidity",
+            "degrees",
+        )
+        return any(t in low for t in weather_terms)
+
+    # ─── Spoken Notification Delivery ────────────────────────────
+
+    async def speak_notification(self, text: str) -> bool:
+        """Deliver a notification via TTS through active voice sessions.
+
+        Returns True if delivered to at least one session, False otherwise.
+        Always also broadcasts to WS sidecar as fallback.
+        """
+        delivered = False
+
+        if self._voice_transport is not None:
+            try:
+                sessions = self._voice_transport.get_active_sessions()
+                for session in sessions:
+                    await session.deliver_notification(text)
+                    delivered = True
+            except Exception as e:
+                logger.warning("Spoken notification delivery failed: %s", e)
+
+        # Always broadcast to WS sidecar as fallback
+        await self.broadcast_notification({"level": "speak", "text": text})
+
+        return delivered
 
     # ─── Health ──────────────────────────────────────────────────
 
@@ -282,7 +465,7 @@ class AgentCore:
         return {
             "agent_core": True,
             "sessions": len(self._sessions),
-            "has_greeted": self._has_greeted,
+            "last_greeting_at": self._last_greeting_at,
             "notification_subscribers": len(self._notification_subscribers),
             "scheduler": scheduler_health,
         }
