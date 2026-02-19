@@ -25,19 +25,32 @@ from aether.core.config import config
 
 logger = logging.getLogger(__name__)
 
-FACT_EXTRACTION_PROMPT = """Extract key facts from this conversation turn. Focus on:
-- Personal details (name, location, job, preferences)
-- Preferences and opinions ("I like...", "I prefer...", "I hate...")
-- Plans and goals ("I'm working on...", "I want to...")
-- Relationships ("my wife...", "my friend...")
-- Workflow patterns ("User always asks for Python projects", "User prefers files in /rough")
-- Tool usage preferences ("User frequently checks directory contents")
-- Any specific factual information the user shared
+FACT_EXTRACTION_PROMPT = """You are Aether's long-term memory extractor.
 
-Return a JSON array of fact strings. Each fact should be a short, standalone statement.
-If no significant facts are present, return an empty array [].
+Goal: store only facts that improve future assistance for a "Jarvis/second-brain" assistant.
 
-Example output: ["User's name is Alex", "User works at Google", "User prefers Python projects with src/ layout"]
+Extract ONLY durable, user-specific, decision-relevant facts from this turn:
+- Identity and profile: name, role, location, timezone, recurring schedule
+- Durable preferences: communication style, coding/workflow/tool preferences
+- Ongoing projects, goals, commitments, deadlines
+- Stable constraints: budget, device/platform limits, security/privacy boundaries
+- Important relationships and recurring contacts (only when clearly stated)
+
+Do NOT extract:
+- Small talk, greetings, jokes, filler
+- Temporary mood unless it implies a stable preference
+- Assistant claims or advice as facts
+- One-off details with no future value
+- Duplicates or near-duplicates of existing memory wording
+
+Write strict concise fact strings:
+- One fact per string
+- Third-person style, starting with "User ..." or "User's ..."
+- Canonical and specific (avoid vague language)
+- Keep each fact short (about 6-18 words)
+
+Return ONLY a JSON array of strings.
+If no high-value durable facts are present, return [] exactly.
 
 Conversation:
 User: {user_message}
@@ -340,6 +353,17 @@ class MemoryStore:
             }
             for r in rows
         ]
+
+    async def get_last_session_end(self) -> float | None:
+        """Get the end timestamp of the most recent session, or None if no sessions."""
+        if not self._db:
+            return None
+
+        cursor = await self._db.execute(
+            "SELECT ended_at FROM sessions ORDER BY ended_at DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
 
     # --- Action memory (v0.07) ---
 

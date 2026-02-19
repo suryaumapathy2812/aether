@@ -45,6 +45,7 @@ class DeepgramSTTProvider(STTProvider):
         self._should_be_connected = False
         self._audio_chunks_sent = 0
         self._last_send_at: float = 0.0
+        self._keepalive_mode: str | None = None
 
     @property
     def is_open(self) -> bool:
@@ -151,6 +152,7 @@ class DeepgramSTTProvider(STTProvider):
             self._transcript_buffer = ""
             self._interim_text = ""
             self._last_send_at = time.monotonic()
+            self._keepalive_mode = None
             logger.info("Deepgram live connection opened")
 
         except Exception as e:
@@ -366,7 +368,14 @@ class DeepgramSTTProvider(STTProvider):
                     continue
 
                 try:
-                    await self._socket.send_keep_alive()
+                    sent = await self._send_keepalive_frame()
+                    if not sent:
+                        # SDK/runtime does not expose a keepalive API.
+                        # Avoid reconnect loops; media traffic will keep socket alive.
+                        logger.debug(
+                            "Deepgram keepalive unavailable on this SDK/runtime"
+                        )
+                        continue
                     self._last_send_at = time.monotonic()
                     logger.debug("Deepgram keepalive sent (idle_for=%.1fs)", idle_for)
                 except Exception as e:
@@ -375,6 +384,61 @@ class DeepgramSTTProvider(STTProvider):
                         asyncio.create_task(self._reconnect())
         except asyncio.CancelledError:
             pass
+
+    async def _send_keepalive_frame(self) -> bool:
+        """Try all known Deepgram v5 keepalive APIs without monkey patches."""
+        if not self._socket:
+            return False
+
+        # Fast path: reuse previously successful mode for this connection.
+        if self._keepalive_mode == "send_keep_alive":
+            return await self._call_keepalive_method("send_keep_alive")
+        if self._keepalive_mode == "send_keepalive":
+            return await self._call_keepalive_method("send_keepalive")
+        if self._keepalive_mode == "send_control":
+            return await self._call_keepalive_control()
+
+        # Runtime feature detection for SDK surface differences.
+        if await self._call_keepalive_method("send_keep_alive"):
+            self._keepalive_mode = "send_keep_alive"
+            return True
+
+        if await self._call_keepalive_method("send_keepalive"):
+            self._keepalive_mode = "send_keepalive"
+            return True
+
+        if await self._call_keepalive_control():
+            self._keepalive_mode = "send_control"
+            return True
+
+        return False
+
+    async def _call_keepalive_method(self, name: str) -> bool:
+        if not self._socket:
+            return False
+        method = getattr(self._socket, name, None)
+        if not callable(method):
+            return False
+        result = method()
+        if asyncio.iscoroutine(result):
+            await result
+            return True
+        return False
+
+    async def _call_keepalive_control(self) -> bool:
+        if not self._socket:
+            return False
+        send_control = getattr(self._socket, "send_control", None)
+        if not callable(send_control):
+            return False
+
+        from deepgram.extensions.types.sockets import ListenV1ControlMessage
+
+        result = send_control(ListenV1ControlMessage(type="KeepAlive"))
+        if asyncio.iscoroutine(result):
+            await result
+            return True
+        return False
 
     async def _reconnect(self) -> None:
         """Reconnect with exponential backoff."""

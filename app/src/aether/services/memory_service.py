@@ -26,27 +26,54 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Prompts for memory operations
-SESSION_SUMMARY_PROMPT = """Summarize this conversation session in 2-3 sentences.
-Focus on what was accomplished (files created, questions answered, tasks completed), not what was said.
-If tools were used, mention what they did.
+SESSION_SUMMARY_PROMPT = """You are writing Aether's session handoff note for a "Jarvis/second-brain" assistant.
+
+Write a concise summary that helps future sessions resume effectively.
+Focus on continuity, not transcript replay.
+
+Include:
+1) Outcome: what was accomplished or decided
+2) Key preferences/constraints discovered or confirmed
+3) Open loops: unresolved questions, pending tasks, follow-ups
+4) Next-best action when the user returns
+
+Style rules:
+- 3-5 short sentences total
+- Concrete and specific; avoid fluff
+- Mention important tools/actions only when they materially changed progress
+- Do not fabricate missing details
 
 Conversation:
 {conversation}
 
 Summary:"""
 
-FACT_EXTRACTION_PROMPT = """Extract key facts from this conversation turn. Focus on:
-- Personal details (name, location, job, preferences)
-- Preferences and opinions ("I like...", "I prefer...", "I hate...")
-- Plans and goals ("I'm working on...", "I want to...")
-- Relationships ("my wife...", "my friend...")
-- Workflow patterns ("User always asks for Python projects")
-- Any specific factual information the user shared
+FACT_EXTRACTION_PROMPT = """You are Aether's long-term memory extractor.
 
-Return a JSON array of fact strings. Each fact should be a short, standalone statement.
-If no significant facts are present, return an empty array [].
+Goal: store only facts that improve future assistance for a "Jarvis/second-brain" assistant.
 
-Example output: ["User's name is Alex", "User works at Google", "User prefers Python"]
+Extract ONLY durable, user-specific, decision-relevant facts from this turn:
+- Identity and profile: name, role, location, timezone, recurring schedule
+- Durable preferences: communication style, coding/workflow/tool preferences
+- Ongoing projects, goals, commitments, deadlines
+- Stable constraints: budget, device/platform limits, security/privacy boundaries
+- Important relationships and recurring contacts (only when clearly stated)
+
+Do NOT extract:
+- Small talk, greetings, jokes, filler
+- Temporary mood unless it implies a stable preference
+- Assistant claims or advice as facts
+- One-off details with no future value
+- Duplicates or near-duplicates of existing memory wording
+
+Write strict concise fact strings:
+- One fact per string
+- Third-person style, starting with "User ..." or "User's ..."
+- Canonical and specific (avoid vague language)
+- Keep each fact short (about 6-18 words)
+
+Return ONLY a JSON array of strings.
+If no high-value durable facts are present, return [] exactly.
 
 Conversation:
 User: {user_message}

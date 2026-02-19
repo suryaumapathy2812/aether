@@ -58,6 +58,8 @@ _STATE_STT_CONNECTING = "stt_connecting"
 _STATE_STT_STREAMING = "stt_streaming"
 _STATE_THINKING = "thinking"
 _STATE_TTS_PLAYING = "tts_playing"
+_STATE_WATCHDOG_INTERVAL_S = 0.5
+_STATE_STUCK_TIMEOUT_S = 8.0
 
 
 class VoiceSession:
@@ -127,6 +129,10 @@ class VoiceSession:
         # ── Background tasks ──────────────────────────────────────
         self._stt_event_task: asyncio.Task | None = None
         self._response_task: asyncio.Task | None = None
+        self._turn_generation: int = 0
+        self._watchdog_task: asyncio.Task | None = None
+        self._barge_in_lock = asyncio.Lock()
+        self._last_state_progress_at: float = time.monotonic()
 
         # ── Callbacks (set by WebRTC transport) ───────────────────
         self.on_audio_out: Callable[[bytes], Awaitable[None]] | None = None
@@ -156,6 +162,7 @@ class VoiceSession:
         self._stt_event_task = asyncio.create_task(
             self._stt_event_loop(), name=f"stt-events-{self.session_id}"
         )
+        self._ensure_watchdog_running()
 
         greeting = await self.agent.generate_greeting()
         if greeting:
@@ -177,6 +184,7 @@ class VoiceSession:
             self._stt_event_task,
             self._response_task,
             self._stt_idle_disconnect_task,
+            self._watchdog_task,
         ):
             if task and not task.done():
                 task.cancel()
@@ -203,12 +211,14 @@ class VoiceSession:
             self._stt_event_task,
             self._response_task,
             self._stt_idle_disconnect_task,
+            self._watchdog_task,
         ):
             if task and not task.done():
                 task.cancel()
         self._eou_task = None
         self._stt_event_task = None
         self._stt_idle_disconnect_task = None
+        self._watchdog_task = None
 
         # Disconnect STT stream if connected
         if self._stt_connected:
@@ -244,6 +254,7 @@ class VoiceSession:
         self._stt_connected = False
         self.is_streaming = True
         self._set_state(_STATE_IDLE_VAD_ONLY, "session_resume")
+        self._ensure_watchdog_running()
 
         # Generate greeting if appropriate (time-aware)
         greeting = await self.agent.generate_greeting()
@@ -324,8 +335,16 @@ class VoiceSession:
                 self._stt_idle_disconnect_task = None
             logger.debug("VAD speech_started (p=%.3f)", probability)
 
-            # VAD-gated STT: connect on first speech detection
-            if not self._stt_connected:
+            # VAD-gated STT: connect on first speech detection.
+            # If STT is already connected (common during barge-in), move
+            # immediately back to streaming state so audio forwarding resumes.
+            if self._stt_connected and self.stt.is_open:
+                self._set_state(_STATE_STT_STREAMING, "vad_speech_started_resume")
+            elif not self._stt_connected:
+                await self._connect_stt_with_preroll()
+            else:
+                # Connected flag is stale (socket closed) — reconnect cleanly.
+                self._stt_connected = False
                 await self._connect_stt_with_preroll()
 
             if mode == "active":
@@ -590,6 +609,7 @@ class VoiceSession:
 
     async def _trigger_response(self, text: str) -> None:
         """LLM → streaming TTS chunks → audio out."""
+        generation = self._next_turn_generation()
         self.is_responding = True
         self._set_state(_STATE_THINKING, "llm_request_start")
         response_start = time.time()
@@ -612,13 +632,15 @@ class VoiceSession:
                     tts_buffer += chunk
                     pieces, tts_buffer = _extract_tts_chunks(tts_buffer)
                     for piece in pieces:
-                        await self._synthesize_and_send(piece)
+                        await self._synthesize_and_send(piece, generation=generation)
 
                 elif event.stream_type == "status":
                     status_text = event.payload.get("message", "")
                     if status_text:
                         await self._send_text_event("status", status_text)
-                        await self._synthesize_and_send(status_text)
+                        await self._synthesize_and_send(
+                            status_text, generation=generation
+                        )
 
                 elif event.stream_type == "tool_result":
                     await self._send_text_event(
@@ -626,7 +648,9 @@ class VoiceSession:
                     )
 
             if tts_buffer.strip():
-                await self._synthesize_and_send(tts_buffer.strip())
+                await self._synthesize_and_send(
+                    tts_buffer.strip(), generation=generation
+                )
 
             await self._send_text_event("stream_end", "")
 
@@ -714,54 +738,30 @@ class VoiceSession:
         probability: float | None = None,
         allow_thinking_interrupt: bool = False,
     ) -> None:
-        """Interrupt assistant playback when user starts speaking."""
-        now = time.time()
-        if now - self._last_barge_in_at < 0.8:
-            return
+        """Interrupt assistant playback when user starts speaking.
 
-        is_assistant_speaking = now < self._assistant_speaking_until
-        if not is_assistant_speaking:
-            if not allow_thinking_interrupt:
-                return
-            if not (self._response_task and not self._response_task.done()):
-                return
-            # Only interrupt thinking if there's a real interim transcript
-            has_fresh_interim = (
-                now - self._last_interim_at < 1.2
-                and len(self._last_interim_text.strip()) >= 6
-            )
-            if not has_fresh_interim:
+        Idempotent and race-safe: only one barge-in transaction runs at a time.
+        """
+        async with self._barge_in_lock:
+            now = time.time()
+            if not self._should_interrupt_for_barge_in(now, allow_thinking_interrupt):
                 return
 
-        self._last_barge_in_at = now
+            self._last_barge_in_at = now
+            if probability is not None:
+                logger.info(
+                    "Barge-in (%s, p=%.3f): interrupting assistant", source, probability
+                )
+            else:
+                logger.info("Barge-in (%s): interrupting assistant", source)
 
-        if probability is not None:
-            logger.info(
-                "Barge-in (%s, p=%.3f): interrupting assistant", source, probability
-            )
-        else:
-            logger.info("Barge-in (%s): interrupting assistant", source)
-
-        if self.on_barge_in:
-            await self.on_barge_in()
-
-        self._assistant_speaking_until = 0.0
-        self._tts_playing = False
-        self._tts_cooldown_until = now + 0.35
-
-        if self._response_task and not self._response_task.done():
-            self._response_task.cancel()
-
-        self.is_responding = False
-        self._set_state(_STATE_IDLE_VAD_ONLY, "barge_in")
-        await self.agent.cancel_session(self.session_id)
-
-        if self.is_streaming:
-            await self._send_text_event("status", "listening...")
+            await self._reset_to_listening("barge_in", now)
 
     # ─── TTS ─────────────────────────────────────────────────────
 
-    async def _synthesize_and_send(self, text: str) -> None:
+    async def _synthesize_and_send(
+        self, text: str, generation: int | None = None
+    ) -> None:
         """Text → streaming TTS → audio out callback.
 
         Uses synthesize_stream() for chunk-by-chunk delivery, falling back
@@ -782,12 +782,20 @@ class VoiceSession:
                     text[:60],
                 )
             return
+        if generation is not None and generation != self._turn_generation:
+            logger.debug("TTS skipped for stale generation=%d", generation)
+            return
         try:
             self._tts_playing = True
             self._set_state(_STATE_TTS_PLAYING, "tts_stream_start")
             logger.info("[pipeline] TTS stream start: %r", clean[:60])
             chunk_count = 0
             async for audio_chunk in self.tts_provider.synthesize_stream(clean):
+                if generation is not None and generation != self._turn_generation:
+                    logger.debug(
+                        "TTS stream cancelled by generation change=%d", generation
+                    )
+                    break
                 chunk_count += 1
                 if chunk_count == 1:
                     logger.info(
@@ -811,7 +819,100 @@ class VoiceSession:
 
     # ─── Helpers ─────────────────────────────────────────────────
 
+    def _next_turn_generation(self) -> int:
+        self._turn_generation += 1
+        return self._turn_generation
+
+    def _should_interrupt_for_barge_in(
+        self, now: float, allow_thinking_interrupt: bool
+    ) -> bool:
+        if now - self._last_barge_in_at < 0.8:
+            return False
+
+        if now < self._assistant_speaking_until:
+            return True
+
+        if not allow_thinking_interrupt:
+            return False
+        if not (self._response_task and not self._response_task.done()):
+            return False
+
+        # Only interrupt thinking if there is fresh, substantive interim speech.
+        has_fresh_interim = (
+            now - self._last_interim_at < 1.2
+            and len(self._last_interim_text.strip()) >= 6
+        )
+        return has_fresh_interim
+
+    async def _reset_to_listening(self, reason: str, now: float | None = None) -> None:
+        if self.on_barge_in:
+            await self.on_barge_in()
+
+        ts = now if now is not None else time.time()
+        self._assistant_speaking_until = 0.0
+        self._tts_playing = False
+        self._tts_cooldown_until = ts + 0.35
+        self._cancel_eou()
+
+        if self._response_task and not self._response_task.done():
+            self._response_task.cancel()
+        self._response_task = None
+
+        self._turn_generation += 1
+        self.is_responding = False
+        if (
+            self._stt_connected
+            and self.stt.is_open
+            and self.is_streaming
+            and self._speaking
+        ):
+            self._set_state(_STATE_STT_STREAMING, reason)
+        else:
+            self._set_state(_STATE_IDLE_VAD_ONLY, reason)
+        await self.agent.cancel_session(self.session_id)
+
+        if self.is_streaming:
+            await self._send_text_event("status", "listening...")
+
+    def _ensure_watchdog_running(self) -> None:
+        if self._watchdog_task and not self._watchdog_task.done():
+            return
+        self._watchdog_task = asyncio.create_task(
+            self._state_watchdog_loop(),
+            name=f"voice-watchdog-{self.session_id}",
+        )
+
+    async def _state_watchdog_loop(self) -> None:
+        try:
+            while self.is_streaming:
+                await asyncio.sleep(_STATE_WATCHDOG_INTERVAL_S)
+                if self._needs_watchdog_recovery():
+                    logger.warning(
+                        "[pipeline] state watchdog recovery (state=%s responding=%s)",
+                        self._state,
+                        self.is_responding,
+                    )
+                    await self._reset_to_listening("state_watchdog")
+        except asyncio.CancelledError:
+            pass
+
+    def _needs_watchdog_recovery(self) -> bool:
+        if self._speaking:
+            return False
+
+        elapsed = time.monotonic() - self._last_state_progress_at
+        in_active_state = self._state in (_STATE_THINKING, _STATE_TTS_PLAYING)
+        if in_active_state and elapsed > _STATE_STUCK_TIMEOUT_S:
+            return True
+
+        response_task_done = self._response_task is None or self._response_task.done()
+        if self.is_responding and response_task_done and elapsed > 1.0:
+            return True
+
+        return False
+
     def _set_state(self, next_state: str, reason: str) -> None:
+        self._last_state_progress_at = time.monotonic()
         if self._state == next_state:
             return
         prev = self._state
