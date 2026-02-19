@@ -286,6 +286,7 @@ async def startup():
 
             webrtc_transport = SmallWebRTCTransport(
                 ice_servers=ice_servers or None,
+                sample_rate_in=48000,  # aiortc always delivers 48 kHz from the client
             )
             await transport_manager.register_transport(webrtc_transport)
             logger.info("WebRTC transport registered (aiortc)")

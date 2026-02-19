@@ -607,7 +607,18 @@ class KernelCore(CoreInterface):
         """Background task: listen to streaming STT events."""
         try:
             async for event in self.stt_provider.stream_events():
-                if session.is_responding or session.is_muted:
+                # Always drop everything when muted
+                if session.is_muted:
+                    continue
+
+                # While responding, only drop interim transcripts (live captions).
+                # utterance_end must still be processed so the debounce can fire
+                # and the user's words are queued for the next turn.
+                if (
+                    session.is_responding
+                    and event.type == FrameType.TEXT
+                    and event.metadata.get("interim")
+                ):
                     continue
 
                 if event.type == FrameType.TEXT and event.metadata.get("interim"):
