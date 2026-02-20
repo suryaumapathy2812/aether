@@ -4,6 +4,7 @@ OpenAI LLM Provider — GPT-4o streaming with tool calling.
 v0.05: Added generate_stream_with_tools for function calling support.
 Streams tokens AND tool calls, handles the API contract.
 v0.11: Added base_url support for OpenAI-compatible APIs (e.g., OpenRouter).
+       Auto-prefixes model with provider when using OpenRouter.
 """
 
 from __future__ import annotations
@@ -18,6 +19,27 @@ from aether.core.config import config
 from aether.providers.base import LLMProvider, LLMStreamEvent, LLMToolCall
 
 logger = logging.getLogger(__name__)
+
+
+def _get_model_name() -> str:
+    """Get the model name, prefixing with provider for OpenRouter.
+
+    When using OpenRouter, models need provider prefix (e.g., openai/gpt-4o).
+    When using direct OpenAI, use the model name as-is.
+    """
+    model = config.llm.model
+    base_url = config.llm.base_url.lower() if config.llm.base_url else ""
+
+    # Check if using OpenRouter
+    if "openrouter" in base_url:
+        # Check if model already has provider prefix
+        if "/" not in model:
+            # Prefix with provider (e.g., openai/gpt-4o, anthropic/claude-3.5-sonnet)
+            provider = config.llm.provider
+            model = f"{provider}/{model}"
+            logger.debug(f"OpenRouter model prefixed: {model}")
+
+    return model
 
 
 class OpenAILLMProvider(LLMProvider):
@@ -36,10 +58,13 @@ class OpenAILLMProvider(LLMProvider):
 
         self.client = AsyncOpenAI(**client_kwargs)
 
+        model = _get_model_name()
         provider_name = (
-            "OpenRouter" if "openrouter" in config.llm.base_url.lower() else "OpenAI"
+            "OpenRouter"
+            if "openrouter" in (config.llm.base_url or "").lower()
+            else "OpenAI"
         )
-        logger.info(f"{provider_name} LLM ready (model={config.llm.model})")
+        logger.info(f"{provider_name} LLM ready (model={model})")
 
     async def stop(self) -> None:
         self.client = None
@@ -55,7 +80,7 @@ class OpenAILLMProvider(LLMProvider):
             raise RuntimeError("OpenAI LLM not started")
 
         stream = await self.client.chat.completions.create(
-            model=config.llm.model,
+            model=_get_model_name(),
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -85,7 +110,7 @@ class OpenAILLMProvider(LLMProvider):
             raise RuntimeError("OpenAI LLM not started")
 
         kwargs: dict = {
-            "model": config.llm.model,
+            "model": _get_model_name(),
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -168,6 +193,6 @@ class OpenAILLMProvider(LLMProvider):
         status = "ready" if self.client else "not_started"
         return {
             "provider": "openai",
-            "model": config.llm.model,
+            "model": _get_model_name(),
             "status": status,
         }
