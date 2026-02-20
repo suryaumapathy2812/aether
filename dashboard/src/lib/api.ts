@@ -173,7 +173,7 @@ export async function disablePlugin(name: string) {
 }
 
 export async function savePluginConfig(name: string, config: Record<string, string>) {
-  return api(`/api/plugins/${name}/config`, {
+  return api<{ status: string; auto_enabled?: boolean }>(`/api/plugins/${name}/config`, {
     method: "POST",
     body: JSON.stringify({ config }),
   });

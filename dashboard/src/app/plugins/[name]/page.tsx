@@ -6,8 +6,6 @@ import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { useSession } from "@/lib/auth-client";
 import {
   listPlugins,
@@ -21,7 +19,12 @@ import {
 
 /**
  * Plugin detail/config page.
- * Shows plugin info, OAuth connect button, config form, and enable/disable toggle.
+ * 
+ * Shows:
+ * - Plugin description
+ * - OAuth connect (for oauth2 plugins)
+ * - Config form (for api_key plugins)
+ * - Enable/Disable with validation
  */
 export default function PluginDetailPage() {
   const router = useRouter();
@@ -35,6 +38,7 @@ export default function PluginDetailPage() {
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
 
@@ -53,6 +57,7 @@ export default function PluginDetailPage() {
   async function loadPluginData() {
     try {
       setLoading(true);
+      setError("");
       const plugins = await listPlugins();
       const found = plugins.find((p) => p.name === pluginName);
       if (!found) {
@@ -73,34 +78,69 @@ export default function PluginDetailPage() {
     }
   }
 
+  // Check if all required config fields are filled
+  function hasRequiredConfig(): boolean {
+    if (!plugin?.config_fields) return true;
+    const required = plugin.config_fields.filter((f) => f.required);
+    return required.every((f) => formValues[f.key]?.trim());
+  }
+
+  // Get missing required fields
+  function getMissingFields(): string[] {
+    if (!plugin?.config_fields) return [];
+    return plugin.config_fields
+      .filter((f) => f.required && !formValues[f.key]?.trim())
+      .map((f) => f.label);
+  }
+
   async function handleSave() {
     if (!plugin) return;
     setSaving(true);
+    setError("");
+    setSuccess("");
     try {
-      await savePluginConfig(pluginName, formValues);
+      const result = await savePluginConfig(pluginName, formValues);
       setConfig(formValues);
+      if (result.auto_enabled) {
+        setPlugin({ ...plugin, enabled: true, connected: true });
+        setSuccess("Configuration saved and plugin enabled");
+      } else {
+        setSuccess("Configuration saved");
+      }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to save config";
-      setError(msg);
+      setError(e instanceof Error ? e.message : "Failed to save config");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleToggleEnable() {
+  async function handleEnable() {
     if (!plugin) return;
     setToggling(true);
+    setError("");
+    setSuccess("");
     try {
-      if (plugin.enabled) {
-        await disablePlugin(pluginName);
-        setPlugin({ ...plugin, enabled: false });
-      } else {
-        await enablePlugin(pluginName);
-        setPlugin({ ...plugin, enabled: true });
-      }
+      await enablePlugin(pluginName);
+      setPlugin({ ...plugin, enabled: true });
+      setSuccess("Plugin enabled");
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to toggle plugin";
-      setError(msg);
+      setError(e instanceof Error ? e.message : "Failed to enable plugin");
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  async function handleDisable() {
+    if (!plugin) return;
+    setToggling(true);
+    setError("");
+    setSuccess("");
+    try {
+      await disablePlugin(pluginName);
+      setPlugin({ ...plugin, enabled: false });
+      setSuccess("Plugin disabled");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to disable plugin");
     } finally {
       setToggling(false);
     }
@@ -112,6 +152,11 @@ export default function PluginDetailPage() {
 
   if (isPending || !session) return null;
 
+  const missingFields = getMissingFields();
+  const canEnable = plugin?.auth_type === "none" || 
+    (plugin?.auth_type === "oauth2" && plugin.connected) ||
+    (plugin?.auth_type === "api_key" && hasRequiredConfig());
+
   return (
     <PageShell
       title={plugin?.display_name || "Plugin"}
@@ -122,7 +167,7 @@ export default function PluginDetailPage() {
         <p className="text-muted-foreground text-xs tracking-wider">
           loading...
         </p>
-      ) : error ? (
+      ) : error && !plugin ? (
         <div>
           <p className="text-muted-foreground text-xs mb-4">{error}</p>
           <Button
@@ -146,10 +191,24 @@ export default function PluginDetailPage() {
             </p>
           </div>
 
+          {/* Success message */}
+          {success && (
+            <div className="py-3 text-[12px] text-green-400 tracking-wider animate-[fade-in_0.3s_ease]">
+              {success}
+            </div>
+          )}
+
           {/* Just connected success message */}
-          {justConnected && (
-            <div className="py-3 text-[12px] text-secondary-foreground tracking-wider animate-[fade-in_0.3s_ease]">
+          {justConnected && !success && (
+            <div className="py-3 text-[12px] text-green-400 tracking-wider animate-[fade-in_0.3s_ease]">
               connected successfully
+            </div>
+          )}
+
+          {/* Error message */}
+          {error && (
+            <div className="py-3 text-[12px] text-red-400 tracking-wider">
+              {error}
             </div>
           )}
 
@@ -172,6 +231,10 @@ export default function PluginDetailPage() {
                     reconnect
                   </Button>
                 </div>
+              ) : plugin.token_source ? (
+                <div className="text-[12px] text-muted-foreground">
+                  Connect <span className="text-secondary-foreground">{plugin.token_source}</span> first to enable this plugin.
+                </div>
               ) : (
                 <Button
                   variant="aether"
@@ -185,60 +248,99 @@ export default function PluginDetailPage() {
             </div>
           )}
 
-          {/* Enable/Disable toggle */}
-          {plugin.installed && plugin.connected && (
+          {/* Config form (for api_key type plugins) */}
+          {plugin.auth_type === "api_key" && plugin.installed && (
+            <div className="space-y-4">
+              <h2 className="text-xs tracking-widest text-muted-foreground uppercase font-normal">
+                Configuration
+              </h2>
+              <div className="space-y-4">
+                {plugin.config_fields?.map((field) => (
+                  <MinimalInput
+                    key={field.key}
+                    label={field.label}
+                    type={field.type === "password" ? "password" : "text"}
+                    value={formValues[field.key] || ""}
+                    onChange={(v) =>
+                      setFormValues({ ...formValues, [field.key]: v })
+                    }
+                    placeholder={field.description || field.label}
+                  />
+                ))}
+              </div>
+
+              <Button
+                variant="aether"
+                size="aether"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? "..." : "save configuration"}
+              </Button>
+
+              <Separator className="mt-4" />
+            </div>
+          )}
+
+          {/* Enable/Disable section */}
+          {plugin.installed && (
             <div className="py-2">
               <div className="flex items-center justify-between rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
-                <Label className="text-[11px] tracking-[0.12em] uppercase text-muted-foreground font-medium">
-                  Status
-                </Label>
+                <div className="flex flex-col">
+                  <span className="text-[11px] tracking-[0.12em] uppercase text-muted-foreground font-medium">
+                    Status
+                  </span>
+                  {!canEnable && !plugin.enabled && (
+                    <span className="text-[10px] text-red-400/80 mt-1">
+                      {missingFields.length > 0 
+                        ? `Missing: ${missingFields.join(", ")}`
+                        : plugin.token_source 
+                          ? `Connect ${plugin.token_source} first`
+                          : "Configuration required"}
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-[12px] text-secondary-foreground tracking-wider">
+                  <span className={`text-[12px] tracking-wider ${
+                    plugin.enabled ? "text-green-400" : "text-muted-foreground"
+                  }`}>
                     {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
                   </span>
-                  <Switch
-                    checked={plugin.enabled}
-                    onCheckedChange={handleToggleEnable}
-                    disabled={toggling}
-                  />
+                  {plugin.enabled ? (
+                    <Button
+                      variant="aether-link"
+                      size="aether-link"
+                      onClick={handleDisable}
+                      disabled={toggling}
+                      className="text-red-400/80 hover:text-red-400"
+                    >
+                      disable
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="aether"
+                      size="aether"
+                      onClick={handleEnable}
+                      disabled={toggling || !canEnable}
+                    >
+                      {toggling ? "..." : "enable"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Config form (only for non-OAuth fields, if any) */}
-          {plugin.installed &&
-            plugin.config_fields &&
-            plugin.config_fields.length > 0 && (
-              <div>
-                <h2 className="text-xs tracking-widest text-muted-foreground uppercase mb-4 font-normal">
-                  Configuration
-                </h2>
-                <div>
-                  {plugin.config_fields.map((field) => (
-                    <MinimalInput
-                      key={field.key}
-                      label={field.label}
-                      type={field.type === "password" ? "password" : "text"}
-                      value={formValues[field.key] || ""}
-                      onChange={(v) =>
-                        setFormValues({ ...formValues, [field.key]: v })
-                      }
-                      placeholder={field.label}
-                    />
-                  ))}
-                </div>
-
-                <Button
-                  variant="aether"
-                  size="aether"
-                  onClick={handleSave}
-                  disabled={saving}
-                >
-                  {saving ? "..." : "save"}
-                </Button>
-              </div>
-            )}
+          {/* Not installed message */}
+          {!plugin.installed && (
+            <div className="text-[12px] text-muted-foreground">
+              Install this plugin from the{" "}
+              <Link href="/plugins" className="text-secondary-foreground hover:underline">
+                plugins page
+              </Link>
+              .
+            </div>
+          )}
         </div>
       )}
     </PageShell>

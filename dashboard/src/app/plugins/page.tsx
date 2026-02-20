@@ -6,19 +6,11 @@ import Link from "next/link";
 import PageShell from "@/components/PageShell";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth-client";
-import {
-  listPlugins,
-  installPlugin,
-  enablePlugin,
-  disablePlugin,
-  getOAuthStartUrl,
-  PluginInfo,
-} from "@/lib/api";
+import { listPlugins, installPlugin, PluginInfo } from "@/lib/api";
 
 /**
- * Plugins — manage available plugins.
- * Each plugin shown as a row; tap to edit config.
- * Install/connect/enable/disable actions inline.
+ * Plugins — list available plugins with install button and status.
+ * Click plugin to go to detail page for enable/disable/config.
  */
 export default function PluginsPage() {
   return (
@@ -35,7 +27,7 @@ function PluginsContent() {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
 
   // Show OAuth error from redirect
   const oauthError = searchParams.get("error");
@@ -63,43 +55,14 @@ function PluginsContent() {
   }
 
   async function handleInstall(name: string) {
-    setActionInProgress(name);
+    setInstalling(name);
     try {
       await installPlugin(name);
       await loadPlugins();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to install plugin");
     } finally {
-      setActionInProgress(null);
-    }
-  }
-
-  function handleConnect(name: string) {
-    // Navigate to OAuth start — browser redirect (not fetch)
-    window.location.href = getOAuthStartUrl(name);
-  }
-
-  async function handleEnable(name: string) {
-    setActionInProgress(name);
-    try {
-      await enablePlugin(name);
-      await loadPlugins();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to enable plugin");
-    } finally {
-      setActionInProgress(null);
-    }
-  }
-
-  async function handleDisable(name: string) {
-    setActionInProgress(name);
-    try {
-      await disablePlugin(name);
-      await loadPlugins();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to disable plugin");
-    } finally {
-      setActionInProgress(null);
+      setInstalling(null);
     }
   }
 
@@ -151,52 +114,31 @@ function PluginsContent() {
                     <Button
                       variant="aether"
                       size="aether"
-                      onClick={() => handleInstall(plugin.name)}
-                      disabled={actionInProgress === plugin.name}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleInstall(plugin.name);
+                      }}
+                      disabled={installing === plugin.name}
                     >
-                      {actionInProgress === plugin.name ? "..." : "install"}
-                    </Button>
-                  ) : /* Installed, OAuth needed, not connected, and no token_source shortcut */
-                  plugin.auth_type === "oauth2" &&
-                    !plugin.connected &&
-                    !plugin.token_source ? (
-                    <Button
-                      variant="aether"
-                      size="aether"
-                      onClick={() => handleConnect(plugin.name)}
-                    >
-                      connect with {plugin.auth_provider}
-                    </Button>
-                  ) : /* Has token_source but source not connected yet */
-                  plugin.token_source && !plugin.connected ? (
-                    <span className="text-muted-foreground tracking-wider text-right">
-                      connect {plugin.token_source} first
-                    </span>
-                  ) : /* Connected/ready but disabled */
-                  !plugin.enabled ? (
-                    <Button
-                      variant="aether"
-                      size="aether"
-                      onClick={() => handleEnable(plugin.name)}
-                      disabled={actionInProgress === plugin.name}
-                    >
-                      {actionInProgress === plugin.name ? "..." : "enable"}
+                      {installing === plugin.name ? "..." : "install"}
                     </Button>
                   ) : (
-                    /* Enabled and connected */
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground tracking-wider">
-                        {plugin.auth_type === "none" ? "active" : "connected"}
-                      </span>
-                      <Button
-                        variant="aether-link"
-                        size="aether-link"
-                        onClick={() => handleDisable(plugin.name)}
-                        disabled={actionInProgress === plugin.name}
+                    /* Installed → show status badge */
+                    <Link
+                      href={`/plugins/${plugin.name}`}
+                      className="block"
+                    >
+                      <span
+                        className={`text-[11px] tracking-wider px-2 py-1 rounded-full ${
+                          plugin.enabled
+                            ? "bg-green-500/10 text-green-400"
+                            : "bg-muted/50 text-muted-foreground"
+                        }`}
                       >
-                        {actionInProgress === plugin.name ? "..." : "disable"}
-                      </Button>
-                    </div>
+                        {plugin.enabled ? "enabled" : "disabled"}
+                      </span>
+                    </Link>
                   )}
                 </div>
               </div>
