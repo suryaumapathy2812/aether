@@ -1,26 +1,47 @@
 {
   "providers": {
     "openai": {
-      "display_name": "OpenAI",
+      "display_name": "OpenAI / OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
       "models": {
-        "gpt-4o": {
-          "description": "Flagship model — fast, smart, multimodal",
+        "openai/gpt-4o": {
+          "description": "GPT-4o — flagship, fast, smart, multimodal",
           "recommended": true
         },
-        "gpt-4o-mini": {
-          "description": "Lightweight — faster and cheaper",
+        "openai/gpt-4o-mini": {
+          "description": "GPT-4o-mini — lightweight, faster, cheaper",
           "recommended": false
         },
-        "gpt-4.1": {
-          "description": "Latest — best for coding and instruction following",
+        "openai/gpt-4.1": {
+          "description": "GPT-4.1 — latest, best for coding",
           "recommended": false
         },
-        "gpt-4.1-mini": {
-          "description": "Latest mini — balanced speed and quality",
+        "openai/gpt-4.1-mini": {
+          "description": "GPT-4.1-mini — balanced speed and quality",
           "recommended": false
         },
-        "gpt-4.1-nano": {
-          "description": "Smallest — fastest responses, lowest cost",
+        "anthropic/claude-3.5-sonnet": {
+          "description": "Claude 3.5 Sonnet — excellent for coding",
+          "recommended": false
+        },
+        "anthropic/claude-3.5-haiku": {
+          "description": "Claude 3.5 Haiku — fast and efficient",
+          "recommended": false
+        },
+        "google/gemini-2.0-flash-001": {
+          "description": "Gemini 2.0 Flash — fast multimodal",
+          "recommended": false
+        },
+        "meta-llama/llama-3.3-70b-instruct": {
+          "description": "Llama 3.3 70B — open source, powerful",
+          "recommended": false
+        },
+        "deepseek/deepseek-chat": {
+          "description": "DeepSeek Chat — great value",
+          "recommended": false
+        },
+        "deepseek/deepseek-r1": {
+          "description": "DeepSeek R1 — reasoning model",
           "recommended": false
         }
       }
