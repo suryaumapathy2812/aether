@@ -1059,6 +1059,44 @@ AVAILABLE_PLUGINS = {
         "scopes": [],
         "config_fields": [],
     },
+    "vobiz": {
+        "name": "vobiz",
+        "display_name": "Vobiz Telephony",
+        "description": "Make and receive phone calls via Vobiz.",
+        "auth_type": "api_key",
+        "auth_provider": "",
+        "scopes": [],
+        "config_fields": [
+            {
+                "key": "auth_id",
+                "label": "Auth ID",
+                "type": "text",
+                "required": True,
+                "description": "Your Vobiz Auth ID (from console.vobiz.ai)",
+            },
+            {
+                "key": "auth_token",
+                "label": "Auth Token",
+                "type": "password",
+                "required": True,
+                "description": "Your Vobiz Auth Token",
+            },
+            {
+                "key": "from_number",
+                "label": "Vobiz Phone Number",
+                "type": "text",
+                "required": True,
+                "description": "Your Vobiz phone number (caller ID, e.g., 919876543210)",
+            },
+            {
+                "key": "user_phone_number",
+                "label": "Your Phone Number",
+                "type": "text",
+                "required": False,
+                "description": "Your personal phone number for outbound calls (e.g., +919123456789)",
+            },
+        ],
+    },
 }
 
 
@@ -1085,6 +1123,24 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
         if token_row:
             connected_plugins.add(name)
 
+    # Check which api_key type plugins have required config (connected)
+    api_key_connected: set[str] = set()
+    for name, info in installed.items():
+        meta = AVAILABLE_PLUGINS.get(name, {})
+        if meta.get("auth_type") == "api_key":
+            # Check if all required config fields are set
+            required_fields = [
+                f["key"] for f in meta.get("config_fields", []) if f.get("required")
+            ]
+            if required_fields:
+                config_rows = await pool.fetch(
+                    "SELECT key FROM plugin_configs WHERE plugin_id = $1",
+                    info["id"],
+                )
+                configured_keys = {r["key"] for r in config_rows}
+                if all(k in configured_keys for k in required_fields):
+                    api_key_connected.add(name)
+
     result = []
     for name, meta in AVAILABLE_PLUGINS.items():
         entry = {**meta}
@@ -1096,6 +1152,8 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
             token_source = meta.get("token_source")
             if token_source:
                 entry["connected"] = token_source in connected_plugins
+            elif meta.get("auth_type") == "api_key":
+                entry["connected"] = name in api_key_connected
             else:
                 entry["connected"] = name in connected_plugins
         else:
