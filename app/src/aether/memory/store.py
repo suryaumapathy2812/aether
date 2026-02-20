@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -86,6 +87,7 @@ class MemoryStore:
             CREATE TABLE IF NOT EXISTS facts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fact TEXT NOT NULL UNIQUE,
+                fact_key TEXT,
                 embedding TEXT NOT NULL,
                 source_conversation_id INTEGER,
                 created_at REAL NOT NULL,
@@ -123,6 +125,8 @@ class MemoryStore:
 
         await self._db.commit()
 
+        await self._migrate_fact_keys()
+
         # Compact old actions on startup
         await self._compact_old_actions()
 
@@ -146,7 +150,7 @@ class MemoryStore:
             "INSERT INTO conversations (user_message, assistant_message, embedding, timestamp) VALUES (?, ?, ?, ?)",
             (user_message, assistant_message, json.dumps(embedding), time.time()),
         )
-        conv_id = cursor.lastrowid
+        conv_id = int(cursor.lastrowid or 0)
         await self._db.commit()
         logger.debug(f"Stored conversation: {user_message[:50]}...")
 
@@ -173,7 +177,8 @@ class MemoryStore:
                 temperature=0.0,
             )
 
-            content = response.choices[0].message.content.strip()
+            content_raw = response.choices[0].message.content or ""
+            content = content_raw.strip()
 
             # Parse JSON array
             if content.startswith("["):
@@ -188,31 +193,125 @@ class MemoryStore:
                 else:
                     facts = []
 
-            for fact in facts:
+            unique_facts = self._dedupe_facts(facts)
+
+            for fact in unique_facts:
                 if isinstance(fact, str) and fact.strip():
                     await self._store_fact(fact.strip(), conv_id)
 
-            if facts:
-                logger.info(f"Extracted {len(facts)} facts: {facts}")
+            if unique_facts:
+                logger.info(f"Extracted {len(unique_facts)} facts: {unique_facts}")
 
         except Exception as e:
             logger.error(f"Fact extraction LLM error: {e}")
 
     async def _store_fact(self, fact: str, conv_id: int) -> None:
         """Store a fact, updating if a similar one exists."""
-        embedding = await self._embed(fact)
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        fact = fact.strip()
+        fact_key = self._canonicalize_fact(fact)
+        if not fact_key:
+            return
+
         now = time.time()
 
         try:
+            cursor = await self._db.execute(
+                "SELECT id FROM facts WHERE fact_key = ? LIMIT 1", (fact_key,)
+            )
+            row = await cursor.fetchone()
+
+            if row:
+                await self._db.execute(
+                    """UPDATE facts
+                       SET updated_at = ?, source_conversation_id = ?
+                       WHERE fact_key = ?""",
+                    (now, conv_id, fact_key),
+                )
+                await self._db.commit()
+                return
+
+            embedding = await self._embed(fact)
             await self._db.execute(
-                """INSERT INTO facts (fact, embedding, source_conversation_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(fact) DO UPDATE SET updated_at=?""",
-                (fact, json.dumps(embedding), conv_id, now, now, now),
+                """INSERT INTO facts (fact, fact_key, embedding, source_conversation_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fact_key) DO UPDATE SET updated_at=excluded.updated_at, source_conversation_id=excluded.source_conversation_id""",
+                (fact, fact_key, json.dumps(embedding), conv_id, now, now),
             )
             await self._db.commit()
         except Exception as e:
             logger.debug(f"Fact store error (may be duplicate): {e}")
+
+    @staticmethod
+    def _canonicalize_fact(fact: str) -> str:
+        lowered = fact.strip().lower().replace("\u2019", "'")
+        tokens = re.findall(r"[a-z0-9]+", lowered)
+        return " ".join(tokens)
+
+    def _dedupe_facts(self, facts: list) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for fact in facts:
+            if not isinstance(fact, str):
+                continue
+            cleaned = fact.strip()
+            if not cleaned:
+                continue
+            key = self._canonicalize_fact(cleaned)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(cleaned)
+        return unique
+
+    async def _migrate_fact_keys(self) -> None:
+        if not self._db:
+            return
+
+        cursor = await self._db.execute("PRAGMA table_info(facts)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "fact_key" not in columns:
+            await self._db.execute("ALTER TABLE facts ADD COLUMN fact_key TEXT")
+
+        cursor = await self._db.execute(
+            "SELECT id, fact FROM facts ORDER BY updated_at DESC, id DESC"
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            await self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_fact_key_unique ON facts(fact_key)"
+            )
+            await self._db.commit()
+            return
+
+        seen_keys: dict[str, int] = {}
+        delete_ids: list[int] = []
+        for row_id, fact in rows:
+            key = self._canonicalize_fact(fact)
+            if not key:
+                delete_ids.append(row_id)
+                continue
+            if key in seen_keys:
+                delete_ids.append(row_id)
+                continue
+            seen_keys[key] = row_id
+            await self._db.execute(
+                "UPDATE facts SET fact_key = ? WHERE id = ?", (key, row_id)
+            )
+
+        if delete_ids:
+            placeholders = ",".join("?" * len(delete_ids))
+            await self._db.execute(
+                f"DELETE FROM facts WHERE id IN ({placeholders})",
+                delete_ids,
+            )
+
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_fact_key_unique ON facts(fact_key)"
+        )
+        await self._db.commit()
 
     async def search(self, query: str, limit: int = 5) -> list[dict]:
         """Search for relevant memories using cosine similarity."""
@@ -476,13 +575,15 @@ class MemoryStore:
         if not self._db:
             return
 
-        cutoff = time.time() - (config_module.config.memory.action_retention_days * 86400)
+        cutoff = time.time() - (
+            config_module.config.memory.action_retention_days * 86400
+        )
 
         cursor = await self._db.execute(
             "SELECT id, tool_name, arguments, output, error, timestamp FROM actions WHERE timestamp < ?",
             (cutoff,),
         )
-        old_actions = await cursor.fetchall()
+        old_actions = list(await cursor.fetchall())
 
         if not old_actions:
             return
@@ -557,7 +658,11 @@ class MemoryStore:
         client = self._get_openai_client()
         model = config_module.config.memory.embedding_model
         llm_cfg = config_module.config.llm
-        if llm_cfg.base_url and "openrouter" in llm_cfg.base_url.lower() and "/" not in model:
+        if (
+            llm_cfg.base_url
+            and "openrouter" in llm_cfg.base_url.lower()
+            and "/" not in model
+        ):
             # Embeddings on OpenRouter should use an embedding-capable provider.
             # Default to OpenAI embedding models unless caller already provided a scoped model.
             model = f"openai/{model}"
@@ -572,6 +677,15 @@ class MemoryStore:
         """Return an OpenAI client configured for the current runtime config."""
         current_base_url = config_module.config.llm.base_url or ""
         current_api_key = config_module.config.llm.api_key or ""
+
+        # Test hook: if a client was injected directly, prefer it.
+        if (
+            self.openai is not None
+            and self._openai_base_url is None
+            and self._openai_api_key is None
+        ):
+            return self.openai
+
         if (
             self.openai
             and self._openai_base_url == current_base_url
@@ -579,10 +693,13 @@ class MemoryStore:
         ):
             return self.openai
 
-        client_kwargs = {"api_key": current_api_key}
         if current_base_url:
-            client_kwargs["base_url"] = current_base_url
-        self.openai = AsyncOpenAI(**client_kwargs)
+            self.openai = AsyncOpenAI(
+                api_key=current_api_key,
+                base_url=current_base_url,
+            )
+        else:
+            self.openai = AsyncOpenAI(api_key=current_api_key)
         self._openai_base_url = current_base_url
         self._openai_api_key = current_api_key
         return self.openai

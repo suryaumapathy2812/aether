@@ -11,6 +11,7 @@ import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiosqlite
 import numpy as np
 import pytest
 import pytest_asyncio
@@ -72,31 +73,19 @@ async def store(tmp_path):
     """Create a MemoryStore with mocked OpenAI, backed by a real temp SQLite DB."""
     db_path = tmp_path / "test_memory.db"
 
-    with patch("aether.memory.store.config") as mock_config:
-        # Wire up memory config
-        mock_config.memory.db_path = str(db_path)
-        mock_config.memory.embedding_model = "text-embedding-3-small"
-        mock_config.memory.similarity_threshold = 0.3
-        mock_config.memory.search_limit = 5
-        mock_config.memory.action_retention_days = 7
-        mock_config.memory.session_summary_limit = 3
-        mock_config.memory.action_output_max_chars = 1000
+    s = MemoryStore(db_path=db_path)
 
-        s = MemoryStore(db_path=db_path)
+    # Mock OpenAI embeddings — use deterministic fake embeddings
+    s.openai = MagicMock()
+    s.openai.embeddings.create = AsyncMock(
+        side_effect=lambda model, input: _mock_embedding_response(input)
+    )
+    # Mock OpenAI chat — default: return empty facts
+    s.openai.chat.completions.create = AsyncMock(return_value=_mock_chat_response("[]"))
 
-        # Mock OpenAI embeddings — use deterministic fake embeddings
-        s.openai = MagicMock()
-        s.openai.embeddings.create = AsyncMock(
-            side_effect=lambda model, input: _mock_embedding_response(input)
-        )
-        # Mock OpenAI chat — default: return empty facts
-        s.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response("[]")
-        )
-
-        await s.start()
-        yield s
-        await s.stop()
+    await s.start()
+    yield s
+    await s.stop()
 
 
 # --- Core Operations ---
@@ -161,6 +150,78 @@ class TestMemoryStoreCore:
         # Most recently updated first
         assert facts[0] == "Fact B"
         assert facts[1] == "Fact A"
+
+    @pytest.mark.asyncio
+    async def test_store_fact_deduplicates_case_and_punctuation(self, store):
+        """_store_fact keeps one row for canonical duplicates."""
+        await store._store_fact("User's name is Surya.", conv_id=1)
+        await store._store_fact("user's   name is SURYA", conv_id=2)
+
+        cursor = await store._db.execute("SELECT fact FROM facts")
+        rows = await cursor.fetchall()
+        assert len(rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_extract_facts_deduplicates_within_single_turn(self, store):
+        """Extractor deduplicates repeated fact variants in one response."""
+        store.openai.chat.completions.create = AsyncMock(
+            return_value=_mock_chat_response(
+                '["User likes Python", "user likes python.", "User likes Python"]'
+            )
+        )
+
+        await store.add("I like Python", "Nice!")
+
+        facts = await store.get_facts()
+        assert len(facts) == 1
+
+    @pytest.mark.asyncio
+    async def test_start_migrates_legacy_facts_to_fact_key(self, tmp_path):
+        """Legacy facts table is backfilled and deduplicated by canonical fact key."""
+        db_path = tmp_path / "legacy_memory.db"
+        async with aiosqlite.connect(str(db_path)) as db:
+            await db.execute(
+                """
+                CREATE TABLE facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fact TEXT NOT NULL UNIQUE,
+                    embedding TEXT NOT NULL,
+                    source_conversation_id INTEGER,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            embedding = json.dumps(_fake_embedding("fact"))
+            now = time.time()
+            await db.execute(
+                "INSERT INTO facts (fact, embedding, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("User prefers Python.", embedding, 1, now - 2, now - 2),
+            )
+            await db.execute(
+                "INSERT INTO facts (fact, embedding, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("user prefers python", embedding, 2, now - 1, now - 1),
+            )
+            await db.commit()
+
+        s = MemoryStore(db_path=db_path)
+        s.openai = MagicMock()
+        s.openai.embeddings.create = AsyncMock(
+            side_effect=lambda model, input: _mock_embedding_response(input)
+        )
+        s.openai.chat.completions.create = AsyncMock(
+            return_value=_mock_chat_response("[]")
+        )
+
+        await s.start()
+        cursor = await s._db.execute("SELECT COUNT(*) FROM facts")
+        count = (await cursor.fetchone())[0]
+        assert count == 1
+
+        cursor = await s._db.execute("SELECT fact_key FROM facts")
+        fact_key = (await cursor.fetchone())[0]
+        assert fact_key == "user prefers python"
+        await s.stop()
 
     @pytest.mark.asyncio
     async def test_get_recent(self, store):
