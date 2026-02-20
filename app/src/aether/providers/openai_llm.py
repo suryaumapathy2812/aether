@@ -3,6 +3,7 @@ OpenAI LLM Provider — GPT-4o streaming with tool calling.
 
 v0.05: Added generate_stream_with_tools for function calling support.
 Streams tokens AND tool calls, handles the API contract.
+v0.11: Added base_url support for OpenAI-compatible APIs (e.g., OpenRouter).
 """
 
 from __future__ import annotations
@@ -26,8 +27,19 @@ class OpenAILLMProvider(LLMProvider):
     async def start(self) -> None:
         if self.client:
             return  # Already started
-        self.client = AsyncOpenAI()
-        logger.info(f"OpenAI LLM ready (model={config.llm.model})")
+
+        # Support OpenAI-compatible APIs (e.g., OpenRouter) via base_url
+        client_kwargs = {}
+        if config.llm.base_url:
+            client_kwargs["base_url"] = config.llm.base_url
+            logger.info(f"Using custom base_url: {config.llm.base_url}")
+
+        self.client = AsyncOpenAI(**client_kwargs)
+
+        provider_name = (
+            "OpenRouter" if "openrouter" in config.llm.base_url.lower() else "OpenAI"
+        )
+        logger.info(f"{provider_name} LLM ready (model={config.llm.model})")
 
     async def stop(self) -> None:
         self.client = None

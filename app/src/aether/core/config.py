@@ -59,6 +59,9 @@ class LLMConfig:
     max_tokens: int = 500
     temperature: float = 0.7
     max_history_turns: int = 20
+    # Base URL for OpenAI-compatible APIs (e.g., OpenRouter)
+    # OpenRouter: https://openrouter.ai/api/v1
+    base_url: str = ""
 
     @classmethod
     def from_env(cls) -> LLMConfig:
@@ -70,6 +73,7 @@ class LLMConfig:
             max_tokens=int(os.getenv("AETHER_LLM_MAX_TOKENS", "500")),
             temperature=float(os.getenv("AETHER_LLM_TEMPERATURE", "0.7")),
             max_history_turns=int(os.getenv("AETHER_LLM_MAX_HISTORY_TURNS", "20")),
+            base_url=os.getenv("OPENAI_BASE_URL", ""),
         )
 
 
