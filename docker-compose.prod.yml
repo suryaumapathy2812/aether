@@ -14,8 +14,6 @@ services:
   # --- Postgres (shared by dashboard + orchestrator) ---
   postgres:
     image: postgres:16-alpine
-    container_name: aether-postgres
-    restart: unless-stopped
     environment:
       POSTGRES_DB: aether
       POSTGRES_USER: aether
@@ -29,12 +27,18 @@ services:
       retries: 5
     networks:
       - aether_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
 
   # --- Orchestrator (FastAPI / Python) ---
   orchestrator:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
-    container_name: aether-orchestrator
-    restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
       - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
@@ -42,9 +46,28 @@ services:
       - AETHER_PORT=9000
       # Agent provisioning (per-user containers via Docker SDK)
       - AGENT_IMAGE=${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest
-      - AGENT_NETWORK=aether_network
+      - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      # Shared model cache for per-user agent containers
+      - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}
+      - AGENT_SHARED_MODELS_ORCH_PATH=${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
+      - AGENT_SHARED_MODELS_CONTAINER_PATH=${AGENT_SHARED_MODELS_CONTAINER_PATH:-/models}
+      # VAD / turn detector defaults
+      - AETHER_VAD_MODE_DEFAULT=${AETHER_VAD_MODE_DEFAULT:-off}
+      - AETHER_VAD_MODEL_RELATIVE_PATH=${AETHER_VAD_MODEL_RELATIVE_PATH:-silero/silero_vad.onnx}
+      - AETHER_VAD_MODEL_URL=${AETHER_VAD_MODEL_URL:-}
+      - AETHER_VAD_MODEL_SHA256=${AETHER_VAD_MODEL_SHA256:-}
+      - AETHER_TURN_DETECTION_MODE_DEFAULT=${AETHER_TURN_DETECTION_MODE_DEFAULT:-off}
+      - AETHER_TURN_MODEL_TYPE=${AETHER_TURN_MODEL_TYPE:-en}
+      - AETHER_TURN_MODEL_REPO=${AETHER_TURN_MODEL_REPO:-livekit/turn-detector}
+      - AETHER_TURN_MODEL_REVISION=${AETHER_TURN_MODEL_REVISION:-v1.2.2-en}
+      - AETHER_TURN_MODEL_FILENAME=${AETHER_TURN_MODEL_FILENAME:-model.onnx}
+      - AETHER_TURN_MODEL_RELATIVE_DIR=${AETHER_TURN_MODEL_RELATIVE_DIR:-turn-detector}
+      - AETHER_TURN_MODEL_FILES=${AETHER_TURN_MODEL_FILES:-onnx/model.onnx,languages.json,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json}
+      - AETHER_TURN_MIN_ENDPOINTING_DELAY=${AETHER_TURN_MIN_ENDPOINTING_DELAY:-0.5}
+      - AETHER_TURN_MAX_ENDPOINTING_DELAY=${AETHER_TURN_MAX_ENDPOINTING_DELAY:-3.0}
+      - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -62,23 +85,30 @@ services:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}:${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
     networks:
       - aether_network
+      - traefik-public
     deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+      rollback_config:
+        order: stop-first
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.orchestrator.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.http.routers.orchestrator.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`) && !PathPrefix(`/api/auth`)"
         - "traefik.http.routers.orchestrator.entrypoints=websecure"
         - "traefik.http.routers.orchestrator.tls=true"
         - "traefik.http.services.orchestrator.loadbalancer.server.port=9000"
-        - "traefik.http.middlewares.orchestrator.stripprefix.prefixes=/api"
-        - "traefik.http.routers.orchestrator.middlewares=orchestrator-stripprefix"
+        - "traefik.http.routers.orchestrator.priority=100"
 
   # --- Dashboard (Next.js) ---
   dashboard:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-dashboard:latest
-    container_name: aether-dashboard
-    restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -93,12 +123,27 @@ services:
         condition: service_started
     networks:
       - aether_network
+      - traefik-public
     deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+      rollback_config:
+        order: stop-first
       labels:
         - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.http.routers.dashboard-auth.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/auth`)"
+        - "traefik.http.routers.dashboard-auth.entrypoints=websecure"
+        - "traefik.http.routers.dashboard-auth.tls=true"
+        - "traefik.http.routers.dashboard-auth.priority=200"
+        - "traefik.http.routers.dashboard-auth.service=dashboard"
         - "traefik.http.routers.dashboard.rule=Host(`${DOMAIN}`)"
         - "traefik.http.routers.dashboard.entrypoints=websecure"
         - "traefik.http.routers.dashboard.tls=true"
+        - "traefik.http.routers.dashboard.priority=10"
         - "traefik.http.services.dashboard.loadbalancer.server.port=3000"
 
   # --- Aether Agent ---
@@ -110,8 +155,11 @@ services:
 
 networks:
   aether_network:
+    name: aether_network
     driver: overlay
     attachable: true
+  traefik-public:
+    external: true
 
 volumes:
   postgres_data:
