@@ -2,6 +2,7 @@
 .env
 .env.local
 docker/.env
+docker/.env.prod
 
 # macOS
 .DS_Store

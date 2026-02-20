@@ -148,6 +148,33 @@ class TestProvisionAgent:
         assert env["OPENAI_API_KEY"] == "sk-user-key"  # User override
         assert env["DEEPGRAM_API_KEY"] == "dg-user-key"
 
+    @pytest.mark.asyncio
+    async def test_provision_sets_llm_defaults_when_missing(self):
+        """Container env inherits orchestrator LLM defaults for spawned agents."""
+        docker_client = self._mock_docker()
+        docker_client.containers.get.side_effect = Exception("Not found")
+        docker_client.volumes.get.side_effect = Exception("Not found")
+
+        mock_container = MagicMock()
+        mock_container.id = "newcontainer12"
+        docker_client.containers.run.return_value = mock_container
+
+        with (
+            patch("src.agent_manager._get_docker", return_value=docker_client),
+            patch("src.agent_manager.DEFAULT_AGENT_LLM_PROVIDER", "openrouter"),
+            patch(
+                "src.agent_manager.DEFAULT_AGENT_OPENAI_BASE_URL",
+                "https://openrouter.ai/api/v1",
+            ),
+        ):
+            from src.agent_manager import provision_agent
+
+            await provision_agent("user-42")
+
+        env = docker_client.containers.run.call_args[1]["environment"]
+        assert env["AETHER_LLM_PROVIDER"] == "openrouter"
+        assert env["OPENAI_BASE_URL"] == "https://openrouter.ai/api/v1"
+
 
 # ── Container stop/destroy ─────────────────────────────────
 

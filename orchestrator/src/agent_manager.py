@@ -19,12 +19,25 @@ from pathlib import Path
 
 log = logging.getLogger("orchestrator.agent_manager")
 
+
+def _strip_wrapping_quotes(value: str) -> str:
+    """Normalize env values that may be wrapped in single/double quotes."""
+    text = (value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1].strip()
+    return text
+
+
 # ── Configuration ──────────────────────────────────────────
 
 AGENT_IMAGE = os.getenv("AGENT_IMAGE", "core-ai-agent:latest")
 AGENT_NETWORK = os.getenv("AGENT_NETWORK", "core-ai_default")
 IDLE_TIMEOUT_MINUTES = int(os.getenv("AGENT_IDLE_TIMEOUT", "30"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+DEFAULT_AGENT_LLM_PROVIDER = _strip_wrapping_quotes(
+    os.getenv("AETHER_LLM_PROVIDER", "")
+)
+DEFAULT_AGENT_OPENAI_BASE_URL = _strip_wrapping_quotes(os.getenv("OPENAI_BASE_URL", ""))
 
 # Dev: host path to app/ directory for hot-reload mounts into agent containers.
 # When set, agent containers get source + plugin mounts with --reload.
@@ -107,11 +120,11 @@ AGENT_SHARED_MODELS_HOST_PATH_ABS = _resolve_models_host_path()
 
 # System-wide fallback API keys (from orchestrator's own env)
 SYSTEM_API_KEYS = {
-    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
-    "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY", ""),
-    "DEEPGRAM_API_KEY": os.getenv("DEEPGRAM_API_KEY", ""),
-    "ELEVENLABS_API_KEY": os.getenv("ELEVENLABS_API_KEY", ""),
-    "SARVAM_API_KEY": os.getenv("SARVAM_API_KEY", ""),
+    "OPENAI_API_KEY": _strip_wrapping_quotes(os.getenv("OPENAI_API_KEY", "")),
+    "OPENROUTER_API_KEY": _strip_wrapping_quotes(os.getenv("OPENROUTER_API_KEY", "")),
+    "DEEPGRAM_API_KEY": _strip_wrapping_quotes(os.getenv("DEEPGRAM_API_KEY", "")),
+    "ELEVENLABS_API_KEY": _strip_wrapping_quotes(os.getenv("ELEVENLABS_API_KEY", "")),
+    "SARVAM_API_KEY": _strip_wrapping_quotes(os.getenv("SARVAM_API_KEY", "")),
 }
 
 # ── Docker client (lazy) ──────────────────────────────────
@@ -338,12 +351,17 @@ async def provision_agent(
     container_name = f"aether-agent-{user_id}"
 
     # Merge API keys: user-specific override system defaults
-    env_keys = {k: v for k, v in SYSTEM_API_KEYS.items() if v}
+    env_keys = {
+        key: cleaned
+        for key, value in SYSTEM_API_KEYS.items()
+        if (cleaned := _strip_wrapping_quotes(value))
+    }
     if user_api_keys:
         for provider, key in user_api_keys.items():
             env_var = _provider_to_env(provider)
-            if env_var and key:
-                env_keys[env_var] = key
+            cleaned = _strip_wrapping_quotes(key)
+            if env_var and cleaned:
+                env_keys[env_var] = cleaned
 
     environment = {
         **env_keys,
@@ -365,6 +383,11 @@ async def provision_agent(
         **({"AETHER_AGENT_HOST": "host.docker.internal"} if AGENT_DEV_ROOT else {}),
         **({"AGENT_SECRET": AGENT_SECRET} if AGENT_SECRET else {}),
     }
+
+    if DEFAULT_AGENT_LLM_PROVIDER and not environment.get("AETHER_LLM_PROVIDER"):
+        environment["AETHER_LLM_PROVIDER"] = DEFAULT_AGENT_LLM_PROVIDER
+    if DEFAULT_AGENT_OPENAI_BASE_URL and not environment.get("OPENAI_BASE_URL"):
+        environment["OPENAI_BASE_URL"] = DEFAULT_AGENT_OPENAI_BASE_URL
 
     # Configure VAD defaults at container level; user prefs can override.
     if "AETHER_VAD_MODE" not in environment:

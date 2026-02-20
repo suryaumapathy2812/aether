@@ -40,10 +40,12 @@ services:
   orchestrator:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether}
+      - DATABASE_URL=${DATABASE_URL}
       - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
+      - AETHER_LLM_PROVIDER=${AETHER_LLM_PROVIDER:-openrouter}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}
       # Agent provisioning (per-user containers via Docker SDK)
       - AGENT_IMAGE=${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest
       - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
@@ -82,8 +84,7 @@ services:
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}:${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
@@ -100,10 +101,11 @@ services:
         order: stop-first
       labels:
         - "traefik.enable=true"
-        - "traefik.docker.network=traefik-public"
+        - "traefik.docker.network=${TRAEFIK_PUBLIC_NETWORK:-web}"
         - "traefik.http.routers.orchestrator.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`) && !PathPrefix(`/api/auth`)"
         - "traefik.http.routers.orchestrator.entrypoints=websecure"
         - "traefik.http.routers.orchestrator.tls=true"
+        - "traefik.http.routers.orchestrator.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-suryaumapathyresolver}"
         - "traefik.http.services.orchestrator.loadbalancer.server.port=9000"
         - "traefik.http.routers.orchestrator.priority=100"
 
@@ -111,17 +113,15 @@ services:
   dashboard:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-dashboard:latest
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether}
+      - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=
     depends_on:
-      postgres:
-        condition: service_healthy
-      orchestrator:
-        condition: service_started
+      - postgres
+      - orchestrator
     networks:
       - aether_network
       - traefik-public
@@ -135,15 +135,17 @@ services:
         order: stop-first
       labels:
         - "traefik.enable=true"
-        - "traefik.docker.network=traefik-public"
+        - "traefik.docker.network=${TRAEFIK_PUBLIC_NETWORK:-web}"
         - "traefik.http.routers.dashboard-auth.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/auth`)"
         - "traefik.http.routers.dashboard-auth.entrypoints=websecure"
         - "traefik.http.routers.dashboard-auth.tls=true"
+        - "traefik.http.routers.dashboard-auth.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-suryaumapathyresolver}"
         - "traefik.http.routers.dashboard-auth.priority=200"
         - "traefik.http.routers.dashboard-auth.service=dashboard"
         - "traefik.http.routers.dashboard.rule=Host(`${DOMAIN}`)"
         - "traefik.http.routers.dashboard.entrypoints=websecure"
         - "traefik.http.routers.dashboard.tls=true"
+        - "traefik.http.routers.dashboard.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-suryaumapathyresolver}"
         - "traefik.http.routers.dashboard.priority=10"
         - "traefik.http.services.dashboard.loadbalancer.server.port=3000"
 
@@ -161,6 +163,7 @@ networks:
     attachable: true
   traefik-public:
     external: true
+    name: ${TRAEFIK_PUBLIC_NETWORK:-web}
 
 volumes:
   postgres_data:
