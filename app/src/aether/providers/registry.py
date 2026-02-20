@@ -20,12 +20,9 @@ def get_stt_provider() -> STTProvider:
 
 
 def get_llm_provider() -> LLMProvider:
-    provider = config_module.config.llm.provider.lower()
-    if provider == "openai":
-        from aether.providers.openai_llm import OpenAILLMProvider
+    from aether.providers.openai_llm import OpenAILLMProvider
 
-        return OpenAILLMProvider()
-    raise ValueError(f"Unknown LLM provider: {provider}")
+    return OpenAILLMProvider()
 
 
 def get_tts_provider() -> TTSProvider:

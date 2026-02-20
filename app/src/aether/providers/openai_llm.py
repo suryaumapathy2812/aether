@@ -21,6 +21,28 @@ from aether.providers.base import LLMProvider, LLMStreamEvent, LLMToolCall
 logger = logging.getLogger(__name__)
 
 
+def _infer_openrouter_provider_prefix(model: str, configured_provider: str) -> str:
+    """Infer OpenRouter provider prefix for unscoped model names."""
+    lowered = model.strip().lower()
+    if lowered.startswith("claude"):
+        return "anthropic"
+    if lowered.startswith("deepseek"):
+        return "deepseek"
+    if lowered.startswith(("gemini", "gemma")):
+        return "google"
+    if lowered.startswith("glm"):
+        return "z-ai"
+    if lowered.startswith("llama"):
+        return "meta"
+    if lowered.startswith(("gpt", "o1", "o3", "o4", "text-embedding")):
+        return "openai"
+
+    provider = configured_provider.strip().lower()
+    if provider and provider != "openrouter":
+        return provider
+    return "openai"
+
+
 def _get_model_name() -> str:
     """Get the model name, prefixing with provider for OpenRouter.
 
@@ -35,8 +57,8 @@ def _get_model_name() -> str:
     if "openrouter" in base_url:
         # Check if model already has provider prefix
         if "/" not in model:
-            # Prefix with provider (e.g., openai/gpt-4o, anthropic/claude-3.5-sonnet)
-            provider = llm_cfg.provider
+            # Prefix with inferred provider for OpenRouter routing.
+            provider = _infer_openrouter_provider_prefix(model, llm_cfg.provider)
             model = f"{provider}/{model}"
             logger.debug(f"OpenRouter model prefixed: {model}")
 

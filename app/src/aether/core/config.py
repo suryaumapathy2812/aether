@@ -65,10 +65,33 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> LLMConfig:
+        provider = os.getenv("AETHER_LLM_PROVIDER", "openai").strip().lower()
+        model = os.getenv("AETHER_LLM_MODEL", "gpt-4o").strip()
         base_url = os.getenv("OPENAI_BASE_URL", "").strip()
         openai_key = os.getenv("OPENAI_API_KEY", "")
         openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         api_key = openai_key
+        openrouter_routed_providers = {
+            "openrouter",
+            "anthropic",
+            "deepseek",
+            "google",
+            "meta",
+            "minimax",
+            "z-ai",
+        }
+
+        # Prefer OpenRouter automatically for non-OpenAI model families.
+        if (
+            not base_url
+            and openrouter_key
+            and (
+                provider in openrouter_routed_providers
+                or "/" in model
+                or model.startswith(("claude", "deepseek", "gemini", "glm"))
+            )
+        ):
+            base_url = "https://openrouter.ai/api/v1"
         if not base_url and openai_key.startswith("sk-or-v1"):
             # Auto-fallback for OpenRouter keys when base URL wasn't set via prefs/env.
             base_url = "https://openrouter.ai/api/v1"
@@ -77,9 +100,9 @@ class LLMConfig:
             # Fallback to OPENAI_API_KEY for backward compatibility.
             api_key = openrouter_key or openai_key
         return cls(
-            provider=os.getenv("AETHER_LLM_PROVIDER", "openai"),
+            provider=provider,
             api_key=api_key,
-            model=os.getenv("AETHER_LLM_MODEL", "gpt-4o"),
+            model=model,
             voice_model=os.getenv("AETHER_LLM_VOICE_MODEL", "gpt-4o-mini"),
             max_tokens=int(os.getenv("AETHER_LLM_MAX_TOKENS", "500")),
             temperature=float(os.getenv("AETHER_LLM_TEMPERATURE", "0.7")),

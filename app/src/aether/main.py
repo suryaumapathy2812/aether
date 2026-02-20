@@ -502,11 +502,19 @@ async def _fetch_user_preferences() -> str:
                 return f"env/defaults:http_{resp.status_code}"
 
             payload = resp.json()
-            if isinstance(payload, dict) and isinstance(payload.get("preferences"), dict):
+            if isinstance(payload, dict) and isinstance(
+                payload.get("preferences"), dict
+            ):
                 prefs = payload["preferences"]
-                meta = payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {}
+                meta = (
+                    payload.get("meta", {})
+                    if isinstance(payload.get("meta"), dict)
+                    else {}
+                )
                 pref_source = str(meta.get("source", "db"))
-                resolved_user = str(meta.get("resolved_user_id", AGENT_USER_ID or "<unset>"))
+                resolved_user = str(
+                    meta.get("resolved_user_id", AGENT_USER_ID or "<unset>")
+                )
             else:
                 prefs = payload if isinstance(payload, dict) else {}
                 pref_source = "db_legacy"
@@ -926,7 +934,22 @@ async def memory_conversations(limit: int = 20) -> JSONResponse:
 def _effective_llm_model(provider: str, model: str, base_url: str) -> str:
     """Return the runtime model id that will be sent to the OpenAI SDK."""
     if "openrouter" in (base_url or "").lower() and "/" not in model:
-        return f"{provider}/{model}"
+        lowered = model.strip().lower()
+        if lowered.startswith("claude"):
+            return f"anthropic/{model}"
+        if lowered.startswith("deepseek"):
+            return f"deepseek/{model}"
+        if lowered.startswith(("gemini", "gemma")):
+            return f"google/{model}"
+        if lowered.startswith("glm"):
+            return f"z-ai/{model}"
+        if lowered.startswith("llama"):
+            return f"meta/{model}"
+        if lowered.startswith(("gpt", "o1", "o3", "o4", "text-embedding")):
+            return f"openai/{model}"
+        if provider and provider != "openrouter":
+            return f"{provider}/{model}"
+        return f"openai/{model}"
     return model
 
 
