@@ -2,7 +2,7 @@
 #
 # Usage:
 #   Deploy as a stack in Portainer with external Traefik
-#   docker stack deploy -c docker-compose.prod.yml aether
+#   docker stack deploy -c docker/docker-compose.prod.yml aether
 #
 # Prerequisites:
 #   1. Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets in GitHub
@@ -70,6 +70,7 @@ services:
       - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}

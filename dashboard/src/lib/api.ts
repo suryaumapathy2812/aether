@@ -148,7 +148,13 @@ export interface PluginInfo {
   auth_type: string;
   auth_provider: string;
   token_source?: string;
-  config_fields: { key: string; label: string; type: string; required: boolean }[];
+  config_fields: {
+    key: string;
+    label: string;
+    type: string;
+    required: boolean;
+    description?: string;
+  }[];
   installed: boolean;
   plugin_id: string | null;
   enabled: boolean;

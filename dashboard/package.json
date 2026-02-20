@@ -11,8 +11,9 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.4.1",
     "@ai-sdk/react": "^3.0.93",
-    "@prisma/client": "^6.4.0",
+    "@prisma/client": "^7.4.1",
     "ai": "^6.0.91",
     "better-auth": "^1.2.0",
     "class-variance-authority": "^0.7.1",
@@ -20,7 +21,8 @@
     "lucide-react": "^0.574.0",
     "next": "^15.2.0",
     "next-themes": "^0.4.6",
-    "prisma": "^6.4.0",
+    "prisma": "^7.4.1",
+    "pg": "^8.16.3",
     "radix-ui": "^1.4.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

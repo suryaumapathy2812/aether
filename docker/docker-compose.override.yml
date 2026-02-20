@@ -1,8 +1,8 @@
-# Dev overrides — auto-loaded by `docker compose up`.
+# Dev overrides for docker/docker-compose.yml.
 #
 # Adds hot-reload volume mounts and dev server commands.
 # To run production without these overrides:
-#   docker compose -f docker-compose.yml up --build
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up --build
 #
 # Agent containers provisioned by the orchestrator also get
 # hot-reload mounts via AGENT_DEV_ROOT (see agent_manager).
@@ -22,7 +22,7 @@ services:
   orchestrator:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./orchestrator/src:/app/src
+      - ../orchestrator/src:/app/src
     environment:
       # Tell agent_manager to mount host source into agent containers
       - AGENT_DEV_ROOT=${AGENT_DEV_ROOT:-${PWD}/app}
@@ -33,8 +33,8 @@ services:
 
   dashboard:
     build:
-      context: ./dashboard
+      context: ../dashboard
       dockerfile: Dockerfile.dev
     volumes:
-      - ./dashboard/src:/app/src
-      - ./dashboard/public:/app/public
+      - ../dashboard/src:/app/src
+      - ../dashboard/public:/app/public

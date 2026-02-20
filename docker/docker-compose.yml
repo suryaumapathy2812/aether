@@ -4,8 +4,8 @@
 # Agent containers are provisioned dynamically per user by the orchestrator.
 #
 # Usage:
-#   docker compose up --build          (auto-loads docker-compose.override.yml for dev)
-#   docker compose up --build -f docker-compose.yml   (production only, no override)
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up --build
+#   docker compose -f docker/docker-compose.yml up --build
 #
 # The agent image must be pre-built:
 #   docker build -t core-ai-agent:latest ./app
@@ -18,8 +18,8 @@ services:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./app/src/aether/static:/srv/agent-static:ro
+      - ../Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../app/src/aether/static:/srv/agent-static:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -47,7 +47,7 @@ services:
 
   # --- Orchestrator (FastAPI / Python) ---
   orchestrator:
-    build: ./orchestrator
+    build: ../orchestrator
     environment:
       - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - CORS_ORIGINS=https://${DOMAIN:-localhost},http://localhost:3000
@@ -59,7 +59,7 @@ services:
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
       # Shared model cache for all per-user agent containers
-      - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}
+      - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-../.cache/models}
       - AGENT_SHARED_MODELS_ORCH_PATH=/shared-models
       - AGENT_SHARED_MODELS_CONTAINER_PATH=${AGENT_SHARED_MODELS_CONTAINER_PATH:-/models}
       # VAD bootstrap defaults (download-if-missing)
@@ -80,6 +80,7 @@ services:
       - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys (used when user hasn't set their own)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
@@ -95,12 +96,12 @@ services:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For container management
-      - ${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}:/shared-models
+      - ${AGENT_SHARED_MODELS_HOST_PATH:-../.cache/models}:/shared-models
     restart: unless-stopped
 
   # --- Dashboard (Next.js) ---
   dashboard:
-    build: ./dashboard
+    build: ../dashboard
     environment:
       - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
