@@ -46,6 +46,12 @@ except ImportError:
     AIORTC_AVAILABLE = False
     np = None  # type: ignore[assignment]
 
+    class MediaStreamTrack:  # type: ignore[no-redef]
+        """Fallback base to allow module import without aiortc."""
+
+    class MediaStreamError(Exception):
+        """Fallback media stream error when aiortc is unavailable."""
+
 
 @dataclass
 class WebRTCConnection:
@@ -288,7 +294,10 @@ class WebRTCVoiceTransport:
 
             if state == "connected":
                 # Cancel any pending grace timer
-                if conn._disconnect_grace_task and not conn._disconnect_grace_task.done():
+                if (
+                    conn._disconnect_grace_task
+                    and not conn._disconnect_grace_task.done()
+                ):
                     conn._disconnect_grace_task.cancel()
                     conn._disconnect_grace_task = None
                 conn.last_activity_at = time.time()
@@ -298,7 +307,8 @@ class WebRTCVoiceTransport:
                 grace_s = config.webrtc.disconnect_grace_seconds
                 logger.info(
                     "WebRTC %s disconnected — starting %ds grace timer",
-                    conn.pc_id, grace_s,
+                    conn.pc_id,
+                    grace_s,
                 )
                 conn._disconnect_grace_task = asyncio.create_task(
                     self._disconnect_grace(conn, grace_s)
@@ -306,18 +316,23 @@ class WebRTCVoiceTransport:
 
             elif state in ("failed", "closed"):
                 # Immediate pause — no grace period
-                if conn._disconnect_grace_task and not conn._disconnect_grace_task.done():
+                if (
+                    conn._disconnect_grace_task
+                    and not conn._disconnect_grace_task.done()
+                ):
                     conn._disconnect_grace_task.cancel()
                 await conn.voice_session.pause()
                 self._connections.pop(conn.pc_id, None)
                 logger.info(
                     "WebRTC %s %s — session paused, ready for reconnect",
-                    conn.pc_id, state,
+                    conn.pc_id,
+                    state,
                 )
 
         @pc.on("track")
         async def on_track(track: Any) -> None:
             if track.kind == "audio":
+
                 @track.on("ended")
                 async def on_track_ended() -> None:
                     logger.info("WebRTC %s inbound audio track ended", conn.pc_id)
@@ -473,11 +488,7 @@ class WebRTCVoiceTransport:
 
     def get_active_sessions(self) -> list[VoiceSession]:
         """Return all active (streaming) voice sessions."""
-        return [
-            session
-            for session in self._sessions.values()
-            if session.is_streaming
-        ]
+        return [session for session in self._sessions.values() if session.is_streaming]
 
     async def _disconnect_grace(self, conn: WebRTCConnection, grace_s: int) -> None:
         """Wait for connection recovery, then pause if still disconnected."""
@@ -488,7 +499,8 @@ class WebRTCVoiceTransport:
             if state in ("disconnected", "failed", "closed"):
                 logger.info(
                     "WebRTC %s grace period expired (state=%s) — pausing session",
-                    conn.pc_id, state,
+                    conn.pc_id,
+                    state,
                 )
                 await conn.voice_session.pause()
                 self._connections.pop(conn.pc_id, None)
@@ -514,8 +526,7 @@ class WebRTCVoiceTransport:
                 for key, session in self._sessions.items():
                     # Check if session has an active connection
                     has_active_conn = any(
-                        c.session_key == key
-                        for c in self._connections.values()
+                        c.session_key == key for c in self._connections.values()
                     )
                     if not has_active_conn and not session.is_streaming:
                         # Check how long since session was paused
@@ -526,9 +537,7 @@ class WebRTCVoiceTransport:
                 for key in expired_keys:
                     session = self._sessions.pop(key, None)
                     if session:
-                        logger.info(
-                            "Session TTL expired for %s — cleaning up", key
-                        )
+                        logger.info("Session TTL expired for %s — cleaning up", key)
                         await session.stop()
 
                 if expired_keys and not self._sessions and self.on_sessions_empty:
