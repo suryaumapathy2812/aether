@@ -1,0 +1,39 @@
+name: vobiz
+display_name: Vobiz Telephony
+description: Make and receive phone calls via Vobiz. Your AI companion can call you or receive calls on your Vobiz number.
+version: 0.1.0
+plugin_type: telephony
+
+auth:
+  type: api_key
+  config_fields:
+    - key: auth_id
+      label: Auth ID
+      type: text
+      required: true
+      description: Your Vobiz Auth ID (from console.vobiz.ai)
+    - key: auth_token
+      label: Auth Token
+      type: password
+      required: true
+      description: Your Vobiz Auth Token
+    - key: from_number
+      label: Vobiz Phone Number
+      type: text
+      required: true
+      description: Your Vobiz phone number (caller ID, e.g., 919876543210)
+    - key: user_phone_number
+      label: Your Phone Number
+      type: text
+      required: false
+      description: Your personal phone number for outbound calls (e.g., +919123456789)
+
+webhook:
+  events:
+    - call.inbound
+    - call.outbound
+    - call.hangup
+
+tools:
+  - class: MakePhoneCallTool
+  - class: GetUserPhoneNumberTool

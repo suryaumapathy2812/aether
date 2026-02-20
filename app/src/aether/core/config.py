@@ -270,10 +270,9 @@ class WebRTCConfig:
 
 @dataclass(frozen=True)
 class TelephonyConfig:
-    """Telephony transport settings."""
+    """Telephony transport settings (base settings, provider-specific config via plugins)."""
 
     enabled: bool = False
-    provider: str = "twilio"  # twilio | telnyx | vobiz
     sample_rate: int = 8000
     encoding: str = "mulaw"
 
@@ -281,7 +280,6 @@ class TelephonyConfig:
     def from_env(cls) -> "TelephonyConfig":
         return cls(
             enabled=os.getenv("AETHER_TELEPHONY_ENABLED", "false").lower() == "true",
-            provider=os.getenv("AETHER_TELEPHONY_PROVIDER", "twilio"),
             sample_rate=int(os.getenv("AETHER_TELEPHONY_SAMPLE_RATE", "8000")),
             encoding=os.getenv("AETHER_TELEPHONY_ENCODING", "mulaw"),
         )

@@ -15,6 +15,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from aether.tools.base import AetherTool
 
@@ -142,7 +143,7 @@ class PluginManifest:
     display_name: str = ""
     description: str = ""
     version: str = "0.1.0"
-    plugin_type: str = "sensor"
+    plugin_type: str = "sensor"  # sensor | telephony | notification
 
     auth: dict = field(default_factory=dict)
     webhook: dict = field(default_factory=dict)
@@ -159,6 +160,8 @@ class LoadedPlugin:
     manifest: PluginManifest
     tools: list[AetherTool] = field(default_factory=list)
     skill_content: str | None = None
+    # For telephony plugins: FastAPI router factory
+    router_factory: Any = None
 
 
 class PluginLoader:
@@ -237,7 +240,17 @@ class PluginLoader:
             skill_path.read_text(encoding="utf-8") if skill_path.exists() else None
         )
 
-        return LoadedPlugin(manifest=manifest, tools=tools, skill_content=skill_content)
+        # Load router factory for telephony plugins
+        router_factory = None
+        if manifest.plugin_type == "telephony":
+            router_factory = self._load_router_factory(plugin_dir, manifest)
+
+        return LoadedPlugin(
+            manifest=manifest,
+            tools=tools,
+            skill_content=skill_content,
+            router_factory=router_factory,
+        )
 
     def _load_tools(
         self, plugin_dir: Path, manifest: PluginManifest
@@ -281,3 +294,37 @@ class PluginLoader:
                 log.warning(f"Tool class not found: {class_name} in {tools_path}")
 
         return tools
+
+    def _load_router_factory(
+        self, plugin_dir: Path, manifest: PluginManifest
+    ) -> Any | None:
+        """Load the router factory from routes.py for telephony plugins."""
+        routes_path = plugin_dir / "routes.py"
+        if not routes_path.exists():
+            log.debug(f"No routes.py for plugin {manifest.name}")
+            return None
+
+        # Import the module dynamically
+        module_name = f"aether_plugin_{manifest.name}_routes"
+        spec = importlib.util.spec_from_file_location(module_name, routes_path)
+        if not spec or not spec.loader:
+            log.warning(f"Cannot create module spec for {routes_path}")
+            return None
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+
+        try:
+            spec.loader.exec_module(module)
+        except Exception as e:
+            log.warning(f"Failed to import {routes_path}: {e}")
+            return None
+
+        # Get the create_router function
+        factory = getattr(module, "create_router", None)
+        if factory and callable(factory):
+            log.info(f"Loaded router factory for plugin {manifest.name}")
+            return factory
+
+        log.warning(f"No create_router function in {routes_path}")
+        return None

@@ -10,6 +10,7 @@ Audio pipeline:
   Send:    TTS 24kHz PCM → resample to 8kHz → mulaw encode → WebSocket → phone
 
 Supports Twilio, Telnyx, and Vobiz via protocol adapters.
+Outbound calls are handled by provider-specific plugins (e.g., Vobiz plugin).
 """
 
 from __future__ import annotations
@@ -98,8 +99,9 @@ class TelephonyTransport:
         """
         await ws.accept()
 
-        provider = config.telephony.provider
-        protocol = get_protocol(provider)
+        # Default to Vobiz protocol (most common for this plugin)
+        # The protocol can be passed in or determined from the first message
+        protocol = get_protocol("vobiz")
         call_id = f"tel-{uuid.uuid4().hex[:12]}"
         session: TelephonySession | None = None
 

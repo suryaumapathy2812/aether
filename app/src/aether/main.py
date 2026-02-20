@@ -151,6 +151,20 @@ for plugin in loaded_plugins:
         )
         skill_loader.register(skill)
 
+# --- Register plugin routes (for telephony plugins) ---
+for plugin in loaded_plugins:
+    if plugin.router_factory and plugin.manifest.plugin_type == "telephony":
+        try:
+            router = plugin.router_factory()
+            app.include_router(router)
+            logger.info(
+                f"Registered routes for telephony plugin: {plugin.manifest.name}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to register routes for plugin {plugin.manifest.name}: {e}"
+            )
+
 # --- Event Processor (decision engine for plugin events) ---
 event_processor = EventProcessor(llm_provider, memory_store)
 
@@ -244,25 +258,10 @@ if AIORTC_AVAILABLE and WebRTCVoiceTransport is not None:
 else:
     logger.info("WebRTC transport not available (aiortc not installed)")
 
-# --- Telephony Transport (optional) ---
+# --- Telephony Transport (plugin-based) ---
 telephony_transport = None
-if config.telephony.enabled and TelephonyTransport is not None:
-    try:
-        telephony_transport = TelephonyTransport(
-            agent=agent_core,
-            tts_provider=tts_provider,
-        )
-        logger.info(
-            "Telephony transport initialized (provider=%s)",
-            config.telephony.provider,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to initialize telephony transport: {e}")
-else:
-    if not config.telephony.enabled:
-        logger.info("Telephony transport disabled (AETHER_TELEPHONY_ENABLED=false)")
-    elif TelephonyTransport is None:
-        logger.info("Telephony transport not available (import failed)")
+# Telephony is now handled by plugins (e.g., Vobiz)
+# The plugin loader will initialize telephony transport when configured
 
 
 # ── Orchestrator helpers ───────────────────────────────────────
@@ -404,13 +403,66 @@ async def _fetch_plugin_configs() -> None:
                     headers=_agent_auth_headers(),
                 )
                 if cfg_resp.status_code == 200:
-                    plugin_context_store.set(plugin_name, cfg_resp.json())
+                    config_data = cfg_resp.json()
+                    plugin_context_store.set(plugin_name, config_data)
+
+                    # Initialize telephony transport for telephony plugins
+                    if plugin_name == "vobiz":
+                        await _init_vobiz_telephony(config_data)
                 else:
                     logger.debug(
                         f"No config for plugin {plugin_name} (status={cfg_resp.status_code})"
                     )
     except Exception as e:
         logger.warning(f"Failed to fetch plugin configs: {e}")
+
+
+async def _init_vobiz_telephony(config_data: dict) -> None:
+    """Initialize telephony transport for Vobiz plugin."""
+    global telephony_transport
+
+    if not config_data.get("auth_id") or not config_data.get("auth_token"):
+        logger.debug("Vobiz plugin not fully configured — skipping telephony init")
+        return
+
+    if TelephonyTransport is None:
+        logger.warning("TelephonyTransport not available — cannot init Vobiz")
+        return
+
+    try:
+        telephony_transport = TelephonyTransport(
+            agent=agent_core,
+            tts_provider=tts_provider,
+        )
+
+        # Set plugin config for routes (dynamic import from plugin directory)
+        import importlib.util
+
+        routes_path = Path(PLUGINS_DIR) / "vobiz" / "routes.py"
+        if routes_path.exists():
+            spec = importlib.util.spec_from_file_location("vobiz_routes", routes_path)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                set_transport = getattr(module, "set_transport", None)
+                set_config = getattr(module, "set_config", None)
+
+                if set_transport and set_config:
+                    # Add base_url to config for outbound calls
+                    base_url = os.getenv(
+                        "AETHER_BASE_URL", f"http://localhost:{config.server.port}"
+                    )
+                    config_with_base = {**config_data, "base_url": base_url}
+
+                    set_transport(telephony_transport)
+                    set_config(config_with_base)
+
+                    # Also update plugin context store with base_url
+                    plugin_context_store.set("vobiz", config_with_base)
+
+        logger.info("Vobiz telephony transport initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Vobiz telephony: {e}")
 
 
 # ── Startup / Shutdown ─────────────────────────────────────────
@@ -540,75 +592,6 @@ async def webrtc_ice(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"WebRTC ICE error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ── Telephony endpoints ───────────────────────────────────────
-
-
-@app.websocket("/telephony/ws")
-async def telephony_ws(ws: WebSocket) -> None:
-    """WebSocket endpoint for telephony media streams (Twilio/Telnyx/Vobiz)."""
-    if not telephony_transport:
-        await ws.close(code=1008, reason="Telephony transport not available")
-        return
-
-    await telephony_transport.handle_call(ws)
-
-
-@app.post("/telephony/webhook")
-async def telephony_webhook(request: Request) -> Response:
-    """Webhook for telephony call lifecycle events (incoming call, etc.).
-
-    Returns TwiML/XML that instructs the provider to connect a media stream
-    to our WebSocket endpoint.
-    """
-    if not telephony_transport:
-        return JSONResponse(
-            {"error": "Telephony transport not available"}, status_code=404
-        )
-
-    _ = (
-        await request.json()
-        if request.headers.get("content-type", "").startswith("application/json")
-        else {}
-    )
-
-    # Determine WebSocket URL for the media stream
-    host = request.headers.get("host", f"localhost:{config.server.port}")
-    scheme = "wss" if request.url.scheme == "https" else "ws"
-    ws_url = f"{scheme}://{host}/telephony/ws"
-
-    provider = config.telephony.provider
-
-    if provider == "twilio":
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect>
-        <Stream url="{ws_url}" />
-    </Connect>
-</Response>"""
-        return Response(content=twiml, media_type="application/xml")
-
-    if provider == "vobiz":
-        # Vobiz XML Stream format (not Twilio wire format)
-        stream_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">{ws_url}</Stream>
-</Response>"""
-        return Response(content=stream_xml, media_type="application/xml")
-
-    elif provider == "telnyx":
-        # TeXML for Telnyx bidirectional RTP stream.
-        texml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="{ws_url}" bidirectionalMode="rtp"></Stream>
-  </Connect>
-  <Pause length="40"/>
-</Response>"""
-        return Response(content=texml, media_type="application/xml")
-
-    return JSONResponse({"ws_url": ws_url})
 
 
 # ── Legacy /chat endpoint (backward compat) ───────────────────
