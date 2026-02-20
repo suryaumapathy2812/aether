@@ -38,6 +38,27 @@ from .crypto import encrypt_value, decrypt_value
 
 # ── Agent registration secret ─────────────────────────────
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+LOCAL_AGENT_URL = os.getenv("AETHER_LOCAL_AGENT_URL", "").strip()
+
+
+def _local_agent_target() -> dict | None:
+    """Return a local agent endpoint override when configured."""
+    if not LOCAL_AGENT_URL:
+        return None
+
+    parsed = urllib.parse.urlparse(LOCAL_AGENT_URL)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        log.warning("Ignoring invalid AETHER_LOCAL_AGENT_URL: %s", LOCAL_AGENT_URL)
+        return None
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    return {
+        "host": parsed.hostname,
+        "port": port,
+    }
 
 
 async def verify_agent_secret(request: Request) -> None:
@@ -96,6 +117,9 @@ async def startup():
         log.warning(
             "⚠ AGENT_SECRET not set — agent registration endpoints are UNPROTECTED"
         )
+
+    if LOCAL_AGENT_URL:
+        log.info("Local agent mode enabled: %s", LOCAL_AGENT_URL)
 
     pool = await get_pool()
     await reconcile_containers(pool)
@@ -249,6 +273,9 @@ async def _ensure_agent(user_id: str) -> None:
     Provisions a dedicated container per user via Docker SDK.
     If the container already exists and is running, this is a no-op.
     """
+    if _local_agent_target():
+        return
+
     pool = await get_pool()
 
     existing = await pool.fetchrow(
@@ -659,6 +686,10 @@ async def _signal_agent_reload(user_id: str, updates: dict) -> None:
 
 async def _get_agent_for_user(user_id: str) -> dict | None:
     """Look up which agent this user is assigned to, provisioning if needed."""
+    local_target = _local_agent_target()
+    if local_target:
+        return local_target
+
     pool = await get_pool()
     agent = await pool.fetchrow(
         "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
@@ -852,20 +883,24 @@ async def ws_proxy(ws: WebSocket):
         await ws.close(code=4001, reason="Invalid or missing session")
         return
 
-    # Ensure agent is provisioned (starts container in multi-user mode)
-    await _ensure_agent(user_id)
+    local_target = _local_agent_target()
+    if local_target:
+        agent = local_target
+    else:
+        # Ensure agent is provisioned (starts container in multi-user mode)
+        await _ensure_agent(user_id)
 
-    # Poll for agent readiness (container may still be starting)
-    pool = await get_pool()
-    agent = None
-    for _ in range(30):  # Up to 15 seconds
-        agent = await pool.fetchrow(
-            "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
-            user_id,
-        )
-        if agent:
-            break
-        await asyncio.sleep(0.5)
+        # Poll for agent readiness (container may still be starting)
+        pool = await get_pool()
+        agent = None
+        for _ in range(30):  # Up to 15 seconds
+            agent = await pool.fetchrow(
+                "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+                user_id,
+            )
+            if agent:
+                break
+            await asyncio.sleep(0.5)
 
     if not agent:
         await ws.accept()
@@ -1221,12 +1256,48 @@ async def install_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
 
 @app.post("/api/plugins/{plugin_name}/enable")
 async def enable_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
+    """Enable a plugin. For api_key type plugins, requires all required config fields."""
+    meta = AVAILABLE_PLUGINS.get(plugin_name)
+    if not meta:
+        raise HTTPException(404, f"Unknown plugin: {plugin_name}")
+
     pool = await get_pool()
+
+    # For api_key type plugins, check that all required config fields are set
+    if meta.get("auth_type") == "api_key":
+        required_fields = [
+            f["key"] for f in meta.get("config_fields", []) if f.get("required")
+        ]
+        if required_fields:
+            row = await pool.fetchrow(
+                "SELECT id FROM plugins WHERE user_id = $1 AND name = $2",
+                user_id,
+                plugin_name,
+            )
+            if not row:
+                raise HTTPException(404, "Plugin not installed")
+
+            config_rows = await pool.fetch(
+                "SELECT key FROM plugin_configs WHERE plugin_id = $1",
+                row["id"],
+            )
+            configured_keys = {r["key"] for r in config_rows}
+            missing = [k for k in required_fields if k not in configured_keys]
+            if missing:
+                raise HTTPException(
+                    400,
+                    f"Missing required configuration: {', '.join(missing)}",
+                )
+
     await pool.execute(
         "UPDATE plugins SET enabled = true WHERE user_id = $1 AND name = $2",
         user_id,
         plugin_name,
     )
+
+    # Signal agent to reload config
+    await _signal_agent_plugin_reload(user_id)
+
     return {"status": "enabled"}
 
 
@@ -1245,14 +1316,21 @@ async def disable_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
 async def save_plugin_config(
     plugin_name: str, body: PluginConfigBody, user_id: str = Depends(get_user_id)
 ):
-    """Save plugin configuration (encrypted at rest)."""
+    """Save plugin configuration (encrypted at rest).
+
+    For api_key type plugins, auto-enables when all required fields are configured.
+    """
+    meta = AVAILABLE_PLUGINS.get(plugin_name)
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id FROM plugins WHERE user_id = $1 AND name = $2", user_id, plugin_name
+        "SELECT id, enabled FROM plugins WHERE user_id = $1 AND name = $2",
+        user_id,
+        plugin_name,
     )
     if not row:
         raise HTTPException(404, "Plugin not installed")
     plugin_id = row["id"]
+    was_enabled = row["enabled"]
 
     for key, value in body.config.items():
         config_id = uuid.uuid4().hex[:12]
@@ -1268,7 +1346,29 @@ async def save_plugin_config(
             key,
             encrypted,
         )
-    return {"status": "saved"}
+
+    # For api_key type plugins, auto-enable when all required fields are configured
+    auto_enabled = False
+    if meta and meta.get("auth_type") == "api_key" and not was_enabled:
+        required_fields = [
+            f["key"] for f in meta.get("config_fields", []) if f.get("required")
+        ]
+        if required_fields:
+            config_rows = await pool.fetch(
+                "SELECT key FROM plugin_configs WHERE plugin_id = $1",
+                plugin_id,
+            )
+            configured_keys = {r["key"] for r in config_rows}
+            if all(k in configured_keys for k in required_fields):
+                await pool.execute(
+                    "UPDATE plugins SET enabled = true WHERE id = $1",
+                    plugin_id,
+                )
+                auto_enabled = True
+                # Signal agent to reload config
+                await _signal_agent_plugin_reload(user_id)
+
+    return {"status": "saved", "auto_enabled": auto_enabled}
 
 
 @app.get("/api/plugins/{plugin_name}/config")
