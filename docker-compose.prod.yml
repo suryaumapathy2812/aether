@@ -40,7 +40,7 @@ services:
   orchestrator:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
     environment:
-      - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
+      - DATABASE_URL=${DATABASE_URL:-postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether}
       - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
@@ -110,7 +110,7 @@ services:
   dashboard:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-dashboard:latest
     environment:
-      - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
+      - DATABASE_URL=${DATABASE_URL:-postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}

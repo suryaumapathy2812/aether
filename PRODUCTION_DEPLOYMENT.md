@@ -53,6 +53,11 @@ Required minimum values:
 - `AGENT_SECRET`
 - `AGENT_NETWORK=aether_network`
 
+Single env model for DB:
+
+- Set `DATABASE_URL` to use one DB URL across dashboard and orchestrator, or
+- leave `DATABASE_URL` empty to use the internal `postgres` service fallback from compose.
+
 Recommended production values:
 
 - `BETTER_AUTH_URL=https://<DOMAIN>`
