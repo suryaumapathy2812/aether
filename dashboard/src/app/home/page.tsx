@@ -28,13 +28,26 @@ export default function HomePage() {
   const name = session.user.name || session.user.email;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6">
+    <div className="h-full relative flex flex-col items-center justify-center px-6 sm:px-8">
+      <div className="absolute top-7 left-6 sm:top-8 sm:left-8">
+        <span className="logo-wordmark text-[10px] text-muted-foreground font-medium">
+          aether
+        </span>
+      </div>
+
+      <div className="absolute top-7 right-6 sm:top-8 sm:right-8">
+        <StatusOrb status={agentStatus} size={7} />
+      </div>
+
       {/* User greeting */}
-      <div className="mb-10 text-center">
-        <p className="text-sm tracking-[0.1em] text-secondary-foreground font-light">
+      <div className="mb-12 text-center">
+        <p className="text-xs tracking-[0.18em] uppercase text-muted-foreground font-medium mb-2">
+          Welcome back
+        </p>
+        <p className="text-lg tracking-[0.02em] text-secondary-foreground font-medium">
           {name}
         </p>
-        <Separator className="w-16 mx-auto mt-3" />
+        <Separator className="w-20 mx-auto mt-3 opacity-80" />
       </div>
 
       {/* Menu */}
@@ -50,13 +63,6 @@ export default function HomePage() {
         ]}
       />
 
-      {/* Brand + status */}
-      <div className="mt-14 flex items-center gap-2">
-        <span className="text-[10px] tracking-[0.3em] text-muted-foreground italic font-light">
-          aether
-        </span>
-        <StatusOrb status={agentStatus} size={6} />
-      </div>
     </div>
   );
 }

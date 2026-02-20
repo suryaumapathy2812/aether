@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import { listApiKeys, saveApiKey, deleteApiKey } from "@/lib/api";
 
@@ -66,10 +65,10 @@ export default function ServicesPage() {
 
   return (
     <PageShell title="Services" back="/home">
-      <div>
-        {PROVIDERS.map((p, index) => (
+      <div className="space-y-1">
+        {PROVIDERS.map((p) => (
           <div key={p.id}>
-            <div className="py-4">
+            <div className="py-5">
               {editing === p.id ? (
                 <div className="animate-[fade-in_0.2s_ease]">
                   <MinimalInput
@@ -119,7 +118,7 @@ export default function ServicesPage() {
                   }}
                   className="w-full flex items-center justify-between group"
                 >
-                  <span className="text-[14px] text-secondary-foreground group-hover:text-foreground transition-colors duration-300 font-light">
+                  <span className="text-[14px] text-secondary-foreground group-hover:text-foreground transition-colors duration-300 font-normal">
                     {p.label}
                   </span>
                   <span className="text-[10px] text-muted-foreground tracking-wider">
@@ -128,7 +127,6 @@ export default function ServicesPage() {
                 </Button>
               )}
             </div>
-            {index < PROVIDERS.length - 1 && <Separator />}
           </div>
         ))}
       </div>

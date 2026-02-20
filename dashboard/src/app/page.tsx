@@ -58,13 +58,16 @@ export default function LoginPage() {
   if (isPending) return null;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6">
+    <div className="h-full flex flex-col items-center justify-center px-6 sm:px-8">
       {/* Brand */}
-      <h1 className="text-xs tracking-[0.35em] text-muted-foreground italic font-light mb-16">
+      <h1 className="logo-wordmark text-xs text-muted-foreground font-medium mb-12">
         aether
       </h1>
 
-      <form onSubmit={handleSubmit} className="w-full max-w-[280px]">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-[340px] px-2 py-2"
+      >
         {mode === "signup" && (
           <MinimalInput label="Name" value={name} onChange={setName} />
         )}

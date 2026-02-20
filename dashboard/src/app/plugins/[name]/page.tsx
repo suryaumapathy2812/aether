@@ -141,7 +141,7 @@ export default function PluginDetailPage() {
         <div className="space-y-6">
           {/* Plugin description */}
           <div>
-            <p className="text-sm text-secondary-foreground leading-relaxed font-light">
+            <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[78ch]">
               {plugin.description}
             </p>
           </div>
@@ -187,13 +187,13 @@ export default function PluginDetailPage() {
 
           {/* Enable/Disable toggle */}
           {plugin.installed && plugin.connected && (
-            <div className="py-4">
-              <div className="flex items-center justify-between">
-                <Label className="text-[14px] text-secondary-foreground font-light">
+            <div className="py-2">
+              <div className="flex items-center justify-between rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
+                <Label className="text-[11px] tracking-[0.12em] uppercase text-muted-foreground font-medium">
                   Status
                 </Label>
                 <div className="flex items-center gap-3">
-                  <span className="text-[12px] text-muted-foreground tracking-wider">
+                  <span className="text-[12px] text-secondary-foreground tracking-wider">
                     {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
                   </span>
                   <Switch
@@ -203,7 +203,6 @@ export default function PluginDetailPage() {
                   />
                 </div>
               </div>
-              <Separator className="mt-4" />
             </div>
           )}
 

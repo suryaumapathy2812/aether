@@ -68,12 +68,12 @@ export default function AccountPage() {
 
   return (
     <PageShell title={name || "Account"} back="/home" centered>
-      <div className="w-full max-w-[300px] mx-auto">
+      <div className="w-full max-w-[300px] mx-auto flex flex-col items-center">
         <Button
           variant="aether-menu"
           size="aether-menu"
           onClick={() => setView("edit")}
-          className="text-[15px] py-4"
+          className="text-[15px] py-4 justify-center text-center"
         >
           Edit Account
         </Button>
@@ -81,7 +81,7 @@ export default function AccountPage() {
           variant="aether-menu"
           size="aether-menu"
           onClick={handleLogout}
-          className="text-[15px] py-4 border-b"
+          className="text-[15px] py-4 border-b justify-center text-center"
         >
           Log Out
         </Button>

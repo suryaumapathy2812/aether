@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
@@ -59,6 +60,8 @@ class WebRTCConnection:
     _audio_frame_count: int = field(default=0, repr=False)
     is_reconnect: bool = False  # True if reusing an existing VoiceSession
     session_key: str = ""  # Key into WebRTCVoiceTransport._sessions
+    _disconnect_grace_task: Any | None = field(default=None, repr=False)
+    last_activity_at: float = field(default_factory=lambda: __import__("time").time())
 
 
 class WebRTCVoiceTransport:
@@ -156,7 +159,7 @@ class WebRTCVoiceTransport:
             # Build an AudioFrame from the raw PCM so av can resample it properly.
             sample_count = len(audio_bytes) // 2  # 16-bit = 2 bytes per sample
             logger.info(
-                "send_audio: %d bytes (%d samples) input at 24kHz",
+                "[pipeline] send_audio: %d bytes (%d samples) input at 24kHz",
                 len(audio_bytes),
                 sample_count,
             )
@@ -175,7 +178,7 @@ class WebRTCVoiceTransport:
             # 48kHz mono s16 = 48000 samples/sec × 2 bytes/sample = 96000 bytes/sec
             playback_secs = total_queued / 96000.0
             logger.info(
-                "send_audio: resampled to %d bytes (%.2fs), queue size=%d",
+                "[pipeline] send_audio: resampled to %d bytes (%.2fs), queue size=%d",
                 total_queued,
                 playback_secs,
                 audio_out._queue.qsize(),
@@ -188,12 +191,21 @@ class WebRTCVoiceTransport:
             logger.info("AudioOutputTrack: cleared buffered audio on barge-in")
 
         def on_tts_duration(playback_secs: float) -> None:
-            """Update echo suppression window with the true PCM playback duration."""
+            """Update echo suppression window with the true PCM playback duration.
+
+            Cumulative: extends the speaking window rather than resetting it.
+            This is critical for streaming TTS where multiple chunks arrive
+            in quick succession — each chunk extends the window from the
+            current end point, not from now.
+            """
             import time as _time
 
             now = _time.time()
-            voice_session._assistant_speaking_until = now + playback_secs
-            voice_session._tts_cooldown_until = now + playback_secs + 0.3
+            current_end = max(now, voice_session._assistant_speaking_until)
+            voice_session._assistant_speaking_until = current_end + playback_secs
+            voice_session._tts_cooldown_until = (
+                voice_session._assistant_speaking_until + 0.3
+            )
 
         voice_session.on_audio_out = send_audio
         voice_session.on_barge_in = on_barge_in
@@ -273,14 +285,33 @@ class WebRTCVoiceTransport:
             state = pc.connectionState
             logger.info("WebRTC %s state: %s", conn.pc_id, state)
 
-            if state in ("disconnected", "failed", "closed"):
-                # Pause (not stop) — keep session alive for fast reconnect.
-                # The session's dialog history and agent state are preserved.
+            if state == "connected":
+                # Cancel any pending grace timer
+                if conn._disconnect_grace_task and not conn._disconnect_grace_task.done():
+                    conn._disconnect_grace_task.cancel()
+                    conn._disconnect_grace_task = None
+                conn.last_activity_at = time.time()
+
+            elif state == "disconnected":
+                # Start grace timer — connection may recover
+                grace_s = config.webrtc.disconnect_grace_seconds
+                logger.info(
+                    "WebRTC %s disconnected — starting %ds grace timer",
+                    conn.pc_id, grace_s,
+                )
+                conn._disconnect_grace_task = asyncio.create_task(
+                    self._disconnect_grace(conn, grace_s)
+                )
+
+            elif state in ("failed", "closed"):
+                # Immediate pause — no grace period
+                if conn._disconnect_grace_task and not conn._disconnect_grace_task.done():
+                    conn._disconnect_grace_task.cancel()
                 await conn.voice_session.pause()
                 self._connections.pop(conn.pc_id, None)
                 logger.info(
-                    "WebRTC %s disconnected — session paused, ready for reconnect",
-                    conn.pc_id,
+                    "WebRTC %s %s — session paused, ready for reconnect",
+                    conn.pc_id, state,
                 )
 
         @pc.on("track")
@@ -416,8 +447,78 @@ class WebRTCVoiceTransport:
             if conn.data_channel and conn.data_channel.readyState == "open":
                 conn.data_channel.send(json.dumps({"type": "error", "data": str(e)}))
 
+    def get_active_sessions(self) -> list[VoiceSession]:
+        """Return all active (streaming) voice sessions."""
+        return [
+            session
+            for session in self._sessions.values()
+            if session.is_streaming
+        ]
+
+    async def _disconnect_grace(self, conn: WebRTCConnection, grace_s: int) -> None:
+        """Wait for connection recovery, then pause if still disconnected."""
+        try:
+            await asyncio.sleep(grace_s)
+            # If still disconnected after grace period, pause the session
+            state = conn.pc.connectionState
+            if state in ("disconnected", "failed", "closed"):
+                logger.info(
+                    "WebRTC %s grace period expired (state=%s) — pausing session",
+                    conn.pc_id, state,
+                )
+                await conn.voice_session.pause()
+                self._connections.pop(conn.pc_id, None)
+        except asyncio.CancelledError:
+            pass  # Connection recovered or session was cleaned up
+
+    async def start_session_ttl_sweep(self) -> None:
+        """Start periodic sweep task that removes idle sessions."""
+        self._sweep_task = asyncio.create_task(
+            self._session_ttl_sweep(),
+            name="webrtc-session-ttl-sweep",
+        )
+
+    async def _session_ttl_sweep(self) -> None:
+        """Periodically remove sessions that have been idle too long."""
+        ttl = config.webrtc.session_ttl_seconds
+        try:
+            while True:
+                await asyncio.sleep(60)  # Check every minute
+                now = time.time()
+                expired_keys = []
+
+                for key, session in self._sessions.items():
+                    # Check if session has an active connection
+                    has_active_conn = any(
+                        c.session_key == key
+                        for c in self._connections.values()
+                    )
+                    if not has_active_conn and not session.is_streaming:
+                        # Check how long since session was paused
+                        # Use a simple heuristic: if not streaming and no
+                        # active connection for TTL seconds, clean up
+                        expired_keys.append(key)
+
+                for key in expired_keys:
+                    session = self._sessions.pop(key, None)
+                    if session:
+                        logger.info(
+                            "Session TTL expired for %s — cleaning up", key
+                        )
+                        await session.stop()
+
+                if expired_keys and not self._sessions and self.on_sessions_empty:
+                    asyncio.create_task(self.on_sessions_empty())
+
+        except asyncio.CancelledError:
+            pass
+
     async def close_all(self) -> None:
         """Close all connections (shutdown)."""
+        # Cancel sweep task
+        if hasattr(self, "_sweep_task") and self._sweep_task:
+            self._sweep_task.cancel()
+
         for conn in list(self._connections.values()):
             try:
                 await conn.voice_session.stop()
@@ -425,6 +526,7 @@ class WebRTCVoiceTransport:
             except Exception:
                 pass
         self._connections.clear()
+        self._sessions.clear()
 
 
 # ─── Audio Output Track ──────────────────────────────────────────

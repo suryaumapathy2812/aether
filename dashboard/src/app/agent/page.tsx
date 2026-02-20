@@ -198,7 +198,7 @@ export default function AgentPage() {
 
   return (
     <PageShell title="Agent" back="/home">
-      <div className="space-y-8">
+      <div className="space-y-10 max-w-[920px] mx-auto">
         {/* Save status */}
         <div className="h-4 flex items-center justify-end">
           {saving && (
@@ -213,8 +213,38 @@ export default function AgentPage() {
           )}
         </div>
 
-        {/* Voice */}
-        <Section title="Voice">
+        <Section title="Personality">
+          <Picker
+            label="Base style and tone"
+            value={prefs.base_style}
+            options={STYLES}
+            onChange={(v) => save({ base_style: v })}
+          />
+          <div className="mt-5">
+            <Label className="block text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-2 font-normal">
+              Custom instructions
+            </Label>
+            <Textarea
+              value={prefs.custom_instructions || ""}
+              onChange={(e) =>
+                setPrefs({ ...prefs, custom_instructions: e.target.value })
+              }
+              onBlur={() => {
+                if (prefs.custom_instructions !== null) {
+                  save({ custom_instructions: prefs.custom_instructions });
+                }
+              }}
+              placeholder="Tell Aether how to behave..."
+              rows={10}
+              className="bg-black/20 border-0 rounded-2xl shadow-none px-3.5 py-3 text-[15px] font-normal leading-relaxed resize-none focus-visible:ring-0 focus-visible:bg-black/25 transition-colors duration-300"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1 font-normal">
+              saves when you tap outside
+            </p>
+          </div>
+        </Section>
+
+        <Section title="STT">
           <Picker
             label="STT Provider"
             value={prefs.stt_provider}
@@ -229,6 +259,9 @@ export default function AgentPage() {
               onChange={(v) => save({ stt_model: v })}
             />
           )}
+        </Section>
+
+        <Section title="TTS">
           <Picker
             label="TTS Provider"
             value={prefs.tts_provider}
@@ -255,8 +288,7 @@ export default function AgentPage() {
           )}
         </Section>
 
-        {/* Model */}
-        <Section title="Model">
+        <Section title="LLM">
           <Picker
             label="LLM Provider"
             value={prefs.llm_provider}
@@ -273,37 +305,6 @@ export default function AgentPage() {
           )}
         </Section>
 
-        {/* Personality */}
-        <Section title="Personality">
-          <Picker
-            label="Base style and tone"
-            value={prefs.base_style}
-            options={STYLES}
-            onChange={(v) => save({ base_style: v })}
-          />
-          <div className="mt-4">
-            <Label className="block text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-2 font-normal">
-              Custom instructions
-            </Label>
-            <Textarea
-              value={prefs.custom_instructions || ""}
-              onChange={(e) =>
-                setPrefs({ ...prefs, custom_instructions: e.target.value })
-              }
-              onBlur={() => {
-                if (prefs.custom_instructions !== null) {
-                  save({ custom_instructions: prefs.custom_instructions });
-                }
-              }}
-              placeholder="Tell Aether how to behave..."
-              rows={4}
-              className="bg-transparent border-0 border-b border-border rounded-none shadow-none px-0 py-2 text-[15px] font-light leading-relaxed resize-none focus-visible:ring-0 focus-visible:border-secondary-foreground transition-colors duration-300"
-            />
-            <p className="text-[10px] text-muted-foreground mt-1 font-light">
-              saves when you tap outside
-            </p>
-          </div>
-        </Section>
       </div>
     </PageShell>
   );
@@ -320,10 +321,10 @@ function Section({
 }) {
   return (
     <div>
-      <h2 className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal mb-4">
-        {title}
-      </h2>
-      <div className="space-y-1">{children}</div>
+       <h2 className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal mb-5">
+         {title}
+       </h2>
+       <div className="space-y-2">{children}</div>
     </div>
   );
 }
@@ -342,12 +343,12 @@ function Picker({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-border">
-      <span className="text-[13px] text-muted-foreground font-light">
+    <div className="flex items-center justify-between py-3.5">
+      <span className="text-[13px] text-muted-foreground font-normal">
         {label}
       </span>
       <Select value={value || undefined} onValueChange={onChange}>
-        <SelectTrigger className="w-auto h-auto gap-1.5 border-0 bg-transparent shadow-none px-0 py-0 text-[13px] text-secondary-foreground font-light hover:text-foreground focus:ring-0 focus-visible:ring-0 transition-colors duration-300">
+        <SelectTrigger className="w-auto h-auto gap-1.5 border-0 bg-transparent shadow-none px-0 py-0 text-[13px] text-secondary-foreground font-normal hover:text-foreground focus:ring-0 focus-visible:ring-0 transition-colors duration-300">
           <SelectValue placeholder="--" />
         </SelectTrigger>
         <SelectContent className="min-w-[220px] max-h-[280px] bg-card border-border">
@@ -355,7 +356,7 @@ function Picker({
             <SelectItem
               key={opt.id}
               value={opt.id}
-              className="text-[13px] font-light"
+              className="text-[13px] font-normal"
             >
               <span>{opt.label}</span>
               {opt.id === value && (

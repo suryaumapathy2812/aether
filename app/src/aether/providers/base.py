@@ -131,8 +131,16 @@ class TTSProvider(ABC):
 
     @abstractmethod
     async def synthesize(self, text: str) -> bytes:
-        """Convert text to audio bytes (MP3)."""
+        """Convert text to audio bytes (PCM/MP3)."""
         ...
+
+    async def synthesize_stream(self, text: str) -> AsyncGenerator[bytes, None]:
+        """Stream audio chunks as they're synthesized.
+
+        Default implementation falls back to batch synthesis.
+        Override in providers that support true streaming (e.g. OpenAI).
+        """
+        yield await self.synthesize(text)
 
     async def health_check(self) -> dict:
         return {"provider": self.__class__.__name__, "status": "unknown"}

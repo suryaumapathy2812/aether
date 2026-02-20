@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import PageShell from "@/components/PageShell";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import {
   listPlugins,
@@ -130,23 +129,23 @@ function PluginsContent() {
           no plugins available
         </p>
       ) : (
-        <div>
-          {plugins.map((plugin, index) => (
+        <div className="space-y-1">
+          {plugins.map((plugin) => (
             <div key={plugin.name}>
-              <div className="py-4">
+              <div className="py-5 flex items-start justify-between gap-5">
                 <Link
                   href={`/plugins/${plugin.name}`}
-                  className="block mb-3 group"
+                  className="block group min-w-0 flex-1"
                 >
-                  <h3 className="text-[14px] text-foreground group-hover:text-secondary-foreground transition-colors duration-300 font-light mb-0.5">
+                  <h3 className="text-[14px] text-foreground group-hover:text-secondary-foreground transition-colors duration-300 font-normal mb-0.5">
                     {plugin.display_name}
                   </h3>
-                  <p className="text-[12px] text-muted-foreground leading-relaxed font-light">
+                  <p className="text-[12px] text-muted-foreground leading-relaxed font-normal">
                     {plugin.description}
                   </p>
                 </Link>
 
-                <div className="flex items-center gap-3 text-xs">
+                <div className="flex items-start justify-end text-xs shrink-0 pt-0.5">
                   {/* Not installed → install */}
                   {!plugin.installed ? (
                     <Button
@@ -170,7 +169,7 @@ function PluginsContent() {
                     </Button>
                   ) : /* Has token_source but source not connected yet */
                   plugin.token_source && !plugin.connected ? (
-                    <span className="text-muted-foreground tracking-wider">
+                    <span className="text-muted-foreground tracking-wider text-right">
                       connect {plugin.token_source} first
                     </span>
                   ) : /* Connected/ready but disabled */
@@ -201,7 +200,6 @@ function PluginsContent() {
                   )}
                 </div>
               </div>
-              {index < plugins.length - 1 && <Separator />}
             </div>
           ))}
         </div>

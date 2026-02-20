@@ -73,9 +73,9 @@ export default function ChatPage() {
   if (isPending) return null;
 
   return (
-    <div className="h-dvh flex flex-col w-full">
+    <div className="h-full flex flex-col w-full px-6 sm:px-8">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 pt-8 pb-3 shrink-0">
+      <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
         <Button
           variant="aether-ghost"
           size="icon"
@@ -89,14 +89,14 @@ export default function ChatPage() {
           Chat
         </span>
         <div className="w-8 flex items-center justify-center">
-          <StatusOrb status={statusFromChat(status, error)} />
+          <StatusOrb status={statusFromChat(status, error)} size={10} />
         </div>
       </header>
 
-      <Separator className="mx-6 shrink-0 w-auto" />
+      <Separator className="shrink-0 w-auto opacity-80" />
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto min-h-0 px-6 pt-5">
+      <div className="flex-1 overflow-y-auto min-h-0 pt-6">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground text-xs">
@@ -104,7 +104,7 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          <div className="space-y-5 pb-2">
+          <div className="space-y-6 pb-3">
             {messages.map((m) => (
               <div
                 key={m.id}
@@ -116,10 +116,10 @@ export default function ChatPage() {
                   {m.role === "user" ? "you" : "aether"}
                 </span>
                 <div
-                  className={`text-[14px] leading-[1.65] font-light max-w-[85%] ${
+                  className={`text-[14px] leading-[1.65] font-normal max-w-[85%] ${
                     m.role === "user"
-                      ? "text-secondary-foreground bg-card border border-border rounded-2xl rounded-tr-sm px-4 py-2.5"
-                      : "text-foreground"
+                      ? "text-foreground bg-white/7 border border-border/70 rounded-2xl rounded-tr-sm px-4 py-2.5"
+                      : "text-secondary-foreground"
                   }`}
                 >
                   {getMessageText(m.parts as Array<{ type: string; text?: string }>)}
@@ -133,7 +133,7 @@ export default function ChatPage() {
 
       {/* Error display */}
       {error && (
-        <div className="px-6 py-2">
+        <div className="py-2">
           <p className="text-[11px] text-red-400">
             Connection error — try again
           </p>
@@ -141,14 +141,17 @@ export default function ChatPage() {
       )}
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="flex border border-border mx-6 mb-6">
+      <form
+        onSubmit={handleSubmit}
+        className="flex border border-border rounded-full bg-white/6 mb-7 mt-4"
+      >
         <Input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={isLoading ? "thinking..." : "type a message..."}
           disabled={isLoading}
-          className="flex-1 bg-transparent border-0 rounded-none shadow-none px-3 py-2 text-[13px] font-light focus-visible:ring-0 disabled:opacity-50 h-auto"
+          className="flex-1 bg-transparent border-0 rounded-none shadow-none px-4 py-2.5 text-[13px] font-medium focus-visible:ring-0 disabled:opacity-50 h-auto"
         />
         <Button
           type="submit"

@@ -50,6 +50,18 @@ Tools:
 - If a tool fails, explain what happened and suggest alternatives.
 """
 
+# Voice-specific system prompt additions — appended when mode == "voice"
+VOICE_PROMPT_ADDON = """
+Voice mode rules (critical):
+- Start EVERY response with a very short acknowledgment (1-5 words): "Sure.", "Got it.", "Okay.", "Yeah,", "Right,", "Of course." — this gets spoken immediately while the rest generates.
+- Never use markdown: no bullet points, no headers, no bold/italic, no code blocks.
+- Never spell out URLs or file paths verbatim — say "the link" or "that file" instead.
+- Spell out numbers naturally: "twenty three" not "23", "half past two" not "2:30".
+- No lists. Convert any list to flowing prose: "You've got three options: first... second... and third..."
+- Keep responses under 3 sentences unless the user explicitly asks for detail.
+- No emoji. No special characters.
+"""
+
 # Style modifiers — appended to system prompt based on user preference
 STYLE_MODIFIERS = {
     "default": "",
@@ -129,6 +141,7 @@ class ContextBuilder:
         system_prompt = self._build_system_prompt(
             user_message=user_message,
             enabled_plugins=enabled_plugins,
+            mode=session.mode,
         )
 
         # 2. Build messages
@@ -147,7 +160,7 @@ class ContextBuilder:
         plugin_context = self._build_plugin_context(enabled_plugins)
 
         # 5. Build policy
-        policy = self._build_policy()
+        policy = self._build_policy(mode=session.mode)
 
         return LLMRequestEnvelope(
             kind="reply_text" if session.mode == "text" else "reply_voice",
@@ -164,9 +177,14 @@ class ContextBuilder:
         self,
         user_message: str,
         enabled_plugins: list[str],
+        mode: str = "text",
     ) -> str:
         """Build the full system prompt with all injections."""
         parts = [SYSTEM_PROMPT_BASE]
+
+        # Voice-specific rules (acknowledgment prefix, no markdown, etc.)
+        if mode == "voice":
+            parts.append(VOICE_PROMPT_ADDON)
 
         # Apply style modifier
         style = config_module.config.personality.base_style.lower()
@@ -314,12 +332,13 @@ class ContextBuilder:
 
         return context
 
-    def _build_policy(self) -> dict[str, Any]:
-        """Build policy from config."""
+    def _build_policy(self, mode: str = "text") -> dict[str, Any]:
+        """Build policy from config. Voice uses a faster model for lower latency."""
         cfg = config_module.config.llm
+        model = cfg.voice_model if mode == "voice" else cfg.model
         return {
             "provider": cfg.provider,
-            "model": cfg.model,
+            "model": model,
             "max_tokens": cfg.max_tokens,
             "temperature": cfg.temperature,
         }

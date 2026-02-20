@@ -29,9 +29,9 @@ export default function PageShell({
   const agentStatus = useAgentStatus();
 
   return (
-    <div className="min-h-screen flex flex-col w-full px-6">
+    <div className="h-full flex flex-col w-full px-6 sm:px-8">
       {/* Header */}
-      <header className="flex items-center justify-between pt-8 pb-3 shrink-0">
+      <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
         {back ? (
           <Button
             variant="aether-ghost"
@@ -62,27 +62,25 @@ export default function PageShell({
           </Button>
         ) : (
           <div className="w-8 flex items-center justify-center">
-            <StatusOrb status={agentStatus} />
+            <StatusOrb status={agentStatus} size={10} />
           </div>
         )}
       </header>
 
-      <Separator className="shrink-0" />
+      <Separator className="shrink-0 opacity-80" />
 
       {/* Content */}
       <div
-        className={`flex-1 flex flex-col pt-6 pb-4 ${
-          centered
-            ? "items-center justify-center"
-            : ""
-        }`}
+        className={`flex-1 min-h-0 pt-8 ${centered ? "flex items-center justify-center pb-6" : "overflow-y-auto"}`}
       >
-        {children}
+        <div className={`w-full ${centered ? "max-w-[560px]" : "pb-6"}`}>
+          {children}
+        </div>
       </div>
 
       {/* Brand */}
-      <div className="text-center py-5 shrink-0">
-        <span className="text-[10px] tracking-[0.3em] text-muted-foreground italic font-light">
+      <div className="text-center py-5 sm:py-6 shrink-0">
+        <span className="logo-wordmark text-[10px] text-muted-foreground font-medium">
           aether
         </span>
       </div>

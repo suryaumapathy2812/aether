@@ -26,6 +26,10 @@ DerivedData/
 *.ipa
 *.dSYM.zip
 *.xcuserstate
+client/ios/Pods/
+
+# Cache files
+.cache/
 
 # TypeScript build cache
 tsconfig.tsbuildinfo

@@ -94,7 +94,7 @@ export default function MemoryPage() {
           no memories yet — start a conversation
         </p>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6 max-w-[900px] mx-auto">
           {/* Tabs */}
           <TabBar tab={tab} onTabChange={setTab} />
 
@@ -126,7 +126,7 @@ function TabBar({
   ];
 
   return (
-    <div className="flex gap-6">
+    <div className="flex gap-8">
       {tabs.map((t) => (
         <Button
           key={t.id}
@@ -164,7 +164,7 @@ function AboutTab({ facts }: { facts: string[] }) {
           key={i}
           className="pl-3 border-l-2 border-border animate-[fade-in_0.2s_ease]"
         >
-          <p className="text-sm text-secondary-foreground leading-relaxed font-light">
+          <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[84ch]">
             {f}
           </p>
         </div>
@@ -216,7 +216,7 @@ function ConversationsTab({
               {/* User message — right-aligned bubble */}
               <div className="flex flex-col items-end">
                 <div className="bg-card border border-border rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[80%]">
-                  <p className="text-[13px] text-secondary-foreground leading-relaxed font-light">
+                  <p className="text-[13px] text-secondary-foreground leading-relaxed font-normal max-w-[76ch]">
                     {c.user_message}
                   </p>
                 </div>
@@ -224,7 +224,7 @@ function ConversationsTab({
 
               {/* Aether response — left-aligned, no bubble */}
               <div className="flex flex-col items-start">
-                <p className="text-[13px] text-foreground leading-relaxed font-light max-w-[85%]">
+                <p className="text-[13px] text-foreground leading-relaxed font-normal max-w-[76ch]">
                   {c.assistant_message}
                 </p>
                 <span className="text-[9px] text-muted-foreground mt-1 tracking-wider">
@@ -252,8 +252,8 @@ function SessionsTab({ sessions }: { sessions: Session[] }) {
     <div className="pt-2">
       {sessions.map((s, i) => (
         <div key={s.session_id} className="animate-[fade-in_0.2s_ease]">
-          <div className="py-4">
-            <p className="text-sm text-secondary-foreground leading-relaxed font-light">
+          <div className="py-5">
+            <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[84ch]">
               {s.summary}
             </p>
 
