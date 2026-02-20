@@ -21,7 +21,7 @@ import aiosqlite
 import numpy as np
 from openai import AsyncOpenAI
 
-from aether.core.config import config
+import aether.core.config as config_module
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,10 @@ Facts (JSON array):"""
 
 class MemoryStore:
     def __init__(self, db_path: Path | None = None):
-        self.db_path = db_path or Path(config.memory.db_path)
-        self.openai = AsyncOpenAI()
+        self.db_path = db_path or Path(config_module.config.memory.db_path)
+        self.openai: AsyncOpenAI | None = None
+        self._openai_base_url: str | None = None
+        self._openai_api_key: str | None = None
         self._db: aiosqlite.Connection | None = None
 
     async def start(self) -> None:
@@ -164,7 +166,7 @@ class MemoryStore:
         )
 
         try:
-            response = await self.openai.chat.completions.create(
+            response = await self._get_openai_client().chat.completions.create(
                 model="gpt-4o-mini",  # Fast and cheap for extraction
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
@@ -234,7 +236,7 @@ class MemoryStore:
                 np.dot(query_vec, stored_vec)
                 / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
             )
-            if similarity > config.memory.similarity_threshold:
+            if similarity > config_module.config.memory.similarity_threshold:
                 results.append(
                     {
                         "type": "conversation",
@@ -258,7 +260,7 @@ class MemoryStore:
                 / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
             )
             # Facts get a 0.1 boost — they're more valuable than raw conversations
-            if similarity > config.memory.similarity_threshold:
+            if similarity > config_module.config.memory.similarity_threshold:
                 results.append(
                     {
                         "type": "fact",
@@ -280,7 +282,7 @@ class MemoryStore:
                 np.dot(query_vec, stored_vec)
                 / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
             )
-            if similarity > config.memory.similarity_threshold:
+            if similarity > config_module.config.memory.similarity_threshold:
                 results.append(
                     {
                         "type": "action",
@@ -306,7 +308,7 @@ class MemoryStore:
                 np.dot(query_vec, stored_vec)
                 / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
             )
-            if similarity > config.memory.similarity_threshold:
+            if similarity > config_module.config.memory.similarity_threshold:
                 results.append(
                     {
                         "type": "session",
@@ -380,7 +382,7 @@ class MemoryStore:
             raise RuntimeError("Memory store not started")
 
         # Truncate output to keep DB manageable
-        max_chars = config.memory.action_output_max_chars
+        max_chars = config_module.config.memory.action_output_max_chars
         truncated_output = output[:max_chars]
 
         # Embed a human-readable summary for search
@@ -444,7 +446,7 @@ class MemoryStore:
         if not self._db:
             return []
 
-        limit = limit or config.memory.session_summary_limit
+        limit = limit or config_module.config.memory.session_summary_limit
         cursor = await self._db.execute(
             "SELECT session_id, summary, started_at, ended_at, turns, tools_used "
             "FROM sessions ORDER BY ended_at DESC LIMIT ?",
@@ -474,7 +476,7 @@ class MemoryStore:
         if not self._db:
             return
 
-        cutoff = time.time() - (config.memory.action_retention_days * 86400)
+        cutoff = time.time() - (config_module.config.memory.action_retention_days * 86400)
 
         cursor = await self._db.execute(
             "SELECT id, tool_name, arguments, output, error, timestamp FROM actions WHERE timestamp < ?",
@@ -503,7 +505,7 @@ class MemoryStore:
         actions_text = "\n".join(action_lines[:50])  # Cap at 50 for prompt size
 
         try:
-            response = await self.openai.chat.completions.create(
+            response = await self._get_openai_client().chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -552,8 +554,35 @@ class MemoryStore:
 
     async def _embed(self, text: str) -> list[float]:
         """Get embedding vector for text."""
-        response = await self.openai.embeddings.create(
-            model=config.memory.embedding_model,
+        client = self._get_openai_client()
+        model = config_module.config.memory.embedding_model
+        llm_cfg = config_module.config.llm
+        if llm_cfg.base_url and "openrouter" in llm_cfg.base_url.lower() and "/" not in model:
+            # Embeddings on OpenRouter should use an embedding-capable provider.
+            # Default to OpenAI embedding models unless caller already provided a scoped model.
+            model = f"openai/{model}"
+
+        response = await client.embeddings.create(
+            model=model,
             input=text,
         )
         return response.data[0].embedding
+
+    def _get_openai_client(self) -> AsyncOpenAI:
+        """Return an OpenAI client configured for the current runtime config."""
+        current_base_url = config_module.config.llm.base_url or ""
+        current_api_key = config_module.config.llm.api_key or ""
+        if (
+            self.openai
+            and self._openai_base_url == current_base_url
+            and self._openai_api_key == current_api_key
+        ):
+            return self.openai
+
+        client_kwargs = {"api_key": current_api_key}
+        if current_base_url:
+            client_kwargs["base_url"] = current_base_url
+        self.openai = AsyncOpenAI(**client_kwargs)
+        self._openai_base_url = current_base_url
+        self._openai_api_key = current_api_key
+        return self.openai

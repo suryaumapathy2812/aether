@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.core.metrics import metrics
 from aether.providers.base import TTSProvider
 
@@ -29,18 +29,20 @@ class ElevenLabsTTSProvider(TTSProvider):
     async def start(self) -> None:
         if self.client:
             return  # Already started
-        if not config.tts.elevenlabs_api_key:
+        if not config_module.config.tts.elevenlabs_api_key:
             raise ValueError("ELEVENLABS_API_KEY not set")
 
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(config.tts.timeout),
+            timeout=httpx.Timeout(config_module.config.tts.timeout),
             headers={
-                "xi-api-key": config.tts.elevenlabs_api_key,
+                "xi-api-key": config_module.config.tts.elevenlabs_api_key,
                 "Content-Type": "application/json",
             },
         )
         logger.info(
-            f"ElevenLabs TTS ready (model={config.tts.elevenlabs_model}, voice={config.tts.elevenlabs_voice_id})"
+            "ElevenLabs TTS ready (model=%s, voice=%s)",
+            config_module.config.tts.elevenlabs_model,
+            config_module.config.tts.elevenlabs_voice_id,
         )
 
     async def stop(self) -> None:
@@ -57,12 +59,12 @@ class ElevenLabsTTSProvider(TTSProvider):
         metrics.inc("provider.tts.requests", labels={"provider": "elevenlabs"})
 
         try:
-            url = f"{ELEVENLABS_TTS_URL}/{config.tts.elevenlabs_voice_id}"
+            url = f"{ELEVENLABS_TTS_URL}/{config_module.config.tts.elevenlabs_voice_id}"
             response = await self.client.post(
                 url,
                 json={
                     "text": text,
-                    "model_id": config.tts.elevenlabs_model,
+                    "model_id": config_module.config.tts.elevenlabs_model,
                 },
             )
             response.raise_for_status()
@@ -83,7 +85,7 @@ class ElevenLabsTTSProvider(TTSProvider):
         status = "ready" if self.client else "not_started"
         return {
             "provider": "elevenlabs",
-            "model": config.tts.elevenlabs_model,
-            "voice_id": config.tts.elevenlabs_voice_id,
+            "model": config_module.config.tts.elevenlabs_model,
+            "voice_id": config_module.config.tts.elevenlabs_voice_id,
             "status": status,
         }

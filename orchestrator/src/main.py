@@ -19,6 +19,8 @@ import logging
 import time
 import urllib.parse
 
+import httpx
+
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -256,6 +258,7 @@ class PreferencesBody(BaseModel):
     stt_language: str | None = None
     llm_provider: str | None = None
     llm_model: str | None = None
+    llm_base_url: str | None = None
     tts_provider: str | None = None
     tts_model: str | None = None
     tts_voice: str | None = None
@@ -584,6 +587,7 @@ PREFERENCE_COLUMNS = [
     "stt_language",
     "llm_provider",
     "llm_model",
+    "llm_base_url",
     "tts_provider",
     "tts_model",
     "tts_voice",
@@ -598,6 +602,7 @@ PREF_TO_ENV = {
     "stt_language": "AETHER_STT_LANGUAGE",
     "llm_provider": "AETHER_LLM_PROVIDER",
     "llm_model": "AETHER_LLM_MODEL",
+    "llm_base_url": "OPENAI_BASE_URL",
     "tts_provider": "AETHER_TTS_PROVIDER",
     "tts_model": "AETHER_TTS_MODEL",
     "tts_voice": "AETHER_TTS_VOICE",
@@ -616,6 +621,67 @@ async def get_preferences(user_id: str = Depends(get_user_id)):
         # Return defaults (no row yet — user hasn't customized anything)
         return {col: None for col in PREFERENCE_COLUMNS}
     return {col: row[col] for col in PREFERENCE_COLUMNS}
+
+
+@app.get(
+    "/api/internal/preferences",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def get_preferences_internal(
+    user_id: str | None = Query(None),
+    agent_id: str | None = Query(None),
+):
+    """Internal endpoint for agents to fetch a user's saved preferences.
+
+    Accepts either:
+    - user_id directly, or
+    - agent_id (resolved to user_id via agents table)
+    """
+    resolved_source = "explicit_user_id"
+    pool = await get_pool()
+    if not user_id:
+        if not agent_id:
+            raise HTTPException(400, {"reason": "missing_user_id_and_agent_id"})
+        agent = await pool.fetchrow(
+            "SELECT user_id FROM agents WHERE id = $1",
+            agent_id,
+        )
+        if agent and agent["user_id"]:
+            user_id = str(agent["user_id"])
+            resolved_source = "agent_mapping"
+        else:
+            # Local single-agent dev fallback: infer the only user preference row.
+            if not LOCAL_AGENT_URL:
+                raise HTTPException(404, {"reason": "no_user_mapping_for_agent"})
+            candidates = await pool.fetch(
+                "SELECT user_id FROM user_preferences ORDER BY updated_at DESC LIMIT 2"
+            )
+            if not candidates:
+                raise HTTPException(404, {"reason": "no_user_preferences_found"})
+            if len(candidates) > 1:
+                raise HTTPException(
+                    409,
+                    {
+                        "reason": "ambiguous_user_mapping",
+                        "candidate_count": len(candidates),
+                    },
+                )
+            user_id = str(candidates[0]["user_id"])
+            resolved_source = "local_single_user_fallback"
+
+    row = await pool.fetchrow(
+        "SELECT * FROM user_preferences WHERE user_id = $1", user_id
+    )
+    if not row:
+        raise HTTPException(404, {"reason": "preferences_not_found_for_user"})
+
+    return {
+        "preferences": {col: row[col] for col in PREFERENCE_COLUMNS},
+        "meta": {
+            "resolved_user_id": user_id,
+            "source": resolved_source,
+        },
+    }
 
 
 @app.put("/api/preferences")
@@ -643,6 +709,7 @@ async def update_preferences(
         """,
         *values,
     )
+    log.info("Updated preferences for user %s: %s", user_id, sorted(updates.keys()))
 
     # Signal the running agent to reload config via HTTP
     # Works in both dev mode (shared agent) and multi-user mode (per-user container)
@@ -669,6 +736,11 @@ async def _signal_agent_reload(user_id: str, updates: dict) -> None:
         env_name = PREF_TO_ENV.get(k)
         if env_name and v:
             env_updates[env_name] = v
+    log.info(
+        "Sending config reload to agent for user %s with env keys: %s",
+        user_id,
+        sorted(env_updates.keys()),
+    )
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -1139,6 +1211,108 @@ class PluginConfigBody(BaseModel):
     config: dict[str, str]
 
 
+def _public_base_url(request: Request) -> str:
+    """Build a public base URL from forwarded headers."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    return f"{scheme}://{host}"
+
+
+def _normalize_e164_like(number: str) -> str:
+    """Normalize number to +{digits} format for Vobiz link API."""
+    raw = (number or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ""
+    return f"+{digits}"
+
+
+async def _ensure_vobiz_application(
+    *,
+    auth_id: str,
+    auth_token: str,
+    from_number: str,
+    answer_url: str,
+    existing_app_id: str | None,
+) -> tuple[str, str]:
+    """Create or update a Vobiz application and return (app_id, action)."""
+    base = "https://api.vobiz.ai"
+    account_path = f"/api/v1/Account/{auth_id}"
+    app_name = "Aether Voice Assistant"
+    headers = {
+        "X-Auth-ID": auth_id,
+        "X-Auth-Token": auth_token,
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "app_name": app_name,
+        "answer_url": answer_url,
+        "answer_method": "POST",
+        "hangup_url": answer_url,
+        "hangup_method": "POST",
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        if existing_app_id:
+            resp = await client.post(
+                f"{base}{account_path}/Application/{existing_app_id}/",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            return existing_app_id, "updated"
+
+        list_resp = await client.get(
+            f"{base}{account_path}/Application/",
+            headers=headers,
+            params={"limit": 100, "offset": 0},
+        )
+        list_resp.raise_for_status()
+        objects = list_resp.json().get("objects", [])
+
+        existing = next(
+            (
+                obj
+                for obj in objects
+                if obj.get("answer_url") == answer_url
+                or obj.get("app_name") == app_name
+            ),
+            None,
+        )
+        if existing and existing.get("app_id"):
+            app_id = str(existing["app_id"])
+            resp = await client.post(
+                f"{base}{account_path}/Application/{app_id}/",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            return app_id, "updated"
+
+        create_resp = await client.post(
+            f"{base}{account_path}/Application/",
+            headers=headers,
+            json=payload,
+        )
+        create_resp.raise_for_status()
+        app_id = str(create_resp.json().get("app_id", "")).strip()
+        if not app_id:
+            raise RuntimeError("Vobiz create application response missing app_id")
+
+        e164_number = _normalize_e164_like(from_number)
+        if e164_number:
+            encoded_number = urllib.parse.quote(e164_number, safe="")
+            link_resp = await client.post(
+                f"{base}/api/v1/account/{auth_id}/numbers/{encoded_number}/application",
+                headers=headers,
+                json={"application_id": app_id},
+            )
+            link_resp.raise_for_status()
+
+        return app_id, "created"
+
+
 @app.get("/api/plugins")
 async def list_plugins(user_id: str = Depends(get_user_id)):
     """List all available plugins with user's install/enable status."""
@@ -1314,7 +1488,10 @@ async def disable_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
 
 @app.post("/api/plugins/{plugin_name}/config")
 async def save_plugin_config(
-    plugin_name: str, body: PluginConfigBody, user_id: str = Depends(get_user_id)
+    plugin_name: str,
+    body: PluginConfigBody,
+    request: Request,
+    user_id: str = Depends(get_user_id),
 ):
     """Save plugin configuration (encrypted at rest).
 
@@ -1331,6 +1508,16 @@ async def save_plugin_config(
         raise HTTPException(404, "Plugin not installed")
     plugin_id = row["id"]
     was_enabled = row["enabled"]
+
+    existing_rows = await pool.fetch(
+        "SELECT key, value FROM plugin_configs WHERE plugin_id = $1",
+        plugin_id,
+    )
+    existing_config = {
+        c["key"]: decrypt_value(c["value"])
+        for c in existing_rows
+        if c.get("value") is not None
+    }
 
     for key, value in body.config.items():
         config_id = uuid.uuid4().hex[:12]
@@ -1368,7 +1555,57 @@ async def save_plugin_config(
                 # Signal agent to reload config
                 await _signal_agent_plugin_reload(user_id)
 
-    return {"status": "saved", "auto_enabled": auto_enabled}
+    vobiz_provision: dict[str, str] | None = None
+    if plugin_name == "vobiz":
+        merged = {**existing_config, **body.config}
+        auth_id = merged.get("auth_id", "").strip()
+        auth_token = merged.get("auth_token", "").strip()
+        from_number = merged.get("from_number", "").strip()
+        existing_app_id = merged.get("application_id", "").strip() or None
+
+        if auth_id and auth_token and from_number:
+            answer_url = f"{_public_base_url(request)}/plugins/vobiz/webhook"
+            try:
+                app_id, action = await _ensure_vobiz_application(
+                    auth_id=auth_id,
+                    auth_token=auth_token,
+                    from_number=from_number,
+                    answer_url=answer_url,
+                    existing_app_id=existing_app_id,
+                )
+                encrypted_app_id = encrypt_value(app_id)
+                await pool.execute(
+                    """
+                    INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
+                    VALUES ($1, $2, $3, $4, now())
+                    ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
+                    """,
+                    uuid.uuid4().hex[:12],
+                    plugin_id,
+                    "application_id",
+                    encrypted_app_id,
+                )
+                vobiz_provision = {
+                    "status": "ok",
+                    "action": action,
+                    "application_id": app_id,
+                }
+                if not auto_enabled:
+                    await _signal_agent_plugin_reload(user_id)
+            except Exception as e:
+                log.warning("Vobiz auto-provision failed: %s", e)
+                vobiz_provision = {"status": "error", "message": str(e)}
+        else:
+            vobiz_provision = {
+                "status": "skipped",
+                "message": "auth_id, auth_token, and from_number are required",
+            }
+
+    return {
+        "status": "saved",
+        "auto_enabled": auto_enabled,
+        **({"vobiz_provision": vobiz_provision} if vobiz_provision else {}),
+    }
 
 
 @app.get("/api/plugins/{plugin_name}/config")

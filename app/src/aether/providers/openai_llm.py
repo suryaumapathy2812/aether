@@ -15,7 +15,7 @@ from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.providers.base import LLMProvider, LLMStreamEvent, LLMToolCall
 
 logger = logging.getLogger(__name__)
@@ -27,15 +27,16 @@ def _get_model_name() -> str:
     When using OpenRouter, models need provider prefix (e.g., openai/gpt-4o).
     When using direct OpenAI, use the model name as-is.
     """
-    model = config.llm.model
-    base_url = config.llm.base_url.lower() if config.llm.base_url else ""
+    llm_cfg = config_module.config.llm
+    model = llm_cfg.model
+    base_url = llm_cfg.base_url.lower() if llm_cfg.base_url else ""
 
     # Check if using OpenRouter
     if "openrouter" in base_url:
         # Check if model already has provider prefix
         if "/" not in model:
             # Prefix with provider (e.g., openai/gpt-4o, anthropic/claude-3.5-sonnet)
-            provider = config.llm.provider
+            provider = llm_cfg.provider
             model = f"{provider}/{model}"
             logger.debug(f"OpenRouter model prefixed: {model}")
 
@@ -51,17 +52,17 @@ class OpenAILLMProvider(LLMProvider):
             return  # Already started
 
         # Support OpenAI-compatible APIs (e.g., OpenRouter) via base_url
-        client_kwargs = {}
-        if config.llm.base_url:
-            client_kwargs["base_url"] = config.llm.base_url
-            logger.info(f"Using custom base_url: {config.llm.base_url}")
+        client_kwargs = {"api_key": config_module.config.llm.api_key}
+        if config_module.config.llm.base_url:
+            client_kwargs["base_url"] = config_module.config.llm.base_url
+            logger.info(f"Using custom base_url: {config_module.config.llm.base_url}")
 
         self.client = AsyncOpenAI(**client_kwargs)
 
         model = _get_model_name()
         provider_name = (
             "OpenRouter"
-            if "openrouter" in (config.llm.base_url or "").lower()
+            if "openrouter" in (config_module.config.llm.base_url or "").lower()
             else "OpenAI"
         )
         logger.info(f"{provider_name} LLM ready (model={model})")

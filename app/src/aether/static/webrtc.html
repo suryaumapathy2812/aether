@@ -352,6 +352,7 @@
                     reconnectAttempts = 0; // Reset on successful connection
                     setStatus('connected — tap orb to start voice');
                     setOrbState('idle');
+                    reconcileDataChannelReady();
                 } else if (pc.connectionState === 'disconnected') {
                     setStatus('connection unstable — waiting...', false, true);
                     setOrbState('connecting');
@@ -422,6 +423,11 @@
             }
 
             setStatus('waiting for connection...');
+            setTimeout(() => {
+                if (pc && pc.connectionState === 'connected') {
+                    reconcileDataChannelReady();
+                }
+            }, 1200);
 
         } catch (err) {
             console.error('Connection error:', err);
@@ -437,6 +443,18 @@
         if (!isVoiceActive && dc && dc.readyState === 'open') {
             startVoice();
         }
+    }
+
+    function reconcileDataChannelReady() {
+        if (!dc || dc.readyState !== 'open') return false;
+        reconnectAttempts = 0;
+        if (!isVoiceActive) {
+            startVoice();
+        } else {
+            setStatus('listening...', true);
+            setOrbState('listening');
+        }
+        return true;
     }
 
     function onDataChannelMessage(event) {

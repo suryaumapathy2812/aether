@@ -36,6 +36,22 @@ def test_config_from_env(monkeypatch):
     assert cfg.max_tokens == 200
 
 
+def test_llm_openrouter_prefers_openrouter_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-legacy")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-router-key")
+    cfg = LLMConfig.from_env()
+    assert cfg.api_key == "sk-or-v1-router-key"
+
+
+def test_llm_openrouter_falls_back_to_openai_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-or-v1-fallback")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    cfg = LLMConfig.from_env()
+    assert cfg.api_key == "sk-or-v1-fallback"
+
+
 def test_config_frozen():
     cfg = STTConfig()
     with pytest.raises(Exception):

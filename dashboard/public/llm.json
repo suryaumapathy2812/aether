@@ -3,9 +3,33 @@
     "openai": {
       "display_name": "OpenAI",
       "models": {
+        "gpt-5.2": {
+          "description": "Latest flagship — strongest general model",
+          "recommended": true
+        },
+        "gpt-5.2-chat": {
+          "description": "Latest chat-optimized GPT-5.2",
+          "recommended": false
+        },
+        "gpt-5.2-pro": {
+          "description": "GPT-5.2 Pro — higher quality reasoning",
+          "recommended": false
+        },
+        "gpt-5.2-codex": {
+          "description": "GPT-5.2 Codex — coding-focused variant",
+          "recommended": false
+        },
+        "gpt-5": {
+          "description": "GPT-5 baseline — capable general model",
+          "recommended": false
+        },
+        "gpt-5-mini": {
+          "description": "GPT-5 Mini — faster and lower cost",
+          "recommended": false
+        },
         "gpt-4o": {
           "description": "Flagship — fast, smart, multimodal",
-          "recommended": true
+          "recommended": false
         },
         "gpt-4o-mini": {
           "description": "Lightweight — faster and cheaper",
@@ -24,9 +48,21 @@
     "anthropic": {
       "display_name": "Anthropic",
       "models": {
+        "claude-opus-4.6": {
+          "description": "Newest Opus 4.6 — top-tier capability",
+          "recommended": false
+        },
+        "claude-opus-4.5": {
+          "description": "Opus 4.5 — highly capable reasoning",
+          "recommended": false
+        },
+        "claude-sonnet-4.6": {
+          "description": "Newest Sonnet 4.6 — strong coding and speed",
+          "recommended": true
+        },
         "claude-3.5-sonnet": {
           "description": "Sonnet 3.5 — excellent for coding",
-          "recommended": true
+          "recommended": false
         },
         "claude-3.5-haiku": {
           "description": "Haiku 3.5 — fast and efficient",
@@ -41,9 +77,21 @@
     "google": {
       "display_name": "Google",
       "models": {
+        "gemini-3.1-pro-preview": {
+          "description": "Gemini 3.1 Pro Preview — latest top-tier",
+          "recommended": true
+        },
+        "gemini-3-pro-preview": {
+          "description": "Gemini 3 Pro Preview — advanced capability",
+          "recommended": false
+        },
+        "gemini-3-flash-preview": {
+          "description": "Gemini 3 Flash Preview — faster responses",
+          "recommended": false
+        },
         "gemini-2.0-flash": {
           "description": "Gemini 2.0 Flash — fast multimodal",
-          "recommended": true
+          "recommended": false
         },
         "gemini-1.5-pro": {
           "description": "Gemini 1.5 Pro — long context",
@@ -67,13 +115,26 @@
     "deepseek": {
       "display_name": "DeepSeek",
       "models": {
+        "deepseek-v3.2": {
+          "description": "DeepSeek V3.2 — latest flagship chat model",
+          "recommended": true
+        },
         "deepseek-chat": {
           "description": "Chat — great value",
-          "recommended": true
+          "recommended": false
         },
         "deepseek-r1": {
           "description": "R1 — reasoning model",
           "recommended": false
+        }
+      }
+    },
+    "z-ai": {
+      "display_name": "Z.ai",
+      "models": {
+        "glm-5": {
+          "description": "GLM-5 — latest Z.ai flagship",
+          "recommended": true
         }
       }
     },

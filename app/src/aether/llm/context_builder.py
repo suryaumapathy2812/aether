@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import aether.core.config as config_module
-from aether.core.config import config
 from aether.llm.contracts import LLMRequestEnvelope
 
 if TYPE_CHECKING:
@@ -352,7 +351,7 @@ class ContextBuilder:
         assert self.memory_store is not None
         try:
             results = await self.memory_store.search(
-                user_message, limit=config.memory.search_limit
+                user_message, limit=config_module.config.memory.search_limit
             )
             if not results:
                 return None

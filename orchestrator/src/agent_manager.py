@@ -108,6 +108,7 @@ AGENT_SHARED_MODELS_HOST_PATH_ABS = _resolve_models_host_path()
 # System-wide fallback API keys (from orchestrator's own env)
 SYSTEM_API_KEYS = {
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
+    "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY", ""),
     "DEEPGRAM_API_KEY": os.getenv("DEEPGRAM_API_KEY", ""),
     "ELEVENLABS_API_KEY": os.getenv("ELEVENLABS_API_KEY", ""),
     "SARVAM_API_KEY": os.getenv("SARVAM_API_KEY", ""),
@@ -158,6 +159,7 @@ def _provider_to_env(provider: str) -> str | None:
     """Map provider name (from api_keys table) to env var name."""
     mapping = {
         "openai": "OPENAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
         "deepgram": "DEEPGRAM_API_KEY",
         "elevenlabs": "ELEVENLABS_API_KEY",
         "sarvam": "SARVAM_API_KEY",

@@ -86,6 +86,7 @@ class VoiceSession:
         self.is_streaming = False
         self.is_responding = False
         self.is_muted = False
+        self._stopped = False
         self._state = _STATE_IDLE_VAD_ONLY
 
         # ── Echo suppression ──────────────────────────────────────
@@ -145,16 +146,26 @@ class VoiceSession:
     # ─── Lifecycle ───────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Initialize STT (but don't connect — VAD will trigger that), start event loop, play greeting."""
+        """Initialize STT and begin streaming according to VAD mode."""
+        self._stopped = False
         logger.info(
             "[pipeline] %s start() — initializing STT (VAD-gated)", self.session_id
         )
         await self.stt.start()
-        # STT stream is NOT connected here — VAD speech_started will connect it.
-        # This saves Deepgram costs during silence periods.
-        self._stt_connected = False
+        if config.vad.mode == "off":
+            # No VAD events will arrive in this mode, so keep STT connected.
+            logger.info("[pipeline] VAD off — connecting STT immediately")
+            await self.stt.connect_stream()
+            self._stt_connected = True
+        else:
+            # STT stream is NOT connected here — VAD speech_started will connect it.
+            # This saves Deepgram costs during silence periods.
+            self._stt_connected = False
         self.is_streaming = True
-        self._set_state(_STATE_IDLE_VAD_ONLY, "session_start")
+        if self._stt_connected:
+            self._set_state(_STATE_STT_STREAMING, "session_start_vad_off")
+        else:
+            self._set_state(_STATE_IDLE_VAD_ONLY, "session_start")
         logger.info(
             "[pipeline] %s STT initialized, starting event loop", self.session_id
         )
@@ -179,6 +190,7 @@ class VoiceSession:
 
     async def stop(self) -> None:
         """Fully stop and clean up. Called on permanent session end."""
+        self._stopped = True
         self.is_streaming = False
         self._set_state(_STATE_IDLE_VAD_ONLY, "session_stop")
 
@@ -250,13 +262,43 @@ class VoiceSession:
     async def resume(self) -> None:
         """Resume after WebRTC reconnect — reuse existing session state.
 
-        Does NOT reconnect STT immediately — waits for VAD speech_started.
+        In VAD off mode, reconnect STT immediately.
+        In VAD-gated modes, STT reconnect waits for speech_started.
         Callbacks must be re-wired by the transport before calling resume().
         """
-        # STT stays disconnected until VAD detects speech (VAD-gated)
-        self._stt_connected = False
+        await self.stt.start()
+        self._stopped = False
+        logger.info("[pipeline] %s resume() — STT initialized", self.session_id)
+        if self._stt_event_task is None or self._stt_event_task.done():
+            logger.info(
+                "[pipeline] %s resume() — restarting STT event loop", self.session_id
+            )
+            self._stt_event_task = asyncio.create_task(
+                self._stt_event_loop(), name=f"stt-events-{self.session_id}"
+            )
+
+        if config.vad.mode == "off":
+            logger.info("[pipeline] VAD off — reconnecting STT on resume")
+            await self.stt.connect_stream()
+            self._stt_connected = True
+        else:
+            # STT stays disconnected until VAD detects speech (VAD-gated)
+            self._stt_connected = False
         self.is_streaming = True
-        self._set_state(_STATE_IDLE_VAD_ONLY, "session_resume")
+        if self._stt_connected:
+            self._set_state(_STATE_STT_STREAMING, "session_resume_vad_off")
+        else:
+            self._set_state(_STATE_IDLE_VAD_ONLY, "session_resume")
+        if self._stt_connected and (
+            self._stt_event_task is None or self._stt_event_task.done()
+        ):
+            # Defensive recovery: streaming STT must have a consumer loop.
+            logger.info(
+                "[pipeline] %s resume() — recovering STT event loop", self.session_id
+            )
+            self._stt_event_task = asyncio.create_task(
+                self._stt_event_loop(), name=f"stt-events-{self.session_id}"
+            )
         self._ensure_watchdog_running()
 
         # Generate greeting if appropriate (time-aware)
@@ -274,7 +316,9 @@ class VoiceSession:
 
         await self._send_text_event("status", "listening...")
         logger.info(
-            "VoiceSession %s resumed (STT will connect on speech)", self.session_id
+            "VoiceSession %s resumed (%s)",
+            self.session_id,
+            "STT connected" if self._stt_connected else "STT will connect on speech",
         )
 
     # ─── Audio Input ─────────────────────────────────────────────
@@ -672,7 +716,10 @@ class VoiceSession:
             await self._send_text_event("error", str(e))
         finally:
             self.is_responding = False
-            self._set_state(_STATE_IDLE_VAD_ONLY, "response_complete")
+            if self._stt_connected and self.stt.is_open:
+                self._set_state(_STATE_STT_STREAMING, "response_complete")
+            else:
+                self._set_state(_STATE_IDLE_VAD_ONLY, "response_complete")
             if self.is_streaming:
                 await self._send_text_event("status", "listening...")
 
@@ -690,7 +737,7 @@ class VoiceSession:
                 self._pending_notifications.clear()
 
             # Schedule STT disconnect after idle timeout
-            if self._stt_connected:
+            if self._stt_connected and config.vad.mode in ("shadow", "active"):
                 self._schedule_stt_disconnect()
 
             # If user spoke while we were responding, process it now

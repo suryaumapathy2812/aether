@@ -6,12 +6,12 @@ Add a new provider? Just add an elif. No plugin systems, no metaclasses.
 
 from __future__ import annotations
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.providers.base import STTProvider, LLMProvider, TTSProvider
 
 
 def get_stt_provider() -> STTProvider:
-    provider = config.stt.provider.lower()
+    provider = config_module.config.stt.provider.lower()
     if provider == "deepgram":
         from aether.providers.deepgram_stt import DeepgramSTTProvider
 
@@ -20,7 +20,7 @@ def get_stt_provider() -> STTProvider:
 
 
 def get_llm_provider() -> LLMProvider:
-    provider = config.llm.provider.lower()
+    provider = config_module.config.llm.provider.lower()
     if provider == "openai":
         from aether.providers.openai_llm import OpenAILLMProvider
 
@@ -29,7 +29,7 @@ def get_llm_provider() -> LLMProvider:
 
 
 def get_tts_provider() -> TTSProvider:
-    provider = config.tts.provider.lower()
+    provider = config_module.config.tts.provider.lower()
     if provider == "openai":
         from aether.providers.openai_tts import OpenAITTSProvider
 

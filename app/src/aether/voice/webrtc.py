@@ -38,6 +38,7 @@ try:
         RTCSessionDescription,
     )
     from aiortc.contrib.media import MediaStreamTrack
+    from aiortc.mediastreams import MediaStreamError
     from av import AudioFrame
 
     AIORTC_AVAILABLE = True
@@ -317,6 +318,10 @@ class WebRTCVoiceTransport:
         @pc.on("track")
         async def on_track(track: Any) -> None:
             if track.kind == "audio":
+                @track.on("ended")
+                async def on_track_ended() -> None:
+                    logger.info("WebRTC %s inbound audio track ended", conn.pc_id)
+
                 asyncio.create_task(
                     self._read_audio_loop(conn, track),
                     name=f"audio-in-{conn.pc_id}",
@@ -389,6 +394,13 @@ class WebRTCVoiceTransport:
 
         except asyncio.CancelledError:
             pass  # Expected on connection close
+        except MediaStreamError:
+            # Expected when the remote peer closes/stops the inbound audio track.
+            logger.info(
+                "Audio read loop closed for %s (MediaStreamError, pc_state=%s)",
+                conn.pc_id,
+                conn.pc.connectionState,
+            )
         except Exception as e:
             logger.error(
                 "Audio read loop error for %s: %s", conn.pc_id, e, exc_info=True
@@ -413,7 +425,19 @@ class WebRTCVoiceTransport:
                     pass
                 elif conn.is_reconnect:
                     # Reconnect: resume existing session (no greeting, keep history)
-                    await conn.voice_session.resume()
+                    # only when it wasn't fully stopped before.
+                    if getattr(conn.voice_session, "_stopped", False):
+                        logger.info(
+                            "stream_start on reconnect (%s): session marked stopped, starting fresh",
+                            conn.pc_id,
+                        )
+                        await conn.voice_session.start()
+                    else:
+                        logger.info(
+                            "stream_start on reconnect (%s): resuming session",
+                            conn.pc_id,
+                        )
+                        await conn.voice_session.resume()
                 else:
                     # First connect: full start with greeting
                     await conn.voice_session.start()

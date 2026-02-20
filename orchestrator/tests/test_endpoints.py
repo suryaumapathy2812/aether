@@ -450,6 +450,83 @@ class TestApiKeys:
         assert resp.status_code == 401
 
 
+# ── Plugin Config Provisioning ─────────────────────────────
+
+
+class TestPluginConfigProvisioning:
+    def test_vobiz_save_config_auto_provisions_application(self, app_client):
+        client, pool = app_client
+        pool.fetchrow = AsyncMock(return_value=make_record(id="plug-1", enabled=True))
+        pool.fetch = AsyncMock(return_value=[])
+
+        list_resp = MagicMock()
+        list_resp.raise_for_status = MagicMock()
+        list_resp.json.return_value = {"objects": []}
+
+        create_resp = MagicMock()
+        create_resp.raise_for_status = MagicMock()
+        create_resp.json.return_value = {"app_id": "app_12345"}
+
+        link_resp = MagicMock()
+        link_resp.raise_for_status = MagicMock()
+
+        with (
+            patch("src.main.decrypt_value", side_effect=lambda v: v),
+            patch("src.main.encrypt_value", side_effect=lambda v: f"enc:{v}"),
+            patch("src.main._signal_agent_plugin_reload", new_callable=AsyncMock),
+            patch("src.main.httpx.AsyncClient") as MockClient,
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=list_resp)
+            mock_client.post = AsyncMock(side_effect=[create_resp, link_resp])
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            MockClient.return_value = mock_client
+
+            resp = client.post(
+                "/api/plugins/vobiz/config",
+                json={
+                    "config": {
+                        "auth_id": "MA_TEST",
+                        "auth_token": "secret",
+                        "from_number": "+919999000000",
+                    }
+                },
+                headers=_auth_header(),
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "saved"
+        assert data["vobiz_provision"]["status"] == "ok"
+        assert data["vobiz_provision"]["action"] == "created"
+        assert data["vobiz_provision"]["application_id"] == "app_12345"
+        assert any(
+            len(call.args) > 3 and call.args[3] == "application_id"
+            for call in pool.execute.call_args_list
+        )
+
+    def test_vobiz_save_config_skips_provision_when_required_fields_missing(
+        self, app_client
+    ):
+        client, pool = app_client
+        pool.fetchrow = AsyncMock(return_value=make_record(id="plug-1", enabled=True))
+        pool.fetch = AsyncMock(return_value=[])
+
+        with patch("src.main.httpx.AsyncClient") as MockClient:
+            resp = client.post(
+                "/api/plugins/vobiz/config",
+                json={"config": {"auth_id": "MA_TEST"}},
+                headers=_auth_header(),
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "saved"
+        assert data["vobiz_provision"]["status"] == "skipped"
+        MockClient.assert_not_called()
+
+
 # ── Memory Proxy ───────────────────────────────────────────
 
 

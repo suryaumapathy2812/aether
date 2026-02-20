@@ -22,7 +22,7 @@ from deepgram.extensions.types.sockets import (
     ListenV1UtteranceEndEvent,
 )
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.core.frames import Frame, text_frame, control_frame
 from aether.core.metrics import metrics
 from aether.providers.base import STTProvider
@@ -55,7 +55,7 @@ class DeepgramSTTProvider(STTProvider):
     async def start(self) -> None:
         if self.client:
             return
-        cfg = config.stt
+        cfg = config_module.config.stt
         if not cfg.api_key:
             raise ValueError("DEEPGRAM_API_KEY not set")
         self.client = AsyncDeepgramClient(api_key=cfg.api_key)
@@ -73,9 +73,9 @@ class DeepgramSTTProvider(STTProvider):
         try:
             response = await self.client.listen.v1.media.transcribe_file(
                 request=audio_data,
-                model=config.stt.model,
+                model=config_module.config.stt.model,
                 smart_format=True,
-                language=config.stt.language,
+                language=config_module.config.stt.language,
             )
             transcript = response.results.channels[0].alternatives[0].transcript
             if transcript and transcript.strip():
@@ -98,7 +98,7 @@ class DeepgramSTTProvider(STTProvider):
 
     async def _do_connect(self) -> None:
         """Internal connect — used by both initial connect and reconnect."""
-        cfg = config.stt
+        cfg = config_module.config.stt
         try:
             self._socket_ctx = self.client.listen.v1.connect(
                 model=cfg.model,
@@ -447,7 +447,7 @@ class DeepgramSTTProvider(STTProvider):
         self._reconnecting = True
         self._connected = False
 
-        cfg = config.stt
+        cfg = config_module.config.stt
         delay = cfg.reconnect_delay
 
         # Clean up old connection

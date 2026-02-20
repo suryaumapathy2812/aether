@@ -27,7 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 import aether.core.config as _config_mod
-from aether.core.config import config, reload_config
+from aether.core.config import reload_config
 from aether.core.logging import setup_logging
 from aether.core.metrics import metrics
 from aether.memory.store import MemoryStore
@@ -107,7 +107,7 @@ llm_provider = get_llm_provider()
 tts_provider = get_tts_provider()
 
 # --- Tool Registry ---
-WORKING_DIR = config.server.working_dir
+WORKING_DIR = _config_mod.config.server.working_dir
 
 tool_registry = ToolRegistry()
 tool_registry.register(ReadFileTool(working_dir=WORKING_DIR))
@@ -193,7 +193,7 @@ service_router = ServiceRouter(
     tool_service=tool_service,
 )
 
-kernel_cfg = config.kernel
+kernel_cfg = _config_mod.config.kernel
 scheduler = KernelScheduler(
     service_router=service_router,
     max_interactive_workers=kernel_cfg.workers_interactive,
@@ -325,7 +325,7 @@ async def _register_with_orchestrator() -> None:
                 json={
                     "agent_id": AGENT_ID,
                     "host": agent_host,
-                    "port": config.server.port,
+                    "port": _config_mod.config.server.port,
                     "container_id": os.getenv("HOSTNAME", ""),
                     "user_id": AGENT_USER_ID or None,
                 },
@@ -450,7 +450,8 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
                 if set_transport and set_config:
                     # Add base_url to config for outbound calls
                     base_url = os.getenv(
-                        "AETHER_BASE_URL", f"http://localhost:{config.server.port}"
+                        "AETHER_BASE_URL",
+                        f"http://localhost:{_config_mod.config.server.port}",
                     )
                     config_with_base = {**config_data, "base_url": base_url}
 
@@ -468,12 +469,107 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
 # ── Startup / Shutdown ─────────────────────────────────────────
 
 
+async def _fetch_user_preferences() -> str:
+    """Fetch user preferences from orchestrator and apply to env."""
+    if not ORCHESTRATOR_URL:
+        logger.warning(
+            "No ORCHESTRATOR_URL — skipping preferences fetch; "
+            "startup will use env/defaults instead of DB preferences"
+        )
+        return "env/defaults:no_orchestrator"
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{ORCHESTRATOR_URL}/api/internal/preferences",
+                params={
+                    "agent_id": AGENT_ID,
+                    "user_id": AGENT_USER_ID or None,
+                },
+                headers=_agent_auth_headers(),
+            )
+            if resp.status_code != 200:
+                details = resp.text[:300]
+                logger.warning(
+                    "Failed to fetch preferences (status=%s, user_id=%s, agent_id=%s, details=%s)",
+                    resp.status_code,
+                    AGENT_USER_ID or "<unset>",
+                    AGENT_ID,
+                    details,
+                )
+                return f"env/defaults:http_{resp.status_code}"
+
+            payload = resp.json()
+            if isinstance(payload, dict) and isinstance(payload.get("preferences"), dict):
+                prefs = payload["preferences"]
+                meta = payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {}
+                pref_source = str(meta.get("source", "db"))
+                resolved_user = str(meta.get("resolved_user_id", AGENT_USER_ID or "<unset>"))
+            else:
+                prefs = payload if isinstance(payload, dict) else {}
+                pref_source = "db_legacy"
+                resolved_user = AGENT_USER_ID or "<unset>"
+            # Map preference keys to env vars
+            pref_to_env = {
+                "stt_provider": "AETHER_STT_PROVIDER",
+                "stt_model": "AETHER_STT_MODEL",
+                "stt_language": "AETHER_STT_LANGUAGE",
+                "llm_provider": "AETHER_LLM_PROVIDER",
+                "llm_model": "AETHER_LLM_MODEL",
+                "llm_base_url": "OPENAI_BASE_URL",
+                "tts_provider": "AETHER_TTS_PROVIDER",
+                "tts_model": "AETHER_TTS_MODEL",
+                "tts_voice": "AETHER_TTS_VOICE",
+                "base_style": "AETHER_BASE_STYLE",
+                "custom_instructions": "AETHER_CUSTOM_INSTRUCTIONS",
+            }
+
+            for key, env_name in pref_to_env.items():
+                value = prefs.get(key)
+                if value:
+                    os.environ[env_name] = str(value)
+                    logger.debug(f"Applied preference: {env_name}={value}")
+
+            logger.info(
+                "User preferences loaded from orchestrator (source=%s, resolved_user_id=%s)",
+                pref_source,
+                resolved_user,
+            )
+            return f"db:{pref_source}"
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch preferences: {e}")
+        return "env/defaults:error"
+
+
 @app.on_event("startup")
 async def startup() -> None:
     # Register with orchestrator and start heartbeat
     await _register_with_orchestrator()
     if ORCHESTRATOR_URL:
         asyncio.create_task(_heartbeat_loop())
+
+    # Fetch user preferences (applies to env vars before providers start)
+    pref_source = await _fetch_user_preferences()
+
+    # Reload config with user preferences
+    reload_config()
+    _log_llm_key_baseurl_mismatch()
+    startup_effective_model = _effective_llm_model(
+        provider=_config_mod.config.llm.provider,
+        model=_config_mod.config.llm.model,
+        base_url=_config_mod.config.llm.base_url,
+    )
+    logger.info(
+        "LLM startup policy resolved: provider=%s, model=%s, base_url=%s, effective_model=%s, source=%s",
+        _config_mod.config.llm.provider,
+        _config_mod.config.llm.model,
+        _config_mod.config.llm.base_url or "<default-openai>",
+        startup_effective_model,
+        pref_source,
+    )
 
     # Fetch plugin configs
     await _fetch_plugin_configs()
@@ -494,9 +590,9 @@ async def startup() -> None:
         "Aether v0.10 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, "
         "tools=%s, skills=%s, plugin_ctx=%s, webrtc=%s)",
         AGENT_ID,
-        config.stt.provider,
-        config.llm.provider,
-        config.tts.provider,
+        _config_mod.config.stt.provider,
+        _config_mod.config.llm.provider,
+        _config_mod.config.tts.provider,
         tool_registry.tool_names(),
         [s.name for s in skill_loader.all()],
         plugin_context_store.loaded_plugins(),
@@ -827,6 +923,25 @@ async def memory_conversations(limit: int = 20) -> JSONResponse:
 # ── Config endpoints ───────────────────────────────────────────
 
 
+def _effective_llm_model(provider: str, model: str, base_url: str) -> str:
+    """Return the runtime model id that will be sent to the OpenAI SDK."""
+    if "openrouter" in (base_url or "").lower() and "/" not in model:
+        return f"{provider}/{model}"
+    return model
+
+
+def _log_llm_key_baseurl_mismatch() -> None:
+    """Warn when an OpenRouter key is configured without OpenRouter base URL."""
+    llm_key = _config_mod.config.llm.api_key or ""
+    base_url = _config_mod.config.llm.base_url or ""
+    if llm_key.startswith("sk-or-v1") and "openrouter" not in base_url.lower():
+        logger.warning(
+            "Potential LLM config mismatch: active LLM key looks like OpenRouter "
+            "but OPENAI_BASE_URL is not OpenRouter (current=%s).",
+            base_url or "<empty>",
+        )
+
+
 @app.get("/config")
 async def get_config() -> JSONResponse:
     cfg = _config_mod.config
@@ -856,31 +971,35 @@ async def get_config() -> JSONResponse:
 
 @app.post("/config/reload")
 async def config_reload(request_body: dict | None = None) -> JSONResponse:
-    global llm_provider, tts_provider, stt_provider
-
     if request_body:
         for key, value in request_body.items():
             os.environ[key] = str(value)
 
     new_config = reload_config()
+    _log_llm_key_baseurl_mismatch()
     await _fetch_plugin_configs()
 
     # Restart providers to pick up new config
     await llm_provider.stop()
-    llm_provider = get_llm_provider()
     await llm_provider.start()
 
     # TTS provider may also need restart
     await tts_provider.stop()
-    tts_provider = get_tts_provider()
     await tts_provider.start()
 
+    effective_model = _effective_llm_model(
+        provider=new_config.llm.provider,
+        model=new_config.llm.model,
+        base_url=new_config.llm.base_url,
+    )
     logger.info(
-        "Config reloaded (STT=%s/%s, LLM=%s/%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
+        "Config reloaded (STT=%s/%s, LLM=%s/%s, base_url=%s, effective_llm=%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
         new_config.stt.provider,
         new_config.stt.model,
         new_config.llm.provider,
         new_config.llm.model,
+        new_config.llm.base_url or "<default-openai>",
+        effective_model,
         new_config.tts.provider,
         new_config.tts.model,
         new_config.tts.voice,

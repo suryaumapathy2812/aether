@@ -14,7 +14,7 @@ import time
 
 import httpx
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.core.metrics import metrics
 from aether.providers.base import TTSProvider
 
@@ -30,18 +30,20 @@ class SarvamTTSProvider(TTSProvider):
     async def start(self) -> None:
         if self.client:
             return  # Already started
-        if not config.tts.sarvam_api_key:
+        if not config_module.config.tts.sarvam_api_key:
             raise ValueError("SARVAM_API_KEY not set")
 
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(config.tts.timeout),
+            timeout=httpx.Timeout(config_module.config.tts.timeout),
             headers={
-                "api-subscription-key": config.tts.sarvam_api_key,
+                "api-subscription-key": config_module.config.tts.sarvam_api_key,
                 "Content-Type": "application/json",
             },
         )
         logger.info(
-            f"Sarvam TTS ready (model={config.tts.sarvam_model}, speaker={config.tts.sarvam_speaker})"
+            "Sarvam TTS ready (model=%s, speaker=%s)",
+            config_module.config.tts.sarvam_model,
+            config_module.config.tts.sarvam_speaker,
         )
 
     async def stop(self) -> None:
@@ -62,10 +64,10 @@ class SarvamTTSProvider(TTSProvider):
                 SARVAM_TTS_URL,
                 json={
                     "text": text,
-                    "target_language_code": config.tts.sarvam_language,
-                    "model": config.tts.sarvam_model,
-                    "speaker": config.tts.sarvam_speaker,
-                    "speech_sample_rate": config.tts.sarvam_sample_rate,
+                    "target_language_code": config_module.config.tts.sarvam_language,
+                    "model": config_module.config.tts.sarvam_model,
+                    "speaker": config_module.config.tts.sarvam_speaker,
+                    "speech_sample_rate": config_module.config.tts.sarvam_sample_rate,
                 },
             )
             response.raise_for_status()
@@ -92,7 +94,7 @@ class SarvamTTSProvider(TTSProvider):
         status = "ready" if self.client else "not_started"
         return {
             "provider": "sarvam",
-            "model": config.tts.sarvam_model,
-            "speaker": config.tts.sarvam_speaker,
+            "model": config_module.config.tts.sarvam_model,
+            "speaker": config_module.config.tts.sarvam_speaker,
             "status": status,
         }

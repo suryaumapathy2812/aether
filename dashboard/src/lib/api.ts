@@ -120,6 +120,7 @@ export interface UserPreferences {
   stt_language: string | null;
   llm_provider: string | null;
   llm_model: string | null;
+  llm_base_url: string | null;
   tts_provider: string | null;
   tts_model: string | null;
   tts_voice: string | null;

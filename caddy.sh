@@ -15,6 +15,9 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
+USER_BETTER_AUTH_URL="${BETTER_AUTH_URL:-}"
+USER_BETTER_AUTH_TRUSTED_ORIGINS="${BETTER_AUTH_TRUSTED_ORIGINS:-}"
+
 # ---- Defaults for local dev ----
 export DOMAIN="${DOMAIN:-localhost:3000}"
 export BETTER_AUTH_URL="${BETTER_AUTH_URL:-https://localhost:3000}"
@@ -77,14 +80,38 @@ stop_proc() {
 }
 
 show_cloudflared_url() {
-  local logfile="$LOG_DIR/cloudflared.log"
-  if [[ -f "$logfile" ]]; then
-    local url
-    url="$(rg -o 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' "$logfile" -n --no-heading | tail -n 1 | cut -d: -f2-)"
-    if [[ -n "$url" ]]; then
-      echo "Cloudflare URL: $url"
-    fi
+  local url
+  url="$(get_cloudflared_url)"
+  if [[ -n "$url" ]]; then
+    echo "Cloudflare URL: $url"
   fi
+}
+
+get_cloudflared_url() {
+  local logfile="$LOG_DIR/cloudflared.log"
+  if [[ ! -f "$logfile" ]]; then
+    return
+  fi
+  rg -o 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' "$logfile" -n --no-heading | tail -n 1 | cut -d: -f2- || true
+}
+
+append_csv_unique() {
+  local csv="$1"
+  local value="$2"
+  local merged="$csv,$value"
+  awk -v data="$merged" 'BEGIN {
+    n = split(data, arr, ",")
+    out = ""
+    for (i = 1; i <= n; i++) {
+      gsub(/^ +| +$/, "", arr[i])
+      if (arr[i] == "") continue
+      if (!seen[arr[i]]++) {
+        if (out != "") out = out ","
+        out = out arr[i]
+      }
+    }
+    print out
+  }'
 }
 
 start_all() {
@@ -98,20 +125,37 @@ start_all() {
   start_proc "orchestrator" "$ROOT_DIR/orchestrator" \
     "DATABASE_URL='$APP_DB_URL' AETHER_LOCAL_AGENT_URL=http://127.0.0.1:8000 uv run uvicorn src.main:app --host 0.0.0.0 --port 9000 --reload --reload-dir src"
 
-  start_proc "dashboard" "$ROOT_DIR/dashboard" \
-    "DATABASE_URL='$APP_DB_URL' ORCHESTRATOR_URL=http://127.0.0.1:9000 BETTER_AUTH_URL='$BETTER_AUTH_URL' BETTER_AUTH_TRUSTED_ORIGINS='$BETTER_AUTH_TRUSTED_ORIGINS' NEXT_PUBLIC_ORCHESTRATOR_URL= bun run dev -- --port 3100"
-
   start_proc "caddy" "$ROOT_DIR" \
     "caddy run --config '$ROOT_DIR/Caddyfile.local' --adapter caddyfile"
+
+  local runtime_auth_url="$BETTER_AUTH_URL"
+  local runtime_trusted_origins="$BETTER_AUTH_TRUSTED_ORIGINS"
 
   if command -v cloudflared >/dev/null 2>&1; then
     start_proc "cloudflared" "$ROOT_DIR" \
       "cloudflared tunnel --no-autoupdate --url http://localhost:3080"
-    sleep 3
+    local tunnel_url=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 1
+      tunnel_url="$(get_cloudflared_url)"
+      if [[ -n "$tunnel_url" ]]; then
+        break
+      fi
+    done
+
+    if [[ -n "$tunnel_url" ]]; then
+      runtime_trusted_origins="$(append_csv_unique "$runtime_trusted_origins" "$tunnel_url")"
+      if [[ -z "$USER_BETTER_AUTH_URL" ]]; then
+        runtime_auth_url="$tunnel_url"
+      fi
+    fi
     show_cloudflared_url
   else
     echo "cloudflared not found, skipping tunnel"
   fi
+
+  start_proc "dashboard" "$ROOT_DIR/dashboard" \
+    "DATABASE_URL='$APP_DB_URL' ORCHESTRATOR_URL=http://127.0.0.1:9000 BETTER_AUTH_URL='$runtime_auth_url' BETTER_AUTH_TRUSTED_ORIGINS='$runtime_trusted_origins' NEXT_PUBLIC_ORCHESTRATOR_URL= bun run dev -- --port 3100"
 
   echo ""
   echo "Dashboard: https://localhost:3000"

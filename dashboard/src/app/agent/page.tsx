@@ -70,6 +70,7 @@ const DEFAULTS: UserPreferences = {
   stt_language: "en",
   llm_provider: "openai",
   llm_model: "gpt-4o",
+  llm_base_url: null,
   tts_provider: "openai",
   tts_model: "tts-1",
   tts_voice: "nova",

@@ -60,7 +60,7 @@ services:
       - AGENT_SECRET=${AGENT_SECRET}
       # Shared model cache for all per-user agent containers
       - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}
-      - AGENT_SHARED_MODELS_ORCH_PATH=${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
+      - AGENT_SHARED_MODELS_ORCH_PATH=/shared-models
       - AGENT_SHARED_MODELS_CONTAINER_PATH=${AGENT_SHARED_MODELS_CONTAINER_PATH:-/models}
       # VAD bootstrap defaults (download-if-missing)
       - AETHER_VAD_MODE_DEFAULT=${AETHER_VAD_MODE_DEFAULT:-off}
@@ -95,7 +95,7 @@ services:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For container management
-      - ${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}:${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
+      - ${AGENT_SHARED_MODELS_HOST_PATH:-./.cache/models}:/shared-models
     restart: unless-stopped
 
   # --- Dashboard (Next.js) ---

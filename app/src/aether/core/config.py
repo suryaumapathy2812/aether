@@ -65,15 +65,26 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> LLMConfig:
+        base_url = os.getenv("OPENAI_BASE_URL", "").strip()
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+        api_key = openai_key
+        if not base_url and openai_key.startswith("sk-or-v1"):
+            # Auto-fallback for OpenRouter keys when base URL wasn't set via prefs/env.
+            base_url = "https://openrouter.ai/api/v1"
+        if base_url and "openrouter" in base_url.lower():
+            # Split auth: OpenRouter-routed LLM traffic should use OPENROUTER_API_KEY.
+            # Fallback to OPENAI_API_KEY for backward compatibility.
+            api_key = openrouter_key or openai_key
         return cls(
             provider=os.getenv("AETHER_LLM_PROVIDER", "openai"),
-            api_key=os.getenv("OPENAI_API_KEY", ""),
+            api_key=api_key,
             model=os.getenv("AETHER_LLM_MODEL", "gpt-4o"),
             voice_model=os.getenv("AETHER_LLM_VOICE_MODEL", "gpt-4o-mini"),
             max_tokens=int(os.getenv("AETHER_LLM_MAX_TOKENS", "500")),
             temperature=float(os.getenv("AETHER_LLM_TEMPERATURE", "0.7")),
             max_history_turns=int(os.getenv("AETHER_LLM_MAX_HISTORY_TURNS", "20")),
-            base_url=os.getenv("OPENAI_BASE_URL", ""),
+            base_url=base_url,
         )
 
 
@@ -219,7 +230,7 @@ class KernelConfig:
 class VADConfig:
     """Voice activity detection settings (Silero ONNX)."""
 
-    mode: str = "off"  # off | shadow | active
+    mode: str = "active"  # off | shadow | active
     model_path: str = ""
     sample_rate: int = 16000
     activation_threshold: float = 0.5
@@ -233,7 +244,7 @@ class VADConfig:
     @classmethod
     def from_env(cls) -> "VADConfig":
         return cls(
-            mode=os.getenv("AETHER_VAD_MODE", "off").lower(),
+            mode=os.getenv("AETHER_VAD_MODE", "active").lower(),
             model_path=os.getenv("AETHER_VAD_MODEL_PATH", ""),
             sample_rate=int(os.getenv("AETHER_VAD_SAMPLE_RATE", "16000")),
             activation_threshold=float(
@@ -293,7 +304,7 @@ class TelephonyConfig:
 class TurnDetectionConfig:
     """LiveKit turn detector settings."""
 
-    mode: str = "off"  # off | shadow | active
+    mode: str = "active"  # off | shadow | active
     model_type: str = "en"  # en | multilingual
     model_repo: str = "livekit/turn-detector"
     # v1.2.2-en has model.onnx (float32) — correct on ARM/aarch64.
@@ -311,7 +322,7 @@ class TurnDetectionConfig:
         default_revision = "v1.2.2-en" if model_type == "en" else "v0.4.1-intl"
         default_filename = "model.onnx" if model_type == "en" else "model_q8.onnx"
         return cls(
-            mode=os.getenv("AETHER_TURN_DETECTION_MODE", "off").lower(),
+            mode=os.getenv("AETHER_TURN_DETECTION_MODE", "active").lower(),
             model_type=model_type,
             model_repo=os.getenv("AETHER_TURN_MODEL_REPO", "livekit/turn-detector"),
             model_revision=os.getenv("AETHER_TURN_MODEL_REVISION", default_revision),

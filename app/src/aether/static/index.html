@@ -161,6 +161,17 @@
         reconnectDelay = 1000;
     }
 
+    function markDataChannelReady() {
+        if (!dc || dc.readyState !== "open") return false;
+        resetReconnectDelay();
+        if (!streaming) {
+            send("stream_start");
+            streaming = true;
+        }
+        setStatus("Listening…", "active");
+        return true;
+    }
+
     // ── Core connect ───────────────────────────────────────────────
 
     async function connect(isReconnect = false) {
@@ -194,11 +205,7 @@
             dc = pc.createDataChannel("aether", { ordered: true });
 
             dc.onopen = () => {
-                resetReconnectDelay();
-                setStatus("Connected — starting voice…", "active");
-                // Auto-send stream_start so voice pipeline begins immediately
-                send("stream_start");
-                streaming = true;
+                markDataChannelReady();
             };
 
             dc.onclose = () => {
@@ -221,6 +228,9 @@
 
             pc.onconnectionstatechange = () => {
                 const s = pc.connectionState;
+                if (s === "connected") {
+                    markDataChannelReady();
+                }
                 if (s === "disconnected" || s === "failed" || s === "closed") {
                     streaming = false;
                     if (!intentionalDisconnect) scheduleReconnect();
@@ -279,6 +289,11 @@
             }
 
             setStatus("Waiting for data channel…", "active");
+            setTimeout(() => {
+                if (pc && pc.connectionState === "connected") {
+                    markDataChannelReady();
+                }
+            }, 1200);
 
         } catch (err) {
             setStatus(`Connection error: ${err.message}`, "error");

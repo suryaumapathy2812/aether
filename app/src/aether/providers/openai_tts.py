@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 
 from openai import AsyncOpenAI
 
-from aether.core.config import config
+import aether.core.config as config_module
 from aether.core.metrics import metrics
 from aether.providers.base import TTSProvider
 
@@ -31,8 +31,16 @@ class OpenAITTSProvider(TTSProvider):
     async def start(self) -> None:
         if self.client:
             return  # Already started
-        self.client = AsyncOpenAI()
-        logger.info(f"OpenAI TTS ready (voice={config.tts.voice})")
+        self.client = AsyncOpenAI(
+            api_key=config_module.config.tts.api_key,
+            # Keep TTS pinned to OpenAI even when LLM uses OpenRouter.
+            base_url="https://api.openai.com/v1",
+        )
+        logger.info(
+            "OpenAI TTS ready (voice=%s, base_url=%s)",
+            config_module.config.tts.voice,
+            "https://api.openai.com/v1",
+        )
 
     async def stop(self) -> None:
         self.client = None
@@ -47,8 +55,8 @@ class OpenAITTSProvider(TTSProvider):
 
         try:
             response = await self.client.audio.speech.create(
-                model=config.tts.model,
-                voice=config.tts.voice,
+                model=config_module.config.tts.model,
+                voice=config_module.config.tts.voice,
                 input=text,
                 response_format="pcm",
             )
@@ -81,8 +89,8 @@ class OpenAITTSProvider(TTSProvider):
 
         try:
             async with self.client.audio.speech.with_streaming_response.create(
-                model=config.tts.model,
-                voice=config.tts.voice,
+                model=config_module.config.tts.model,
+                voice=config_module.config.tts.voice,
                 input=text,
                 response_format="pcm",
             ) as response:
@@ -119,7 +127,7 @@ class OpenAITTSProvider(TTSProvider):
         status = "ready" if self.client else "not_started"
         return {
             "provider": "openai",
-            "model": config.tts.model,
-            "voice": config.tts.voice,
+            "model": config_module.config.tts.model,
+            "voice": config_module.config.tts.voice,
             "status": status,
         }
