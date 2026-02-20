@@ -856,12 +856,24 @@ async def get_config() -> JSONResponse:
 
 @app.post("/config/reload")
 async def config_reload(request_body: dict | None = None) -> JSONResponse:
+    global llm_provider, tts_provider, stt_provider
+
     if request_body:
         for key, value in request_body.items():
             os.environ[key] = str(value)
 
     new_config = reload_config()
     await _fetch_plugin_configs()
+
+    # Restart providers to pick up new config
+    await llm_provider.stop()
+    llm_provider = get_llm_provider()
+    await llm_provider.start()
+
+    # TTS provider may also need restart
+    await tts_provider.stop()
+    tts_provider = get_tts_provider()
+    await tts_provider.start()
 
     logger.info(
         "Config reloaded (STT=%s/%s, LLM=%s/%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
