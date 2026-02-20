@@ -76,6 +76,15 @@
           "recommended": false
         }
       }
+    },
+    "minimax": {
+      "display_name": "MiniMax",
+      "models": {
+        "minimax-m2-her": {
+          "description": "M2 Her — fast and capable",
+          "recommended": true
+        }
+      }
     }
   }
 }
