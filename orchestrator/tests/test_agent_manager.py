@@ -183,6 +183,73 @@ class TestProvisionAgent:
         assert "AETHER_LLM_PROVIDER" not in env
         assert "OPENAI_BASE_URL" not in env
 
+    @pytest.mark.asyncio
+    async def test_provision_pulls_latest_image_in_prod(self):
+        """Pulls the latest image before creating a container in prod mode."""
+        docker_client = self._mock_docker()
+        docker_client.containers.get.side_effect = Exception("Not found")
+        docker_client.volumes.get.side_effect = Exception("Not found")
+        mock_container = MagicMock()
+        mock_container.id = "newcontainer12"
+        docker_client.containers.run.return_value = mock_container
+
+        with (
+            patch("src.agent_manager._get_docker", return_value=docker_client),
+            patch("src.agent_manager.AGENT_DEV_ROOT", ""),  # prod mode
+        ):
+            from src.agent_manager import provision_agent
+
+            await provision_agent("user-42")
+
+        docker_client.images.pull.assert_called_once_with("core-ai-agent:latest")
+        docker_client.containers.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_provision_skips_pull_in_dev_mode(self):
+        """Skips image pull when AGENT_DEV_ROOT is set (local image, no registry)."""
+        docker_client = self._mock_docker()
+        docker_client.containers.get.side_effect = Exception("Not found")
+        docker_client.volumes.get.side_effect = Exception("Not found")
+        mock_container = MagicMock()
+        mock_container.id = "newcontainer12"
+        docker_client.containers.run.return_value = mock_container
+
+        with (
+            patch("src.agent_manager._get_docker", return_value=docker_client),
+            patch("src.agent_manager.AGENT_DEV_ROOT", "/home/dev/core-ai/app"),
+        ):
+            from src.agent_manager import provision_agent
+
+            await provision_agent("user-42")
+
+        docker_client.images.pull.assert_not_called()
+        docker_client.containers.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_provision_continues_if_pull_fails(self):
+        """A failed image pull is non-fatal — container is created with cached image."""
+        docker_client = self._mock_docker()
+        docker_client.containers.get.side_effect = Exception("Not found")
+        docker_client.volumes.get.side_effect = Exception("Not found")
+        docker_client.images.pull.side_effect = Exception("registry unreachable")
+        mock_container = MagicMock()
+        mock_container.id = "newcontainer12"
+        docker_client.containers.run.return_value = mock_container
+
+        with (
+            patch("src.agent_manager._get_docker", return_value=docker_client),
+            patch("src.agent_manager.AGENT_DEV_ROOT", ""),  # prod mode
+        ):
+            from src.agent_manager import provision_agent
+
+            result = await provision_agent("user-42")
+
+        # Pull was attempted
+        docker_client.images.pull.assert_called_once()
+        # Container was still created despite pull failure
+        docker_client.containers.run.assert_called_once()
+        assert result["agent_id"] == "agent-user-42"
+
 
 # ── Build agent environment ────────────────────────────────
 

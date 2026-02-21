@@ -459,6 +459,18 @@ async def provision_agent(
     except Exception:
         pass  # Container doesn't exist — create it
 
+    # Pull latest image from registry before creating the container.
+    # Skipped in dev mode (AGENT_DEV_ROOT set) where the image is built locally
+    # and there is no registry to pull from.  Pull failure is non-fatal so that
+    # environments without registry access still work (cached image is used).
+    if not AGENT_DEV_ROOT:
+        try:
+            log.info(f"Pulling latest image: {AGENT_IMAGE}")
+            docker_client.images.pull(AGENT_IMAGE)
+            log.info(f"Image pull complete: {AGENT_IMAGE}")
+        except Exception as e:
+            log.warning(f"Image pull failed — using cached image ({e})")
+
     # Create per-user volumes (idempotent)
     memory_vol = f"aether-memory-{user_id}"
     workspace_vol = f"aether-workspace-{user_id}"
