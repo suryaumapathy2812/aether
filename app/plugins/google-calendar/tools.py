@@ -1,7 +1,7 @@
 """Google Calendar tools for viewing and creating events.
 
-Uses the Google Calendar API v3. Shares OAuth tokens with the Gmail plugin
-(token_source: gmail). Credentials arrive via ``self._context`` at call time.
+Uses the Google Calendar API v3. Each plugin manages its own OAuth tokens
+independently. Credentials arrive via ``self._context`` at call time.
 """
 
 from __future__ import annotations

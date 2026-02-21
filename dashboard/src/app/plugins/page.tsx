@@ -129,15 +129,21 @@ function PluginsContent() {
                       href={`/plugins/${plugin.name}`}
                       className="block"
                     >
-                      <span
-                        className={`text-[11px] tracking-wider px-2 py-1 rounded-full ${
-                          plugin.enabled
-                            ? "bg-green-500/10 text-green-400"
-                            : "bg-muted/50 text-muted-foreground"
-                        }`}
-                      >
-                        {plugin.enabled ? "enabled" : "disabled"}
-                      </span>
+                      {plugin.enabled && plugin.needs_reconnect ? (
+                        <span className="text-[11px] tracking-wider px-2 py-1 rounded-full bg-amber-500/10 text-amber-400">
+                          reconnect
+                        </span>
+                      ) : (
+                        <span
+                          className={`text-[11px] tracking-wider px-2 py-1 rounded-full ${
+                            plugin.enabled
+                              ? "bg-green-500/10 text-green-400"
+                              : "bg-muted/50 text-muted-foreground"
+                          }`}
+                        >
+                          {plugin.enabled ? "enabled" : "disabled"}
+                        </span>
+                      )}
                     </Link>
                   )}
                 </div>

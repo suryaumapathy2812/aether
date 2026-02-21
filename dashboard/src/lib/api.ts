@@ -145,7 +145,6 @@ export interface PluginInfo {
   description: string;
   auth_type: string;
   auth_provider: string;
-  token_source?: string;
   config_fields: {
     key: string;
     label: string;
@@ -157,6 +156,7 @@ export interface PluginInfo {
   plugin_id: string | null;
   enabled: boolean;
   connected: boolean;
+  needs_reconnect: boolean;
 }
 
 export async function listPlugins() {

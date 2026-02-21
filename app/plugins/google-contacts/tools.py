@@ -1,7 +1,7 @@
 """Google Contacts tools for searching and looking up contacts.
 
-Uses the Google People API v1. Shares OAuth tokens with the Gmail plugin
-(token_source: gmail). Credentials arrive via ``self._context`` at call time.
+Uses the Google People API v1. Each plugin manages its own OAuth tokens
+independently. Credentials arrive via ``self._context`` at call time.
 """
 
 from __future__ import annotations

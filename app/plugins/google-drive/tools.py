@@ -1,7 +1,7 @@
 """Google Drive tools for searching, browsing, reading, and creating files.
 
 Uses the Google Drive API v3 and Google Docs/Sheets/Slides APIs.
-Shares OAuth tokens with the Gmail plugin (token_source: gmail).
+Each plugin manages its own OAuth tokens independently.
 Credentials arrive via ``self._context`` at call time.
 """
 

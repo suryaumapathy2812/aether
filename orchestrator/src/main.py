@@ -1084,12 +1084,9 @@ async def ws_proxy(ws: WebSocket):
 
 # Available plugins — matches agent's app/plugins/ directory.
 #
-# Plugins with "token_source" share OAuth tokens from another plugin.
-# e.g. google-calendar uses Gmail's Google OAuth tokens — no separate connect.
-# When the user connects Gmail, Calendar & Contacts get tokens automatically.
-#
-# The "scopes" on Gmail include Calendar + Contacts scopes so a single
-# Google consent covers all three plugins.
+# Each plugin manages its own OAuth tokens independently.
+# Google plugins each request only the scopes they need.
+# The user connects each plugin separately via its own OAuth flow.
 AVAILABLE_PLUGINS = {
     "gmail": {
         "name": "gmail",
@@ -1098,33 +1095,13 @@ AVAILABLE_PLUGINS = {
         "auth_type": "oauth2",
         "auth_provider": "google",
         "scopes": [
-            # Gmail
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/gmail.modify",
             "https://www.googleapis.com/auth/gmail.compose",
-            # Calendar
-            "https://www.googleapis.com/auth/calendar.readonly",
-            "https://www.googleapis.com/auth/calendar.events",
-            # Contacts
-            "https://www.googleapis.com/auth/contacts.readonly",
-            # Drive (read + create)
-            "https://www.googleapis.com/auth/drive",
-            # Docs / Sheets / Slides (create + edit)
-            "https://www.googleapis.com/auth/documents",
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/presentations",
-            # User info
             "https://www.googleapis.com/auth/userinfo.email",
         ],
-        "config_fields": [
-            {
-                "key": "account_email",
-                "label": "Gmail Address",
-                "type": "text",
-                "required": True,
-            },
-        ],
+        "config_fields": [],
     },
     "google-calendar": {
         "name": "google-calendar",
@@ -1132,8 +1109,11 @@ AVAILABLE_PLUGINS = {
         "description": "View and create calendar events",
         "auth_type": "oauth2",
         "auth_provider": "google",
-        "token_source": "gmail",  # shares Gmail's OAuth tokens
-        "scopes": [],  # scopes are on gmail's entry
+        "scopes": [
+            "https://www.googleapis.com/auth/calendar.readonly",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ],
         "config_fields": [],
     },
     "google-contacts": {
@@ -1142,18 +1122,25 @@ AVAILABLE_PLUGINS = {
         "description": "Search and look up your contacts",
         "auth_type": "oauth2",
         "auth_provider": "google",
-        "token_source": "gmail",  # shares Gmail's OAuth tokens
-        "scopes": [],  # scopes are on gmail's entry
+        "scopes": [
+            "https://www.googleapis.com/auth/contacts.readonly",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ],
         "config_fields": [],
     },
     "google-drive": {
         "name": "google-drive",
         "display_name": "Google Drive",
-        "description": "Search, browse, and read files from Google Drive",
+        "description": "Search, browse, read, and create files in Google Drive",
         "auth_type": "oauth2",
         "auth_provider": "google",
-        "token_source": "gmail",  # shares Gmail's OAuth tokens
-        "scopes": [],  # scopes are on gmail's entry (drive.readonly)
+        "scopes": [
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/presentations",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ],
         "config_fields": [],
     },
     "spotify": {
@@ -1380,6 +1367,23 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
                 if all(k in configured_keys for k in required_fields):
                     api_key_connected.add(name)
 
+    # Check which plugins need reconnection (scopes changed since last OAuth)
+    needs_reconnect_plugins: set[str] = set()
+    for name, info in installed.items():
+        meta = AVAILABLE_PLUGINS.get(name, {})
+        if meta.get("auth_type") != "oauth2":
+            continue
+        # Read stored granted_scopes
+        scope_row = await pool.fetchrow(
+            "SELECT value FROM plugin_configs WHERE plugin_id = $1 AND key = 'granted_scopes'",
+            info["id"],
+        )
+        if scope_row and name in connected_plugins:
+            granted = set(decrypt_value(scope_row["value"]).split())
+            required = set(meta.get("scopes", []))
+            if required - granted:
+                needs_reconnect_plugins.add(name)
+
     result = []
     for name, meta in AVAILABLE_PLUGINS.items():
         entry = {**meta}
@@ -1387,19 +1391,17 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
             entry["installed"] = True
             entry["plugin_id"] = installed[name]["id"]
             entry["enabled"] = installed[name]["enabled"]
-            # Plugins with token_source are connected if their source is connected
-            token_source = meta.get("token_source")
-            if token_source:
-                entry["connected"] = token_source in connected_plugins
-            elif meta.get("auth_type") == "api_key":
+            if meta.get("auth_type") == "api_key":
                 entry["connected"] = name in api_key_connected
             else:
                 entry["connected"] = name in connected_plugins
+            entry["needs_reconnect"] = name in needs_reconnect_plugins
         else:
             entry["installed"] = False
             entry["plugin_id"] = None
             entry["enabled"] = False
             entry["connected"] = False
+            entry["needs_reconnect"] = False
         # No-auth plugins are always "connected" once installed
         if meta.get("auth_type") == "none" and name in installed:
             entry["connected"] = True
@@ -1411,8 +1413,8 @@ async def list_plugins(user_id: str = Depends(get_user_id)):
 async def install_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
     """Install a plugin for the user.
 
-    Plugins with token_source (e.g. google-calendar → gmail) are auto-enabled
-    if the source plugin is already connected. No-auth plugins are auto-enabled.
+    No-auth plugins are auto-enabled on install.
+    OAuth2 and API key plugins require connection/configuration before enabling.
     """
     if plugin_name not in AVAILABLE_PLUGINS:
         raise HTTPException(404, f"Unknown plugin: {plugin_name}")
@@ -1421,20 +1423,8 @@ async def install_plugin(plugin_name: str, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
     plugin_id = uuid.uuid4().hex[:12]
 
-    # Check if we should auto-enable
-    auto_enable = False
-    if meta.get("auth_type") == "none":
-        auto_enable = True
-    elif meta.get("token_source"):
-        # Auto-enable if the source plugin has tokens
-        source_row = await pool.fetchrow(
-            "SELECT p.id FROM plugins p JOIN plugin_configs pc ON pc.plugin_id = p.id "
-            "WHERE p.user_id = $1 AND p.name = $2 AND pc.key = 'access_token'",
-            user_id,
-            meta["token_source"],
-        )
-        if source_row:
-            auto_enable = True
+    # Only no-auth plugins auto-enable on install
+    auto_enable = meta.get("auth_type") == "none"
 
     await pool.execute(
         """
@@ -1896,9 +1886,9 @@ async def _fetch_oauth_user_info(provider: dict, access_token: str) -> str:
 async def oauth_start(
     plugin_name: str, request: Request, user_id: str = Depends(get_user_id)
 ):
-    """Initiate OAuth2 flow for any plugin.
+    """Initiate OAuth2 flow for a plugin.
 
-    Plugins with token_source redirect to the source plugin's OAuth flow.
+    Each plugin manages its own OAuth tokens independently.
     Looks up the plugin's auth_provider in OAUTH_PROVIDERS, then redirects
     the user to the provider's consent screen.
     """
@@ -1911,14 +1901,7 @@ async def oauth_start(
     if meta.get("auth_type") == "none":
         raise HTTPException(400, f"{plugin_name} doesn't require authentication")
 
-    # Plugins with token_source use the source plugin's OAuth
-    token_source = meta.get("token_source")
-    if token_source:
-        plugin_name = token_source
-        if plugin_name not in AVAILABLE_PLUGINS:
-            raise HTTPException(500, f"Token source plugin '{plugin_name}' not found")
-
-    plugin_meta = AVAILABLE_PLUGINS[plugin_name]
+    plugin_meta = meta
     provider_name = plugin_meta.get("auth_provider", "")
     provider = OAUTH_PROVIDERS.get(provider_name)
     if not provider:
@@ -2044,10 +2027,17 @@ async def oauth_callback(
 
     plugin_id = row["id"]
 
+    # Store the scopes that were actually granted (from token response or requested)
+    granted_scopes = tokens.get("scope", "")
+    if not granted_scopes:
+        # Fallback: assume all requested scopes were granted
+        granted_scopes = " ".join(plugin_meta.get("scopes", []))
+
     config_entries = {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_expiry": token_expiry,
+        "granted_scopes": granted_scopes,
     }
     if account_email:
         config_entries["account_email"] = account_email
@@ -2069,15 +2059,6 @@ async def oauth_callback(
 
     # Auto-enable the plugin
     await pool.execute("UPDATE plugins SET enabled = true WHERE id = $1", plugin_id)
-
-    # Auto-enable any installed plugins that share this plugin's tokens
-    for dep_name, dep_meta in AVAILABLE_PLUGINS.items():
-        if dep_meta.get("token_source") == plugin_name:
-            await pool.execute(
-                "UPDATE plugins SET enabled = true WHERE user_id = $1 AND name = $2",
-                user_id,
-                dep_name,
-            )
 
     # Signal agent to reload plugin configs
     await _signal_agent_plugin_reload(user_id)
@@ -2113,8 +2094,7 @@ async def get_plugin_config_for_agent(plugin_name: str, user_id: str = Query(...
     Agent-authenticated (AGENT_SECRET). Returns unmasked values — never
     expose this endpoint to end users.
 
-    Plugins with token_source (e.g. google-calendar) read tokens from
-    the source plugin (gmail). Auto-refreshes expired OAuth tokens.
+    Each plugin stores its own tokens. Auto-refreshes expired OAuth tokens.
     No-auth plugins return an empty config.
     """
     pool = await get_pool()
@@ -2132,20 +2112,7 @@ async def get_plugin_config_for_agent(plugin_name: str, user_id: str = Query(...
     if plugin_meta.get("auth_type") == "none":
         return {}
 
-    # Determine which plugin holds the tokens
-    token_source = plugin_meta.get("token_source")
-    if token_source:
-        # Read tokens from the source plugin (e.g. gmail)
-        source_row = await pool.fetchrow(
-            "SELECT id FROM plugins WHERE user_id = $1 AND name = $2 AND enabled = true",
-            user_id,
-            token_source,
-        )
-        if not source_row:
-            raise HTTPException(404, f"Source plugin '{token_source}' not enabled")
-        token_plugin_id = source_row["id"]
-    else:
-        token_plugin_id = row["id"]
+    token_plugin_id = row["id"]
 
     configs = await pool.fetch(
         "SELECT key, value FROM plugin_configs WHERE plugin_id = $1", token_plugin_id

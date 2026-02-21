@@ -217,24 +217,37 @@ export default function PluginDetailPage() {
           {plugin.auth_type === "oauth2" && plugin.installed && (
             <div className="py-4">
               {plugin.connected ? (
-                <div className="flex items-center justify-between">
-                  <span className="text-[14px] text-secondary-foreground font-light">
-                    {config.account_email
-                      ? `Connected as ${config.account_email}`
-                      : "Connected"}
-                  </span>
-                  <Button
-                    variant="aether-link"
-                    size="aether-link"
-                    onClick={handleConnect}
-                    className="text-[11px] tracking-wider"
-                  >
-                    reconnect
-                  </Button>
-                </div>
-              ) : plugin.token_source ? (
-                <div className="text-[12px] text-muted-foreground">
-                  Connect <span className="text-secondary-foreground">{plugin.token_source}</span> first to enable this plugin.
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[14px] text-secondary-foreground font-light">
+                      {config.account_email
+                        ? `Connected as ${config.account_email}`
+                        : "Connected"}
+                    </span>
+                    <Button
+                      variant="aether-link"
+                      size="aether-link"
+                      onClick={handleConnect}
+                      className="text-[11px] tracking-wider"
+                    >
+                      reconnect
+                    </Button>
+                  </div>
+                  {plugin.needs_reconnect && (
+                    <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
+                      <span className="text-[12px] text-amber-400 tracking-wide">
+                        New permissions required — reconnect to continue using this plugin
+                      </span>
+                      <Button
+                        variant="aether"
+                        size="aether"
+                        onClick={handleConnect}
+                        className="shrink-0 ml-4"
+                      >
+                        reconnect
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <Button
@@ -295,9 +308,7 @@ export default function PluginDetailPage() {
                     <span className="text-[10px] text-red-400/80 mt-1">
                       {missingFields.length > 0 
                         ? `Missing: ${missingFields.join(", ")}`
-                        : plugin.token_source 
-                          ? `Connect ${plugin.token_source} first`
-                          : "Configuration required"}
+                        : "Configuration required"}
                     </span>
                   )}
                 </div>
