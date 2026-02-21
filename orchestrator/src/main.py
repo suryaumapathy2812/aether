@@ -1265,8 +1265,16 @@ async def _ensure_vobiz_application(
                 headers=headers,
                 json=payload,
             )
-            resp.raise_for_status()
-            return existing_app_id, "updated"
+            if resp.status_code == 404:
+                # Stale application_id — app was deleted on VoBiz.
+                # Fall through to list/create flow below.
+                log.warning(
+                    "Vobiz application %s not found (404), will recreate",
+                    existing_app_id,
+                )
+            else:
+                resp.raise_for_status()
+                return existing_app_id, "updated"
 
         list_resp = await client.get(
             f"{base}{account_path}/Application/",
