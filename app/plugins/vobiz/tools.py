@@ -173,8 +173,8 @@ class MakePhoneCallTool(AetherTool):
                 "Server base URL not configured. Cannot initiate call."
             )
 
-        # Build answer URL with optional greeting
-        answer_url = f"{base_url.rstrip('/')}/plugins/vobiz/answer"
+        # Build answer URL through the orchestrator proxy
+        answer_url = f"{base_url.rstrip('/')}/api/plugins/vobiz/answer"
         if greeting:
             answer_url += f"?greeting={urllib.parse.quote(greeting)}"
 

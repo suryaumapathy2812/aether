@@ -463,12 +463,19 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
             set_config = getattr(routes_module, "set_config", None)
 
             if set_transport and set_config:
-                # Add base_url to config for outbound calls
-                base_url = os.getenv(
-                    "AETHER_BASE_URL",
-                    f"http://localhost:{_config_mod.config.server.port}",
+                # Resolve the public base URL for VoBiz callbacks.
+                # Priority: public_base_url from orchestrator (stored at
+                # provision time) → AETHER_BASE_URL env → localhost fallback.
+                base_url = (
+                    config_data.get("public_base_url")
+                    or os.getenv("AETHER_BASE_URL")
+                    or f"http://localhost:{_config_mod.config.server.port}"
                 )
-                config_with_base = {**config_data, "base_url": base_url}
+                config_with_base = {
+                    **config_data,
+                    "base_url": base_url,
+                    "user_id": os.getenv("AETHER_USER_ID", ""),
+                }
 
                 set_transport(telephony_transport)
                 set_config(config_with_base)

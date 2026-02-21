@@ -31,7 +31,7 @@ from fastapi import (
     Depends,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
@@ -1568,8 +1568,38 @@ async def save_plugin_config(
         from_number = merged.get("from_number", "").strip()
         existing_app_id = merged.get("application_id", "").strip() or None
 
+        # Enforce phone number uniqueness across users
+        if from_number:
+            conflict = await pool.fetchrow(
+                """
+                SELECT p.user_id FROM plugin_configs pc
+                JOIN plugins p ON p.id = pc.plugin_id
+                WHERE pc.key = 'from_number'
+                  AND pc.value IS NOT NULL
+                  AND p.name = 'vobiz'
+                  AND p.id != $1
+                """,
+                plugin_id,
+            )
+            if conflict:
+                from .crypto import decrypt_value as _dv
+
+                existing_num = await pool.fetchval(
+                    """
+                    SELECT pc.value FROM plugin_configs pc
+                    JOIN plugins p ON p.id = pc.plugin_id
+                    WHERE pc.key = 'from_number' AND p.name = 'vobiz' AND p.id != $1
+                    """,
+                    plugin_id,
+                )
+                if existing_num and _dv(existing_num) == from_number:
+                    raise HTTPException(
+                        409,
+                        "This phone number is already configured by another user.",
+                    )
+
         if auth_id and auth_token and from_number:
-            answer_url = f"{_public_base_url(request)}/plugins/vobiz/webhook"
+            answer_url = f"{_public_base_url(request)}/api/plugins/vobiz/webhook"
             try:
                 app_id, action = await _ensure_vobiz_application(
                     auth_id=auth_id,
@@ -1579,17 +1609,22 @@ async def save_plugin_config(
                     existing_app_id=existing_app_id,
                 )
                 encrypted_app_id = encrypt_value(app_id)
-                await pool.execute(
-                    """
-                    INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
-                    VALUES ($1, $2, $3, $4, now())
-                    ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
-                    """,
-                    uuid.uuid4().hex[:12],
-                    plugin_id,
-                    "application_id",
-                    encrypted_app_id,
-                )
+                pub_url = _public_base_url(request)
+                for cfg_key, cfg_val in [
+                    ("application_id", encrypted_app_id),
+                    ("public_base_url", encrypt_value(pub_url)),
+                ]:
+                    await pool.execute(
+                        """
+                        INSERT INTO plugin_configs (id, plugin_id, key, value, updated_at)
+                        VALUES ($1, $2, $3, $4, now())
+                        ON CONFLICT (plugin_id, key) DO UPDATE SET value = $4, updated_at = now()
+                        """,
+                        uuid.uuid4().hex[:12],
+                        plugin_id,
+                        cfg_key,
+                        cfg_val,
+                    )
                 vobiz_provision = {
                     "status": "ok",
                     "action": action,
@@ -2237,6 +2272,220 @@ async def report_event_decision(event_id: str, request: Request):
             event_id,
         )
     return {"status": "ok"}
+
+
+# ── Vobiz Telephony Proxy ──────────────────────────────────
+#
+# VoBiz can only reach the orchestrator (public).  Agent containers are
+# internal.  These routes accept VoBiz callbacks, look up the owning user
+# by phone number, and proxy to the correct agent.
+
+
+async def _lookup_user_by_vobiz_number(phone: str) -> dict | None:
+    """Find the agent for the user who owns a VoBiz from_number.
+
+    Returns {"user_id": str, "host": str, "port": int} or None.
+    """
+    if not phone:
+        return None
+    pool = await get_pool()
+    # Normalise: strip leading + and whitespace
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if not digits:
+        return None
+
+    # plugin_configs stores encrypted values — we must decrypt to compare.
+    rows = await pool.fetch(
+        """
+        SELECT p.user_id, pc.value
+        FROM plugin_configs pc
+        JOIN plugins p ON p.id = pc.plugin_id
+        WHERE pc.key = 'from_number' AND p.name = 'vobiz' AND p.enabled = true
+        """
+    )
+    target_user_id: str | None = None
+    for row in rows:
+        decrypted = decrypt_value(row["value"])
+        decrypted_digits = "".join(ch for ch in decrypted if ch.isdigit())
+        if decrypted_digits == digits:
+            target_user_id = row["user_id"]
+            break
+
+    if not target_user_id:
+        return None
+
+    agent = await pool.fetchrow(
+        "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+        target_user_id,
+    )
+    if not agent:
+        return None
+
+    return {
+        "user_id": target_user_id,
+        "host": agent["host"],
+        "port": agent["port"],
+    }
+
+
+@app.post("/api/plugins/vobiz/webhook")
+async def vobiz_webhook_proxy(request: Request):
+    """Proxy inbound-call webhook from VoBiz to the owning user's agent.
+
+    VoBiz POSTs form data with To= (our user's VoBiz number).
+    We look up the user, then proxy to their agent's /plugins/vobiz/webhook.
+    The agent returns XML that VoBiz uses to connect the call.
+    """
+    body = await request.body()
+    form = await request.form()
+    # Inbound: To is our number.  Outbound answer callback: From is our number.
+    phone = form.get("To") or form.get("From") or ""
+    log.info("VoBiz webhook: To=%s From=%s", form.get("To"), form.get("From"))
+
+    target = await _lookup_user_by_vobiz_number(str(phone))
+    if not target:
+        log.warning("VoBiz webhook: no user found for phone %s", phone)
+        return Response(
+            content='<?xml version="1.0"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
+
+    # Proxy to agent — pass original headers so agent can build ws:// URL
+    agent_url = f"http://{target['host']}:{target['port']}/plugins/vobiz/webhook"
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            agent_url,
+            content=body,
+            headers={
+                "content-type": request.headers.get(
+                    "content-type", "application/x-www-form-urlencoded"
+                ),
+                "host": request.headers.get("host", ""),
+                "x-forwarded-proto": request.headers.get(
+                    "x-forwarded-proto", request.url.scheme
+                ),
+                "x-forwarded-host": request.headers.get(
+                    "x-forwarded-host", request.headers.get("host", "")
+                ),
+            },
+        )
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "application/xml"),
+    )
+
+
+@app.post("/api/plugins/vobiz/answer")
+async def vobiz_answer_proxy(request: Request):
+    """Proxy outbound-call answer callback from VoBiz to the owning user's agent.
+
+    When an outbound call is answered, VoBiz POSTs here with From= (our number).
+    """
+    body = await request.body()
+    form = await request.form()
+    phone = form.get("From") or form.get("To") or ""
+    log.info("VoBiz answer: To=%s From=%s", form.get("To"), form.get("From"))
+
+    target = await _lookup_user_by_vobiz_number(str(phone))
+    if not target:
+        log.warning("VoBiz answer: no user found for phone %s", phone)
+        return Response(
+            content='<?xml version="1.0"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
+
+    # Forward query params (e.g. ?greeting=...)
+    qs = str(request.url.query)
+    agent_url = f"http://{target['host']}:{target['port']}/plugins/vobiz/answer"
+    if qs:
+        agent_url += f"?{qs}"
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            agent_url,
+            content=body,
+            headers={
+                "content-type": request.headers.get(
+                    "content-type", "application/x-www-form-urlencoded"
+                ),
+                "host": request.headers.get("host", ""),
+                "x-forwarded-proto": request.headers.get(
+                    "x-forwarded-proto", request.url.scheme
+                ),
+                "x-forwarded-host": request.headers.get(
+                    "x-forwarded-host", request.headers.get("host", "")
+                ),
+            },
+        )
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "application/xml"),
+    )
+
+
+@app.websocket("/api/plugins/vobiz/ws")
+async def vobiz_ws_proxy(ws: WebSocket):
+    """Proxy VoBiz media-stream WebSocket to the owning user's agent.
+
+    VoBiz connects here after the XML <Stream> element.  The first message
+    is a JSON 'start' event containing callId — but we don't have the phone
+    number in the WS handshake.  Instead, we use the Referer / Origin or
+    query params.  For now, we accept and read the first message to get the
+    callId, then look up the call's phone number from recent webhook logs.
+
+    Simpler approach: the agent's XML response includes the WS URL.  We
+    rewrite it in the webhook/answer proxy to include a user_id hint.
+    """
+    # The agent's XML <Stream> URL will be rewritten to include ?uid=...
+    user_id = ws.query_params.get("uid", "")
+    if not user_id:
+        await ws.close(code=1008, reason="Missing user identifier")
+        return
+
+    pool = await get_pool()
+    agent = await pool.fetchrow(
+        "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
+        user_id,
+    )
+    if not agent:
+        await ws.close(code=1008, reason="No agent available")
+        return
+
+    agent_ws_url = f"ws://{agent['host']}:{agent['port']}/plugins/vobiz/ws"
+    log.info("VoBiz WS proxy: user=%s → %s", user_id, agent_ws_url)
+
+    await ws.accept()
+
+    import websockets as ws_lib
+
+    try:
+        async with ws_lib.connect(agent_ws_url) as agent_ws:
+
+            async def client_to_agent():
+                try:
+                    while True:
+                        data = await ws.receive_text()
+                        await agent_ws.send(data)
+                except WebSocketDisconnect:
+                    pass
+
+            async def agent_to_client():
+                try:
+                    async for msg in agent_ws:
+                        await ws.send_text(
+                            msg if isinstance(msg, str) else msg.decode()
+                        )
+                except Exception:
+                    pass
+
+            await asyncio.gather(client_to_agent(), agent_to_client())
+    except Exception as e:
+        log.warning("VoBiz WS proxy error: %s", e)
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 # ── Health ─────────────────────────────────────────────────

@@ -43,6 +43,28 @@ def create_router() -> APIRouter:
     """Create the FastAPI router for Vobiz plugin endpoints."""
     router = APIRouter(prefix="/plugins/vobiz", tags=["vobiz"])
 
+    def _build_ws_url(request: Request) -> str:
+        """Build the WebSocket URL for VoBiz <Stream> XML.
+
+        If public_base_url and user_id are available in the plugin config,
+        route through the orchestrator proxy (/api/plugins/vobiz/ws?uid=...).
+        Otherwise fall back to a direct connection (dev mode).
+        """
+        config = get_config()
+        public_base = config.get("public_base_url", "").rstrip("/")
+        uid = config.get("user_id", "")
+
+        if public_base and uid:
+            # Route through orchestrator proxy
+            ws_scheme = "wss" if public_base.startswith("https") else "ws"
+            host = public_base.split("://", 1)[-1]
+            return f"{ws_scheme}://{host}/api/plugins/vobiz/ws?uid={uid}"
+
+        # Fallback: direct connection (dev / local mode)
+        host = request.headers.get("host", "localhost:8000")
+        scheme = "wss" if request.url.scheme == "https" else "ws"
+        return f"{scheme}://{host}/plugins/vobiz/ws"
+
     @router.websocket("/ws")
     async def vobiz_ws(ws: WebSocket) -> None:
         """WebSocket endpoint for Vobiz media streams."""
@@ -65,10 +87,7 @@ def create_router() -> APIRouter:
                 media_type="application/xml",
             )
 
-        # Determine WebSocket URL
-        host = request.headers.get("host", "localhost:8000")
-        scheme = "wss" if request.url.scheme == "https" else "ws"
-        ws_url = f"{scheme}://{host}/plugins/vobiz/ws"
+        ws_url = _build_ws_url(request)
 
         # Vobiz XML Stream format
         stream_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -92,10 +111,7 @@ def create_router() -> APIRouter:
         # Parse query params for optional greeting
         greeting = request.query_params.get("greeting", "")
 
-        # Determine WebSocket URL
-        host = request.headers.get("host", "localhost:8000")
-        scheme = "wss" if request.url.scheme == "https" else "ws"
-        ws_url = f"{scheme}://{host}/plugins/vobiz/ws"
+        ws_url = _build_ws_url(request)
 
         # Build XML response with optional greeting
         if greeting:
