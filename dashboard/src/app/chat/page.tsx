@@ -81,7 +81,7 @@ export default function ChatPage() {
           variant="aether-ghost"
           size="icon"
           onClick={() => router.push("/home")}
-          className="w-8 h-8 -ml-2"
+          className="w-8 h-8 min-w-[44px] min-h-[44px] -ml-2"
           aria-label="Go back"
         >
           <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
@@ -130,7 +130,7 @@ export default function ChatPage() {
       {/* Input */}
       <form
         onSubmit={handleSubmit}
-        className="flex border border-border rounded-full bg-white/6 mb-7 mt-4"
+        className="flex border border-border rounded-full bg-white/6 pb-safe mt-4"
       >
         <Input
           type="text"

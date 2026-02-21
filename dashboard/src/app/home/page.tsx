@@ -29,13 +29,13 @@ export default function HomePage() {
 
   return (
     <div className="h-full relative flex flex-col items-center justify-center px-6 sm:px-8">
-      <div className="absolute top-7 left-6 sm:top-8 sm:left-8">
+      <div className="absolute top-7 left-6 sm:top-8 sm:left-8 z-10">
         <span className="logo-wordmark text-[10px] text-muted-foreground font-medium">
           aether
         </span>
       </div>
 
-      <div className="absolute top-7 right-6 sm:top-8 sm:right-8">
+      <div className="absolute top-7 right-6 sm:top-8 sm:right-8 z-10">
         <StatusOrb status={agentStatus} size={7} />
       </div>
 

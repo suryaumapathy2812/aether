@@ -37,13 +37,13 @@ export default function PageShell({
             variant="aether-ghost"
             size="icon"
             onClick={() => router.push(back)}
-            className="w-8 h-8 -ml-2"
+            className="w-8 h-8 min-w-[44px] min-h-[44px] -ml-2"
             aria-label="Go back"
           >
             <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
           </Button>
         ) : (
-          <div className="w-8" />
+          <div className="w-8 min-w-[44px]" />
         )}
 
         <h1 className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal">
@@ -55,13 +55,13 @@ export default function PageShell({
             variant="aether-ghost"
             size="icon"
             onClick={onClose}
-            className="w-8 h-8 -mr-2"
+            className="w-8 h-8 min-w-[44px] min-h-[44px] -mr-2"
             aria-label="Close"
           >
             <X className="size-[14px]" strokeWidth={1.5} />
           </Button>
         ) : (
-          <div className="w-8 flex items-center justify-center">
+          <div className="w-8 min-w-[44px] flex items-center justify-center">
             <StatusOrb status={agentStatus} size={10} />
           </div>
         )}

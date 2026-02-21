@@ -234,7 +234,7 @@ export default function PluginDetailPage() {
                     </Button>
                   </div>
                   {plugin.needs_reconnect && (
-                    <div className="flex items-center justify-between rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
                       <span className="text-[12px] text-amber-400 tracking-wide">
                         New permissions required — reconnect to continue using this plugin
                       </span>
@@ -242,7 +242,7 @@ export default function PluginDetailPage() {
                         variant="aether"
                         size="aether"
                         onClick={handleConnect}
-                        className="shrink-0 ml-4"
+                        className="shrink-0 self-start sm:self-auto"
                       >
                         reconnect
                       </Button>
@@ -299,7 +299,7 @@ export default function PluginDetailPage() {
           {/* Enable/Disable section */}
           {plugin.installed && (
             <div className="py-2">
-              <div className="flex items-center justify-between rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
                 <div className="flex flex-col">
                   <span className="text-[11px] tracking-[0.12em] uppercase text-muted-foreground font-medium">
                     Status
@@ -312,7 +312,7 @@ export default function PluginDetailPage() {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 self-start sm:self-auto">
                   <span className={`text-[12px] tracking-wider ${
                     plugin.enabled ? "text-green-400" : "text-muted-foreground"
                   }`}>

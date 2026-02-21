@@ -126,14 +126,14 @@ function TabBar({
   ];
 
   return (
-    <div className="flex gap-8">
+    <div className="flex gap-4 sm:gap-8">
       {tabs.map((t) => (
         <Button
           key={t.id}
           variant="aether-link"
           size="aether-link"
           onClick={() => onTabChange(t.id)}
-          className={`text-[11px] tracking-[0.12em] uppercase pb-2 rounded-none border-b transition-all duration-300 ${
+          className={`text-[11px] tracking-[0.12em] uppercase pb-2 rounded-none border-b transition-all duration-300 shrink-0 ${
             tab === t.id
               ? "text-foreground border-foreground"
               : "text-muted-foreground border-transparent hover:text-secondary-foreground"

@@ -217,12 +217,24 @@ textarea {
 @media (max-width: 900px) {
   .app-glass-shell {
     height: calc(100dvh - 1.25rem);
+    /* Respect iPhone notch / Dynamic Island at top and home indicator at bottom */
+    height: calc(100dvh - 1.25rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     border-radius: 1.7rem;
   }
 
   .app-scene-content {
     padding: 0.625rem;
+    /* Push content away from notch / home indicator */
+    padding-top: max(0.625rem, env(safe-area-inset-top));
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+    padding-left: max(0.625rem, env(safe-area-inset-left));
+    padding-right: max(0.625rem, env(safe-area-inset-right));
   }
+}
+
+/* ── Safe-area bottom utility — used by chat input bar ── */
+.pb-safe {
+  padding-bottom: max(1.75rem, env(safe-area-inset-bottom));
 }
 
 @keyframes scene-bg-in {

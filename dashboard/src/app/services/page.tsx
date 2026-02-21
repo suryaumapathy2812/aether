@@ -92,6 +92,7 @@ export default function ServicesPage() {
                         variant="aether-link"
                         size="aether-link"
                         onClick={() => handleDelete(p.id)}
+                        className="min-h-[44px] px-2"
                       >
                         remove
                       </Button>
@@ -103,6 +104,7 @@ export default function ServicesPage() {
                         setEditing(null);
                         setKeyValue("");
                       }}
+                      className="min-h-[44px] px-2"
                     >
                       cancel
                     </Button>

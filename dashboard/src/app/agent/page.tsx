@@ -330,15 +330,15 @@ function Picker({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="flex items-center justify-between py-3.5">
-      <span className="text-[13px] text-muted-foreground font-normal">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-3.5">
+      <span className="text-[13px] text-muted-foreground font-normal shrink-0">
         {label}
       </span>
       <Select value={value || undefined} onValueChange={onChange}>
         <SelectTrigger className="w-auto h-auto gap-1.5 border-0 bg-transparent shadow-none px-0 py-0 text-[13px] text-secondary-foreground font-normal hover:text-foreground focus:ring-0 focus-visible:ring-0 transition-colors duration-300">
           <SelectValue placeholder="--" />
         </SelectTrigger>
-        <SelectContent className="min-w-[220px] max-h-[280px] bg-card border-border">
+        <SelectContent className="min-w-[min(220px,calc(100vw-2rem))] max-h-[280px] bg-card border-border">
           {options.map((opt) => (
             <SelectItem
               key={opt.id}
