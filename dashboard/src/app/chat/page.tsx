@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import StatusOrb from "@/components/StatusOrb";
+import ChatMessage from "@/components/ChatMessage";
 import type { AgentStatus } from "@/hooks/useAgentStatus";
 
 function statusFromChat(
@@ -106,25 +107,11 @@ export default function ChatPage() {
         ) : (
           <div className="space-y-6 pb-3">
             {messages.map((m) => (
-              <div
+              <ChatMessage
                 key={m.id}
-                className={`animate-[fade-in_0.25s_ease] ${
-                  m.role === "user" ? "flex flex-col items-end" : ""
-                }`}
-              >
-                <span className="text-[9px] text-muted-foreground uppercase tracking-[0.12em] mb-1.5 block">
-                  {m.role === "user" ? "you" : "aether"}
-                </span>
-                <div
-                  className={`text-[14px] leading-[1.65] font-normal max-w-[85%] ${
-                    m.role === "user"
-                      ? "text-foreground bg-white/7 border border-border/70 rounded-2xl rounded-tr-sm px-4 py-2.5"
-                      : "text-secondary-foreground"
-                  }`}
-                >
-                  {getMessageText(m.parts as Array<{ type: string; text?: string }>)}
-                </div>
-              </div>
+                role={m.role as "user" | "assistant"}
+                text={getMessageText(m.parts as Array<{ type: string; text?: string }>)}
+              />
             ))}
             <div ref={messagesEndRef} />
           </div>
