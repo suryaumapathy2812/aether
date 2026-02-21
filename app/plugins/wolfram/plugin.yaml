@@ -1,0 +1,22 @@
+name: wolfram
+display_name: Wolfram Alpha & Currency
+description: Mathematical computations, scientific queries, and live currency conversion powered by Wolfram Alpha and ExchangeRate-API.
+version: 0.1.0
+
+auth:
+  type: api_key
+  config_fields:
+    - key: wolfram_app_id
+      label: Wolfram Alpha App ID
+      type: password
+      required: false
+      description: Your Wolfram Alpha App ID from developer.wolframalpha.com (free tier — 2,000 queries/month). Leave blank to disable math/science queries.
+    - key: exchangerate_api_key
+      label: ExchangeRate-API Key
+      type: password
+      required: false
+      description: Your ExchangeRate-API key from exchangerate-api.com (free tier — 1,500 requests/month). Leave blank to use the free open fallback.
+
+tools:
+  - class: WolframQueryTool
+  - class: CurrencyConvertTool

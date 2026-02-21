@@ -1,25 +1,11 @@
 name: wikipedia
-display_name: Wikipedia & Knowledge
-description: Instant access to Wikipedia articles, Wolfram Alpha computations, live currency conversion, and world time zones.
-version: 0.1.0
+display_name: Wikipedia
+description: Search Wikipedia and read articles. Instant access to encyclopaedic knowledge on any topic — people, places, events, science, history, and more.
+version: 0.2.0
 
 auth:
-  type: api_key
-  config_fields:
-    - key: wolfram_app_id
-      label: Wolfram Alpha App ID
-      type: password
-      required: false
-      description: Your Wolfram Alpha App ID from developer.wolframalpha.com (free tier — 2,000 queries/month). Leave blank to disable math/science queries.
-    - key: exchangerate_api_key
-      label: ExchangeRate-API Key
-      type: password
-      required: false
-      description: Your ExchangeRate-API key from exchangerate-api.com (free tier — 1,500 requests/month). Leave blank to disable currency conversion.
+  type: none
 
 tools:
   - class: WikipediaSearchTool
   - class: WikipediaGetArticleTool
-  - class: WolframQueryTool
-  - class: CurrencyConvertTool
-  - class: WorldTimeTool

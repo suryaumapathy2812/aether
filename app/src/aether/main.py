@@ -38,6 +38,7 @@ from aether.tools.write_file import WriteFileTool
 from aether.tools.list_directory import ListDirectoryTool
 from aether.tools.run_command import RunCommandTool
 from aether.tools.web_search import WebSearchTool
+from aether.tools.world_time import WorldTimeTool
 from aether.tools.run_task import RunTaskTool
 from aether.tools.save_memory import SaveMemoryTool
 from aether.tools.search_memory import SearchMemoryTool
@@ -125,6 +126,7 @@ tool_registry.register(WriteFileTool(working_dir=WORKING_DIR))
 tool_registry.register(ListDirectoryTool(working_dir=WORKING_DIR))
 tool_registry.register(RunCommandTool(working_dir=WORKING_DIR))
 tool_registry.register(WebSearchTool())
+tool_registry.register(WorldTimeTool())
 tool_registry.register(SaveMemoryTool(memory_store=memory_store))
 tool_registry.register(SearchMemoryTool(memory_store=memory_store))
 
