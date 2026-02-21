@@ -1,0 +1,16 @@
+name: google-drive
+display_name: Google Drive
+description: Search, browse, and read files from Google Drive
+version: 0.1.0
+
+auth:
+  type: oauth2
+  provider: google
+  token_source: gmail
+
+tools:
+  - class: SearchDriveTool
+  - class: ListDriveFilesTool
+  - class: GetFileInfoTool
+  - class: ReadFileContentTool
+  - class: ListSharedDrivesTool

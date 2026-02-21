@@ -1107,6 +1107,8 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/calendar.events",
             # Contacts
             "https://www.googleapis.com/auth/contacts.readonly",
+            # Drive (read-only)
+            "https://www.googleapis.com/auth/drive.readonly",
             # User info
             "https://www.googleapis.com/auth/userinfo.email",
         ],
@@ -1137,6 +1139,16 @@ AVAILABLE_PLUGINS = {
         "auth_provider": "google",
         "token_source": "gmail",  # shares Gmail's OAuth tokens
         "scopes": [],  # scopes are on gmail's entry
+        "config_fields": [],
+    },
+    "google-drive": {
+        "name": "google-drive",
+        "display_name": "Google Drive",
+        "description": "Search, browse, and read files from Google Drive",
+        "auth_type": "oauth2",
+        "auth_provider": "google",
+        "token_source": "gmail",  # shares Gmail's OAuth tokens
+        "scopes": [],  # scopes are on gmail's entry (drive.readonly)
         "config_fields": [],
     },
     "spotify": {
