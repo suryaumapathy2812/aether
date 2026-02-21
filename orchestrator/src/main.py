@@ -127,6 +127,7 @@ async def startup():
     await reconcile_containers(pool)
     asyncio.create_task(_idle_reaper())
     asyncio.create_task(_deferred_flusher())
+    asyncio.create_task(_cron_runner())
     log.info(f"Orchestrator ready (idle timeout={IDLE_TIMEOUT_MINUTES}m)")
 
 
@@ -224,6 +225,145 @@ async def _deferred_flusher():
 
         except Exception as e:
             log.error(f"Deferred flusher error: {e}")
+
+
+async def _ensure_agent_running(user_id: str, timeout_s: int = 30) -> dict | None:
+    """Ensure the user's agent container is running, starting it if needed.
+
+    Starts the container if stopped/missing, then polls the DB until the agent
+    self-registers as 'running' (max *timeout_s* seconds).
+
+    Returns the agent row dict on success, or None if the agent couldn't be
+    brought up in time.
+    """
+    pool = await get_pool()
+
+    # Fast path: already running
+    agent = await pool.fetchrow(
+        "SELECT host, port, status FROM agents WHERE user_id = $1", user_id
+    )
+    if agent and agent["status"] == "running":
+        return dict(agent)
+
+    # Local-agent mode: no containers to manage — just return whatever is registered
+    if _local_agent_target():
+        return dict(agent) if agent else None
+
+    log.info(f"Cron: agent for user {user_id} is not running — starting it")
+    try:
+        await _ensure_agent(user_id)
+    except Exception as e:
+        log.error(f"Cron: failed to start agent for user {user_id}: {e}")
+        return None
+
+    # Poll until the agent self-registers as running
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(1)
+        row = await pool.fetchrow(
+            "SELECT host, port, status FROM agents WHERE user_id = $1", user_id
+        )
+        if row and row["status"] == "running":
+            log.info(f"Cron: agent for user {user_id} is now running")
+            return dict(row)
+
+    log.warning(f"Cron: agent for user {user_id} did not come up within {timeout_s}s")
+    return None
+
+
+# How often the cron runner wakes to check for due jobs (seconds).
+_CRON_POLL_INTERVAL_S = int(os.getenv("CRON_POLL_INTERVAL_S", "30"))
+
+
+async def _cron_runner() -> None:
+    """Background task: fire scheduled jobs when their run_at time arrives.
+
+    All job types are delivered to the agent as a /cron_event — the LLM
+    decides what to do (call a tool, relay a reminder, etc.).  The orchestrator
+    is a dumb timer; it never interprets the instruction itself.
+
+    Job lifecycle:
+    - One-shot (interval_s IS NULL): delivered once, then disabled.
+    - Recurring (interval_s > 0): run_at advances by interval_s after each run.
+    """
+    while True:
+        await asyncio.sleep(_CRON_POLL_INTERVAL_S)
+        try:
+            pool = await get_pool()
+            due = await pool.fetch(
+                """
+                SELECT id, user_id, plugin, instruction, interval_s
+                FROM scheduled_jobs
+                WHERE enabled = true AND run_at <= now()
+                ORDER BY run_at
+                """,
+            )
+            if not due:
+                continue
+
+            for job in due:
+                job_id = job["id"]
+                user_id = job["user_id"]
+                plugin = job["plugin"]
+                instruction = job["instruction"]
+                interval_s = job["interval_s"]
+
+                log.info(
+                    f"Cron: firing job {job_id} for user {user_id} "
+                    f"(plugin={plugin}, interval_s={interval_s})"
+                )
+
+                # Ensure the agent is up before delivering
+                agent = await _ensure_agent_running(user_id)
+                if not agent:
+                    log.warning(
+                        f"Cron: skipping job {job_id} — agent unavailable for user {user_id}"
+                    )
+                    # Advance the schedule so we don't hammer a dead agent
+                    if interval_s:
+                        await pool.execute(
+                            "UPDATE scheduled_jobs SET run_at = now() + make_interval(secs := $1), "
+                            "last_run_at = now() WHERE id = $2",
+                            interval_s,
+                            job_id,
+                        )
+                    else:
+                        await pool.execute(
+                            "UPDATE scheduled_jobs SET enabled = false, last_run_at = now() WHERE id = $1",
+                            job_id,
+                        )
+                    continue
+
+                # Deliver the cron event to the agent
+                try:
+                    async with _httpx.AsyncClient(timeout=10) as client:
+                        resp = await client.post(
+                            f"http://{agent['host']}:{agent['port']}/cron_event",
+                            json={"plugin": plugin, "instruction": instruction},
+                        )
+                        if resp.status_code not in (200, 202):
+                            log.warning(
+                                f"Cron: /cron_event returned {resp.status_code} for job {job_id}"
+                            )
+                except Exception as e:
+                    log.warning(f"Cron: failed to deliver job {job_id}: {e}")
+
+                # Advance or disable the job
+                if interval_s:
+                    await pool.execute(
+                        "UPDATE scheduled_jobs SET run_at = now() + make_interval(secs := $1), "
+                        "last_run_at = now() WHERE id = $2",
+                        interval_s,
+                        job_id,
+                    )
+                else:
+                    await pool.execute(
+                        "UPDATE scheduled_jobs SET enabled = false, last_run_at = now() WHERE id = $1",
+                        job_id,
+                    )
+
+        except Exception as e:
+            log.error(f"Cron runner error: {e}")
 
 
 # ── Models ─────────────────────────────────────────────────
@@ -1275,6 +1415,13 @@ AVAILABLE_PLUGINS = {
 }
 
 
+class CronScheduleBody(BaseModel):
+    plugin: str | None = None
+    instruction: str
+    run_at: str  # ISO-8601 timestamp
+    interval_s: int | None = None  # None = one-shot, >0 = recurring
+
+
 class PluginConfigBody(BaseModel):
     config: dict[str, str]
 
@@ -2122,8 +2269,61 @@ async def oauth_callback(
     # Signal agent to reload plugin configs
     await _signal_agent_plugin_reload(user_id)
 
+    # Auto-schedule a recurring token refresh so the agent never hits a stale token.
+    # Google tokens expire at 60 min; we refresh at 50 min (3000 s) to stay ahead.
+    # Only schedule for OAuth plugins that have a refresh_token.
+    if refresh_token and provider_name:
+        await _upsert_token_refresh_job(
+            pool=pool,
+            user_id=user_id,
+            plugin_name=plugin_name,
+            provider_name=provider_name,
+        )
+
     log.info(f"{plugin_name} OAuth complete for user {user_id} ({account_email})")
     return RedirectResponse(f"/plugins/{plugin_name}?connected=true")
+
+
+_TOKEN_REFRESH_INTERVAL_S = int(os.getenv("TOKEN_REFRESH_INTERVAL_S", "3000"))  # 50 min
+
+
+async def _upsert_token_refresh_job(
+    pool, user_id: str, plugin_name: str, provider_name: str
+) -> None:
+    """Insert (or replace) a recurring cron job that tells the LLM to refresh
+    the OAuth token for *plugin_name* before it expires.
+
+    One job per (user, plugin) — we delete any existing job first so
+    re-connecting a plugin resets the schedule cleanly.
+    """
+    await pool.execute(
+        "DELETE FROM scheduled_jobs WHERE user_id = $1 AND plugin = $2 "
+        "AND instruction LIKE 'OAuth token refresh:%'",
+        user_id,
+        plugin_name,
+    )
+
+    job_id = uuid.uuid4().hex
+    instruction = (
+        f"OAuth token refresh: the {plugin_name} plugin's {provider_name} access token "
+        f"is about to expire. Call the refresh token tool for {plugin_name} now to obtain "
+        f"a new access token and keep the plugin working without interruption."
+    )
+    await pool.execute(
+        """
+        INSERT INTO scheduled_jobs (id, user_id, plugin, instruction, run_at, interval_s)
+        VALUES ($1, $2, $3, $4, now() + make_interval(secs := $5), $5)
+        """,
+        job_id,
+        user_id,
+        plugin_name,
+        instruction,
+        _TOKEN_REFRESH_INTERVAL_S,
+    )
+    log.info(
+        f"Token refresh job scheduled for {plugin_name} (user={user_id}, "
+        f"interval={_TOKEN_REFRESH_INTERVAL_S}s)"
+    )
 
 
 async def _signal_agent_plugin_reload(user_id: str) -> None:
@@ -2193,6 +2393,73 @@ async def get_plugin_config_for_agent(plugin_name: str, user_id: str = Query(...
             pass  # Invalid expiry — skip refresh
 
     return config_map
+
+
+# ── Cron API (agent-authenticated) ────────────────────────
+
+
+@app.post(
+    "/api/internal/cron/schedule",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def cron_schedule(body: CronScheduleBody, user_id: str = Query(...)):
+    """Schedule a cron job on behalf of the agent/LLM.
+
+    Agent-authenticated (AGENT_SECRET). The agent submits a job with a
+    plain-language instruction; the orchestrator fires it at run_at and
+    delivers it back to the agent as a /cron_event.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        run_at = datetime.fromisoformat(body.run_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"Invalid run_at timestamp: {body.run_at!r}")
+
+    if body.interval_s is not None and body.interval_s <= 0:
+        raise HTTPException(400, "interval_s must be a positive integer or null")
+
+    pool = await get_pool()
+    job_id = uuid.uuid4().hex
+    await pool.execute(
+        """
+        INSERT INTO scheduled_jobs (id, user_id, plugin, instruction, run_at, interval_s)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        job_id,
+        user_id,
+        body.plugin,
+        body.instruction,
+        run_at,
+        body.interval_s,
+    )
+    log.info(
+        f"Cron job scheduled: {job_id} for user {user_id} "
+        f"(plugin={body.plugin}, run_at={run_at}, interval_s={body.interval_s})"
+    )
+    return {"job_id": job_id, "status": "scheduled"}
+
+
+@app.delete(
+    "/api/internal/cron/{job_id}",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def cron_cancel(job_id: str, user_id: str = Query(...)):
+    """Cancel (disable) a scheduled cron job.
+
+    Agent-authenticated (AGENT_SECRET). Only disables jobs belonging to
+    the requesting user.
+    """
+    pool = await get_pool()
+    result = await pool.execute(
+        "UPDATE scheduled_jobs SET enabled = false WHERE id = $1 AND user_id = $2",
+        job_id,
+        user_id,
+    )
+    if result == "UPDATE 0":
+        raise HTTPException(404, "Job not found or not owned by this user")
+    log.info(f"Cron job cancelled: {job_id} (user={user_id})")
+    return {"job_id": job_id, "status": "cancelled"}
 
 
 # ── Webhook Receiver ──────────────────────────────────────

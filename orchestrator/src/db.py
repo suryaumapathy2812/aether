@@ -195,4 +195,22 @@ async def bootstrap_schema():
             CREATE INDEX IF NOT EXISTS idx_deferred_flush
                 ON plugin_events(user_id, scheduled_for)
                 WHERE decision = 'deferred' AND scheduled_for IS NOT NULL;
+
+            -- ── Cron / scheduled jobs ──
+
+            CREATE TABLE IF NOT EXISTS scheduled_jobs (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT REFERENCES "user"(id) ON DELETE CASCADE,
+                plugin      TEXT,
+                instruction TEXT NOT NULL,
+                run_at      TIMESTAMPTZ NOT NULL,
+                interval_s  INTEGER,
+                enabled     BOOLEAN DEFAULT true,
+                last_run_at TIMESTAMPTZ,
+                created_at  TIMESTAMPTZ DEFAULT now()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due
+                ON scheduled_jobs(run_at)
+                WHERE enabled = true;
         """)

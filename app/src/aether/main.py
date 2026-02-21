@@ -39,6 +39,7 @@ from aether.tools.list_directory import ListDirectoryTool
 from aether.tools.run_command import RunCommandTool
 from aether.tools.web_search import WebSearchTool
 from aether.tools.world_time import WorldTimeTool
+from aether.tools.schedule_reminder import ScheduleReminderTool
 from aether.tools.run_task import RunTaskTool
 from aether.tools.save_memory import SaveMemoryTool
 from aether.tools.search_memory import SearchMemoryTool
@@ -127,6 +128,7 @@ tool_registry.register(ListDirectoryTool(working_dir=WORKING_DIR))
 tool_registry.register(RunCommandTool(working_dir=WORKING_DIR))
 tool_registry.register(WebSearchTool())
 tool_registry.register(WorldTimeTool())
+tool_registry.register(ScheduleReminderTool())
 tool_registry.register(SaveMemoryTool(memory_store=memory_store))
 tool_registry.register(SearchMemoryTool(memory_store=memory_store))
 
@@ -1183,3 +1185,47 @@ async def receive_batch_notification(request: Request) -> JSONResponse:
     )
 
     return JSONResponse({"status": "delivered", "count": count})
+
+
+@app.post("/cron_event")
+async def receive_cron_event(request: Request) -> JSONResponse:
+    """Receive a scheduled cron event from the orchestrator.
+
+    The orchestrator delivers a plain-language instruction (e.g. "refresh the
+    Google Drive token") and an optional plugin hint.  We inject it as a system
+    message into a dedicated cron session so the LLM can act on it — calling
+    whatever tool is appropriate — without any user interaction.
+
+    The session ID is stable per plugin so the LLM has context across runs.
+    """
+    body = await request.json()
+    plugin: str = body.get("plugin") or "system"
+    instruction: str = body.get("instruction", "").strip()
+
+    if not instruction:
+        return JSONResponse(
+            {"status": "ignored", "reason": "empty instruction"}, status_code=400
+        )
+
+    # Use a stable, background session per plugin so history accumulates
+    session_id = f"cron-{plugin}"
+
+    logger.info(
+        "Cron event received (plugin=%s, session=%s): %s",
+        plugin,
+        session_id,
+        instruction[:120],
+    )
+
+    # Run the LLM in the background — don't block the orchestrator's HTTP call.
+    # run_session with background=True returns immediately; the LLM loop runs
+    # autonomously, calls tools, and logs results to the session store.
+    asyncio.create_task(
+        agent_core.run_session(
+            session_id=session_id,
+            user_message=instruction,
+            background=False,  # run fully before task completes; errors surface in logs
+        )
+    )
+
+    return JSONResponse({"status": "accepted", "session_id": session_id})
