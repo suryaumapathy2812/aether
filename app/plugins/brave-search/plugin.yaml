@@ -1,0 +1,20 @@
+name: brave-search
+display_name: Brave Search
+description: Real-time web search powered by Brave Search API. Search the live web, news, images, and local places.
+version: 0.1.0
+
+auth:
+  type: api_key
+  config_fields:
+    - key: api_key
+      label: Brave Search API Key
+      type: password
+      required: true
+      description: Your Brave Search API key from api-dashboard.search.brave.com
+
+tools:
+  - class: WebSearchTool
+  - class: NewsSearchTool
+  - class: LlmContextSearchTool
+  - class: ImageSearchTool
+  - class: LocalSearchTool
