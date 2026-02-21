@@ -30,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={jakarta.variable}>
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
         {/* PWA / home screen */}
         <meta name="theme-color" content="#0f1512" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />

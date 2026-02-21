@@ -130,7 +130,7 @@ export default function ChatPage() {
       {/* Input */}
       <form
         onSubmit={handleSubmit}
-        className="flex border border-border rounded-full bg-white/6 pb-safe mt-4"
+        className="flex items-center border border-border rounded-full bg-white/6 pb-safe mt-4 mb-2"
       >
         <Input
           type="text"
@@ -138,13 +138,14 @@ export default function ChatPage() {
           onChange={(e) => setInput(e.target.value)}
           placeholder={isLoading ? "thinking..." : "type a message..."}
           disabled={isLoading}
-          className="flex-1 bg-transparent border-0 rounded-none shadow-none px-4 py-2.5 text-[13px] font-medium focus-visible:ring-0 disabled:opacity-50 h-auto"
+          className="flex-1 bg-transparent border-0 rounded-none shadow-none px-4 py-3 text-base md:text-[13px] font-medium focus-visible:ring-0 disabled:opacity-50 h-auto leading-none"
+          style={{ fontSize: "16px" }}
         />
         <Button
           type="submit"
           variant="aether-ghost"
           disabled={!input.trim() || isLoading}
-          className="text-[10px] tracking-[0.1em] uppercase shrink-0 px-4"
+          className="text-[10px] tracking-[0.1em] uppercase shrink-0 px-4 self-center"
         >
           send
         </Button>
