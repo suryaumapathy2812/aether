@@ -67,7 +67,7 @@ const DEFAULTS: UserPreferences = {
   stt_provider: "deepgram",
   stt_model: "nova-3",
   stt_language: "en",
-  llm_model: "gpt-4o",
+  llm_model: "openai/gpt-4o",
   tts_provider: "openai",
   tts_model: "tts-1",
   tts_voice: "nova",
@@ -165,7 +165,7 @@ export default function AgentPage() {
   const llmModels = llmConfig
     ? Object.entries(llmConfig.models).map(([id, m]) => ({
         id,
-        label: `${m.provider} · ${id}`,
+        label: `${m.provider} · ${id.includes("/") ? id.split("/").pop() : id}`,
         description: m.description,
         recommended: m.recommended,
       }))

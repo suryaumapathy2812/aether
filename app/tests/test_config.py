@@ -16,7 +16,7 @@ def test_stt_defaults():
 def test_llm_defaults():
     cfg = LLMConfig()
     assert cfg.provider == "openai"
-    assert cfg.model == "gpt-4o"
+    assert cfg.model == "openai/gpt-4o"
     assert cfg.max_tokens == 500
     assert cfg.temperature == 0.7
 

@@ -59,7 +59,7 @@ class LLMConfig:
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 
     api_key: str = ""
-    model: str = "gpt-4o"
+    model: str = "openai/gpt-4o"
     # Separate model for voice — gpt-4o-mini is ~1s faster TTFT, good for voice
     voice_model: str = "gpt-4o-mini"
     max_tokens: int = 500
@@ -72,7 +72,7 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> LLMConfig:
-        model = os.getenv("AETHER_LLM_MODEL", "gpt-4o").strip()
+        model = os.getenv("AETHER_LLM_MODEL", "openai/gpt-4o").strip()
         api_key = os.getenv("OPENROUTER_API_KEY", "")
 
         # Derive provider from model name for logging/display.

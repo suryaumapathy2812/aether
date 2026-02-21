@@ -1,88 +1,88 @@
 {
   "models": {
-    "gpt-5.2": {
+    "openai/gpt-5.2": {
       "provider": "OpenAI",
       "description": "Latest flagship — strongest general model",
       "recommended": true
     },
-    "gpt-5.2-chat": {
+    "openai/gpt-5.2-chat": {
       "provider": "OpenAI",
       "description": "Latest chat-optimized GPT-5.2",
       "recommended": false
     },
-    "gpt-5.2-pro": {
+    "openai/gpt-5.2-pro": {
       "provider": "OpenAI",
       "description": "GPT-5.2 Pro — higher quality reasoning",
       "recommended": false
     },
-    "gpt-5.2-codex": {
+    "openai/gpt-5.2-codex": {
       "provider": "OpenAI",
       "description": "GPT-5.2 Codex — coding-focused variant",
       "recommended": false
     },
-    "gpt-5": {
+    "openai/gpt-5": {
       "provider": "OpenAI",
       "description": "GPT-5 baseline — capable general model",
       "recommended": false
     },
-    "gpt-5-mini": {
+    "openai/gpt-5-mini": {
       "provider": "OpenAI",
       "description": "GPT-5 Mini — faster and lower cost",
       "recommended": false
     },
-    "claude-opus-4.6": {
+    "anthropic/claude-opus-4.6": {
       "provider": "Anthropic",
       "description": "Newest Opus 4.6 — top-tier capability",
       "recommended": false
     },
-    "claude-opus-4.5": {
+    "anthropic/claude-opus-4.5": {
       "provider": "Anthropic",
       "description": "Opus 4.5 — highly capable reasoning",
       "recommended": false
     },
-    "claude-sonnet-4.6": {
+    "anthropic/claude-sonnet-4.6": {
       "provider": "Anthropic",
       "description": "Newest Sonnet 4.6 — strong coding and speed",
       "recommended": true
     },
-    "gemini-3.1-pro-preview": {
+    "google/gemini-3.1-pro-preview": {
       "provider": "Google",
       "description": "Gemini 3.1 Pro Preview — latest top-tier",
       "recommended": true
     },
-    "gemini-3-pro-preview": {
+    "google/gemini-3-pro-preview": {
       "provider": "Google",
       "description": "Gemini 3 Pro Preview — advanced capability",
       "recommended": false
     },
-    "gemini-3-flash-preview": {
+    "google/gemini-3-flash-preview": {
       "provider": "Google",
       "description": "Gemini 3 Flash Preview — faster responses",
       "recommended": false
     },
-    "llama-3.3-70b": {
+    "meta-llama/llama-3.3-70b-instruct": {
       "provider": "Meta",
       "description": "Llama 3.3 70B — open source, powerful",
       "recommended": true
     },
-    "llama-3.2-90b": {
+    "meta-llama/llama-3.2-90b-vision-instruct": {
       "provider": "Meta",
       "description": "Llama 3.2 90B — largest open model",
       "recommended": false
     },
-    "deepseek-v3.2": {
+    "deepseek/deepseek-chat": {
       "provider": "DeepSeek",
-      "description": "DeepSeek V3.2 — latest flagship chat model",
+      "description": "DeepSeek V3 — latest flagship chat model",
       "recommended": true
     },
-    "glm-5": {
-      "provider": "Z.ai",
-      "description": "GLM-5 — latest Z.ai flagship",
+    "zhipu-ai/glm-4-plus": {
+      "provider": "Zhipu AI",
+      "description": "GLM-4 Plus — latest Zhipu flagship",
       "recommended": true
     },
-    "minimax-m2-her": {
+    "minimax/minimax-m1": {
       "provider": "MiniMax",
-      "description": "M2 Her — fast and capable",
+      "description": "MiniMax M1 — fast and capable",
       "recommended": true
     }
   }
