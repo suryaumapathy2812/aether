@@ -7,16 +7,21 @@ independently. Credentials arrive via ``self._context`` at call time.
 from __future__ import annotations
 
 import logging
+import os as _os
 from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
+from aether.tools.base_watch_tool import BaseWatchTool
 from aether.tools.refresh_oauth_token import RefreshOAuthTokenTool
 
 logger = logging.getLogger(__name__)
 
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+
+_ORCHESTRATOR_URL_W = _os.getenv("ORCHESTRATOR_URL", "")
+_AGENT_USER_ID_W = _os.getenv("AETHER_USER_ID", "")
 
 
 class _CalendarTool(AetherTool):
@@ -349,3 +354,230 @@ class RefreshGoogleCalendarTokenTool(RefreshOAuthTokenTool):
         "Call this when Calendar tools return authentication errors, "
         "or when instructed by the system to prevent token expiry."
     )
+
+
+# ── Watch tools ────────────────────────────────────────────────────────────────
+
+
+class SetupCalendarWatchTool(BaseWatchTool):
+    """Register a Google Calendar push notification channel.
+
+    Called automatically by the cron system ~30 s after OAuth connect.
+    Uses the Calendar Events.watch() API to push change notifications to
+    POST /api/hooks/http/google-calendar/{user_id} on the orchestrator.
+
+    The watch expires in up to 7 days; renewal is scheduled automatically.
+    """
+
+    name = "setup_calendar_watch"
+    plugin_name = "google-calendar"
+    description = (
+        "Register Google Calendar push notifications so the agent receives "
+        "real-time alerts when calendar events change. "
+        "Called automatically by the system after connecting Google Calendar."
+    )
+    status_text = "Setting up Google Calendar push notifications..."
+
+    async def execute(self, **_) -> ToolResult:  # type: ignore[override]
+        token = self._get_token()
+        if not token:
+            return ToolResult.fail(
+                "Cannot set up Calendar watch: no access token available. "
+                "Ensure Google Calendar is connected and the token is valid."
+            )
+
+        if not _ORCHESTRATOR_URL_W or not _AGENT_USER_ID_W:
+            return ToolResult.fail(
+                "Cannot set up Calendar watch: ORCHESTRATOR_URL or AETHER_USER_ID not configured."
+            )
+
+        # The push endpoint the orchestrator exposes for HTTP-push plugins
+        hook_url = (
+            f"{_ORCHESTRATOR_URL_W}/api/hooks/http/google-calendar/{_AGENT_USER_ID_W}"
+        )
+
+        import uuid as _uuid
+
+        channel_id = str(_uuid.uuid4())
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{CALENDAR_API}/calendars/primary/events/watch",
+                    headers=self._auth_headers(),
+                    json={
+                        "id": channel_id,
+                        "type": "web_hook",
+                        "address": hook_url,
+                    },
+                )
+                if resp.status_code == 403:
+                    return ToolResult.fail(
+                        "Calendar watch registration failed: permission denied. "
+                        "Ensure the Google Calendar API is enabled and the OAuth "
+                        "scope includes calendar.readonly."
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Calendar watch setup failed: %s — %s", e, e.response.text)
+            return ToolResult.fail(
+                f"Calendar watch setup failed (HTTP {e.response.status_code}): {e.response.text}"
+            )
+        except Exception as e:
+            logger.error("Calendar watch setup error: %s", e)
+            return ToolResult.fail(f"Calendar watch setup error: {e}")
+
+        resource_id = data.get("resourceId", "")
+        expiration_ms = int(data.get("expiration", 0))
+
+        # Persist watch registration to orchestrator DB
+        await self._register_watch(
+            watch_id=channel_id,
+            resource_id=resource_id,
+            protocol="http",
+            expires_at=expiration_ms,
+        )
+
+        # Schedule renewal 1 day before expiry
+        await self._schedule_renewal(
+            renew_tool="renew_calendar_watch",
+            expires_at_ms=expiration_ms,
+            renew_interval_s=518400,
+        )
+
+        logger.info(
+            "Calendar watch registered: channelId=%s resourceId=%s expiration=%s",
+            channel_id,
+            resource_id,
+            expiration_ms,
+        )
+        return ToolResult.success(
+            "Google Calendar push notifications enabled. "
+            "Calendar changes will be delivered in real time. "
+            "Watch expires in ~7 days and will be renewed automatically.",
+            channel_id=channel_id,
+            resource_id=resource_id,
+        )
+
+
+class RenewCalendarWatchTool(BaseWatchTool):
+    """Renew the Google Calendar push channel before it expires.
+
+    Called automatically by the cron system 1 day before the channel expires.
+    Google Calendar requires stopping the old channel and creating a new one.
+    """
+
+    name = "renew_calendar_watch"
+    plugin_name = "google-calendar"
+    description = (
+        "Renew the Google Calendar push notification channel before it expires. "
+        "Called automatically by the system. Do not call manually."
+    )
+    status_text = "Renewing Google Calendar push notifications..."
+
+    async def execute(self, **_) -> ToolResult:  # type: ignore[override]
+        # Renewal = create a new channel (Google Calendar doesn't support in-place renewal)
+        setup = SetupCalendarWatchTool()
+        object.__setattr__(setup, "_context", getattr(self, "_context", None))
+        return await setup.execute()
+
+
+class HandleCalendarEventTool(BaseWatchTool):
+    """Process an inbound Google Calendar HTTP push notification.
+
+    Called by the agent when a webhook event arrives from Google Calendar.
+    The orchestrator HTTP adapter enriches the payload with x-goog-* headers.
+
+    x-goog-resource-state values:
+      "sync"       — watch just created, no real change (already filtered by orchestrator)
+      "exists"     — an event was created or updated
+      "not_exists" — an event was deleted
+
+    This tool fetches the changed events from the Calendar API and returns
+    a summary for the LLM to decide what to do (notify, speak, ignore).
+    """
+
+    name = "handle_calendar_event"
+    plugin_name = "google-calendar"
+    description = (
+        "Process an inbound Google Calendar push notification. "
+        "Fetches recently changed events and returns their details "
+        "so you can decide whether to notify the user or take action."
+    )
+    status_text = "Fetching updated calendar events..."
+    parameters = [
+        ToolParam(
+            name="payload",
+            type="object",
+            description="Raw webhook payload from the Google Calendar HTTP push notification",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, payload: dict, **_) -> ToolResult:  # type: ignore[override]
+        token = self._get_token()
+        if not token:
+            return ToolResult.fail("Cannot handle Calendar event: no access token.")
+
+        resource_state = payload.get("x-goog-resource-state", "exists")
+
+        if resource_state == "not_exists":
+            return ToolResult.success(
+                "A Google Calendar event was deleted. "
+                "Use upcoming_events to check your current schedule."
+            )
+
+        # Fetch events updated in the last 5 minutes to catch the change
+        now = datetime.now(timezone.utc)
+        updated_min = (now - timedelta(minutes=5)).isoformat()
+
+        headers = self._auth_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(
+                    f"{CALENDAR_API}/calendars/primary/events",
+                    headers=headers,
+                    params={
+                        "updatedMin": updated_min,
+                        "orderBy": "updated",
+                        "singleEvents": "true",
+                        "maxResults": "5",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Calendar event handling failed: %s", e)
+            return ToolResult.fail(
+                f"Failed to fetch Calendar events (HTTP {e.response.status_code})"
+            )
+        except Exception as e:
+            logger.error("Calendar event handling error: %s", e)
+            return ToolResult.fail(f"Calendar event handling error: {e}")
+
+        items = data.get("items", [])
+        if not items:
+            return ToolResult.success(
+                "Google Calendar notification received — no recently updated events found."
+            )
+
+        summaries: list[str] = []
+        for event in items:
+            title = event.get("summary", "(No title)")
+            start = event.get("start", {})
+            start_str = start.get("dateTime", start.get("date", ""))
+            status = event.get("status", "confirmed")
+            summaries.append(f"{title} @ {start_str} [{status}]")
+
+        count = len(items)
+        summary_text = "\n".join(summaries)
+        return ToolResult.success(
+            f"{count} calendar event{'s' if count > 1 else ''} recently updated:\n{summary_text}\n\n"
+            f"Use get_event or upcoming_events for full details.",
+            event_count=count,
+            events=summaries,
+        )

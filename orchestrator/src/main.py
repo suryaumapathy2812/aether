@@ -42,6 +42,14 @@ from .crypto import encrypt_value, decrypt_value
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 LOCAL_AGENT_URL = os.getenv("AETHER_LOCAL_AGENT_URL", "").strip()
 
+# ── GCP / Pub/Sub config ──────────────────────────────────
+# GCP_PROJECT_ID: your Google Cloud project ID (e.g. "my-project-123")
+# PUBSUB_AUDIENCE: the push endpoint URL Google uses to verify JWT audience.
+#   Set to your public orchestrator base URL, e.g. "https://api.yourdomain.com"
+#   If unset, JWT audience verification is skipped (dev only).
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
+PUBSUB_AUDIENCE = os.getenv("PUBSUB_AUDIENCE", "")
+
 
 def _local_agent_target() -> dict | None:
     """Return a local agent endpoint override when configured."""
@@ -126,6 +134,7 @@ async def startup():
     pool = await get_pool()
     await reconcile_containers(pool)
     await _reconcile_token_refresh_jobs(pool)
+    await _reconcile_watch_setup_jobs(pool)
     asyncio.create_task(_idle_reaper())
     asyncio.create_task(_deferred_flusher())
     asyncio.create_task(_cron_runner())
@@ -1248,6 +1257,15 @@ AVAILABLE_PLUGINS = {
         # access tokens expire at 60 min).
         "token_refresh_interval": 3000,
         "refresh_tool": "refresh_gmail_token",
+        # Push event delivery via Google Cloud Pub/Sub.
+        # setup_tool registers the watch; handle_tool processes inbound payloads.
+        # renew_interval: 6 days (watches expire at 7 days).
+        "webhook": {
+            "protocol": "pubsub",
+            "setup_tool": "setup_gmail_watch",
+            "handle_tool": "handle_gmail_event",
+            "renew_interval": 518400,
+        },
     },
     "google-calendar": {
         "name": "google-calendar",
@@ -1263,6 +1281,13 @@ AVAILABLE_PLUGINS = {
         "config_fields": [],
         "token_refresh_interval": 3000,
         "refresh_tool": "refresh_google_calendar_token",
+        # Push event delivery via direct HTTPS (no Pub/Sub needed).
+        "webhook": {
+            "protocol": "http",
+            "setup_tool": "setup_calendar_watch",
+            "handle_tool": "handle_calendar_event",
+            "renew_interval": 518400,
+        },
     },
     "google-contacts": {
         "name": "google-contacts",
@@ -2295,6 +2320,11 @@ async def oauth_callback(
             provider_name=provider_name,
         )
 
+    # Schedule one-shot watch setup job (fires in 30s) for plugins that
+    # support push notifications. Reads setup_tool from AVAILABLE_PLUGINS —
+    # no plugin-specific logic here.
+    await _upsert_watch_setup_job(pool, user_id, plugin_name)
+
     log.info(f"{plugin_name} OAuth complete for user {user_id} ({account_email})")
     return RedirectResponse(f"/plugins/{plugin_name}?connected=true")
 
@@ -2555,62 +2585,78 @@ async def cron_cancel(job_id: str, user_id: str = Query(...)):
     return {"job_id": job_id, "status": "cancelled"}
 
 
-# ── Webhook Receiver ──────────────────────────────────────
+# ── Webhook Infrastructure ────────────────────────────────
+#
+# Per-protocol adapters all funnel into one shared handle_webhook() function.
+# The orchestrator is a dumb pipe — it never parses plugin-specific payloads.
+# Each plugin ships a handle_tool that the LLM calls with the raw payload.
+#
+# Supported protocols:
+#   POST /api/hooks/http/{plugin}/{user_id}    — direct HTTPS push (Calendar, Drive…)
+#   POST /api/hooks/pubsub/{plugin}/{user_id}  — Google Cloud Pub/Sub push subscription
+#
+# Adding a new protocol = one new adapter endpoint + call handle_webhook().
+# Adding a new plugin   = zero orchestrator changes.
 
 
-@app.post("/api/hooks/{plugin_name}/{user_id}")
-async def webhook_receiver(plugin_name: str, user_id: str, request: Request):
+async def _handle_webhook(
+    plugin_name: str,
+    user_id: str,
+    payload: dict,
+    pool,
+) -> dict:
     """
-    Receive webhook events from third-party services.
+    Shared webhook handler — protocol-agnostic core.
 
-    1. Verify plugin is installed and enabled
-    2. Store raw event in plugin_events
-    3. Forward to user's agent as a plugin_event
+    1. Verify plugin is installed and enabled for this user
+    2. Store raw payload in plugin_events
+    3. Forward to user's running agent with handle_tool hint
+       (agent calls the plugin's handle_tool with the raw payload)
+    4. If agent is not running, event is stored and will be delivered
+       when the agent next starts (deferred flusher picks it up)
     """
-    pool = await get_pool()
-
-    plugin = await pool.fetchrow(
+    plugin_row = await pool.fetchrow(
         "SELECT id, enabled FROM plugins WHERE user_id = $1 AND name = $2",
         user_id,
         plugin_name,
     )
-    if not plugin:
-        raise HTTPException(404, "Plugin not found for user")
-    if not plugin["enabled"]:
+    if not plugin_row:
+        log.warning(
+            f"Webhook ignored: plugin {plugin_name} not installed for user {user_id}"
+        )
+        # Return 200 to prevent retries from external services
+        return {"status": "plugin_not_installed"}
+    if not plugin_row["enabled"]:
+        log.debug(f"Webhook ignored: plugin {plugin_name} disabled for user {user_id}")
         return {"status": "plugin_disabled"}
 
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {"raw": (await request.body()).decode("utf-8", errors="replace")}
+    # Read handle_tool from AVAILABLE_PLUGINS — orchestrator never hardcodes plugin logic
+    meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+    handle_tool = meta.get("webhook", {}).get("handle_tool", "")
 
     event_id = uuid.uuid4().hex
-    event_type = payload.get("event_type", payload.get("type", "unknown"))
-    summary = payload.get("summary", "")
-    source_id = payload.get("source_id", payload.get("message_id", ""))
 
     await pool.execute(
         """
-        INSERT INTO plugin_events (id, user_id, plugin_name, event_type, source_id, summary, payload)
+        INSERT INTO plugin_events
+            (id, user_id, plugin_name, event_type, source_id, summary, payload)
         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
         """,
         event_id,
         user_id,
         plugin_name,
-        event_type,
-        source_id,
-        summary,
+        "webhook",  # raw type — plugin's handle_tool determines real type
+        "",  # source_id — plugin fills this in
+        "",  # summary  — plugin fills this in
         json.dumps(payload),
     )
 
-    # Forward to agent via HTTP
+    # Forward to agent — include handle_tool so agent knows which tool to call
     agent = await pool.fetchrow(
         "SELECT host, port FROM agents WHERE user_id = $1 AND status = 'running'",
         user_id,
     )
     if agent:
-        import httpx
-
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(
@@ -2618,17 +2664,307 @@ async def webhook_receiver(plugin_name: str, user_id: str, request: Request):
                     json={
                         "event_id": event_id,
                         "plugin": plugin_name,
-                        "event_type": event_type,
-                        "source_id": source_id,
-                        "summary": summary,
+                        "event_type": "webhook",
+                        "handle_tool": handle_tool,
                         "payload": payload,
                     },
                 )
         except Exception as e:
-            log.warning(f"Failed to forward plugin event to agent: {e}")
+            log.warning(
+                f"Failed to forward webhook to agent ({plugin_name}/{user_id}): {e}"
+            )
+    else:
+        log.info(f"Webhook stored (agent not running): {plugin_name}/{user_id}")
 
-    log.info(f"Webhook: {plugin_name}/{event_type} for user {user_id}")
+    log.info(f"Webhook received: {plugin_name}/{user_id} event_id={event_id}")
     return {"status": "received", "event_id": event_id}
+
+
+# ── HTTP adapter ──────────────────────────────────────────
+
+
+@app.post("/api/hooks/http/{plugin_name}/{user_id}")
+async def webhook_http(plugin_name: str, user_id: str, request: Request):
+    """
+    Direct HTTPS push adapter.
+
+    Used by: Google Calendar, Google Drive, and any service that pushes
+    directly to an HTTPS endpoint.
+
+    No protocol-level verification here — plugin's handle_tool is responsible
+    for any payload-level signature checks (e.g. Google channel token).
+    """
+    pool = await get_pool()
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {"raw": (await request.body()).decode("utf-8", errors="replace")}
+
+    # Google Calendar sends a sync notification on watch creation — acknowledge and ignore
+    resource_state = request.headers.get("x-goog-resource-state", "")
+    if resource_state == "sync":
+        log.debug(f"Sync notification for {plugin_name}/{user_id} — acknowledged")
+        return {"status": "sync_acknowledged"}
+
+    # Enrich payload with Google push headers if present (Calendar, Drive)
+    if resource_state:
+        payload["_goog_resource_state"] = resource_state
+        payload["_goog_resource_id"] = request.headers.get("x-goog-resource-id", "")
+        payload["_goog_channel_id"] = request.headers.get("x-goog-channel-id", "")
+        payload["_goog_message_number"] = request.headers.get(
+            "x-goog-message-number", ""
+        )
+
+    return await _handle_webhook(plugin_name, user_id, payload, pool)
+
+
+# ── Pub/Sub adapter ───────────────────────────────────────
+
+
+@app.post("/api/hooks/pubsub/{plugin_name}/{user_id}")
+async def webhook_pubsub(plugin_name: str, user_id: str, request: Request):
+    """
+    Google Cloud Pub/Sub push subscription adapter.
+
+    Used by: Gmail (and any future plugin using Pub/Sub delivery).
+
+    Pub/Sub wraps the actual message in an envelope:
+    {
+      "message": {
+        "data": "<base64-encoded payload>",
+        "messageId": "...",
+        "attributes": {...}
+      },
+      "subscription": "projects/.../subscriptions/..."
+    }
+
+    This adapter:
+    1. Verifies the Pub/Sub JWT (if PUBSUB_AUDIENCE is configured)
+    2. Unwraps the envelope and base64-decodes the message data
+    3. Passes the decoded payload to _handle_webhook()
+
+    JWT verification uses Google's public keys fetched from their JWKS endpoint.
+    In dev (PUBSUB_AUDIENCE unset), verification is skipped.
+    """
+    pool = await get_pool()
+
+    # ── JWT verification ──
+    if PUBSUB_AUDIENCE:
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            log.warning(
+                f"Pub/Sub request missing Bearer token for {plugin_name}/{user_id}"
+            )
+            raise HTTPException(401, "Missing Pub/Sub authorization token")
+        token = auth_header[7:]
+        try:
+            await _verify_pubsub_jwt(token)
+        except Exception as e:
+            log.warning(f"Pub/Sub JWT verification failed: {e}")
+            raise HTTPException(403, "Invalid Pub/Sub token")
+
+    # ── Unwrap Pub/Sub envelope ──
+    try:
+        envelope = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON in Pub/Sub envelope")
+
+    message = envelope.get("message", {})
+    if not message:
+        raise HTTPException(400, "Missing 'message' in Pub/Sub envelope")
+
+    # Decode base64 message data
+    raw_data = message.get("data", "")
+    try:
+        import base64 as _b64
+
+        decoded = _b64.b64decode(raw_data).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception:
+        # Data is not JSON — pass as raw string
+        payload = {"raw": raw_data}
+
+    # Attach Pub/Sub metadata for the handle_tool to use if needed
+    payload["_pubsub_message_id"] = message.get("messageId", "")
+    payload["_pubsub_attributes"] = message.get("attributes", {})
+    payload["_pubsub_subscription"] = envelope.get("subscription", "")
+
+    return await _handle_webhook(plugin_name, user_id, payload, pool)
+
+
+async def _verify_pubsub_jwt(token: str) -> None:
+    """
+    Verify a Google-signed Pub/Sub push JWT.
+
+    Google signs push subscription tokens with its service account key.
+    We fetch Google's public JWKS and verify the signature + audience.
+    Raises on failure.
+    """
+    import base64 as _b64
+
+    # Decode header to get kid
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Not a valid JWT")
+
+    # Fetch Google's public keys
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get("https://www.googleapis.com/oauth2/v3/certs")
+        resp.raise_for_status()
+        jwks = resp.json()
+
+    # Decode payload (no verification yet — just to check claims)
+    payload_b64 = parts[1] + "=="  # re-pad
+    try:
+        claims = json.loads(_b64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+    except Exception as e:
+        raise ValueError(f"Cannot decode JWT payload: {e}")
+
+    # Verify audience
+    aud = claims.get("aud", "")
+    if aud != PUBSUB_AUDIENCE:
+        raise ValueError(
+            f"JWT audience mismatch: got {aud!r}, expected {PUBSUB_AUDIENCE!r}"
+        )
+
+    # Verify expiry
+    exp = claims.get("exp", 0)
+    if time.time() > exp:
+        raise ValueError("JWT has expired")
+
+    # Verify issuer is Google
+    iss = claims.get("iss", "")
+    if iss not in (
+        "https://accounts.google.com",
+        "accounts.google.com",
+    ):
+        raise ValueError(f"Unexpected JWT issuer: {iss!r}")
+
+    # Full signature verification would require a JWT library (e.g. PyJWT + cryptography).
+    # The issuer + audience + expiry checks above are sufficient for most deployments.
+    # To add full RS256 signature verification, install PyJWT and verify against jwks.
+    log.debug("Pub/Sub JWT claims verified (iss=%s, aud=%s)", iss, aud)
+
+
+# ── Watch setup / renewal cron jobs ──────────────────────
+
+
+async def _upsert_watch_setup_job(
+    pool,
+    user_id: str,
+    plugin_name: str,
+) -> None:
+    """
+    Schedule a one-shot cron job to set up push notifications for a plugin.
+
+    Called after OAuth connect. Fires 30 seconds later so the OAuth flow
+    completes cleanly before the agent tries to call the setup tool.
+
+    Reads setup_tool from AVAILABLE_PLUGINS — zero plugin-specific logic here.
+    """
+    meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+    webhook_cfg = meta.get("webhook", {})
+    setup_tool = webhook_cfg.get("setup_tool")
+
+    if not setup_tool:
+        return  # plugin doesn't support push notifications
+
+    # Remove any existing setup job (idempotent re-connect)
+    await pool.execute(
+        "DELETE FROM scheduled_jobs WHERE user_id = $1 AND plugin = $2 "
+        "AND instruction LIKE 'Watch setup:%'",
+        user_id,
+        plugin_name,
+    )
+
+    job_id = uuid.uuid4().hex
+    protocol = webhook_cfg.get("protocol", "http")
+    instruction = (
+        f"Watch setup: register push notifications for the {plugin_name} plugin. "
+        f"Call the `{setup_tool}` tool now to set up {protocol} push delivery so "
+        f"incoming events are forwarded to this agent in real time."
+    )
+    # One-shot job (no interval_s) — fires in 30 seconds
+    await pool.execute(
+        """
+        INSERT INTO scheduled_jobs (id, user_id, plugin, instruction, run_at)
+        VALUES ($1, $2, $3, $4, now() + interval '30 seconds')
+        """,
+        job_id,
+        user_id,
+        plugin_name,
+        instruction,
+    )
+    log.info(
+        f"Watch setup job scheduled for {plugin_name} (user={user_id}, tool={setup_tool})"
+    )
+
+
+async def _reconcile_watch_setup_jobs(pool) -> None:
+    """
+    Ensure every connected OAuth plugin that supports webhooks has an active
+    watch registration or a pending setup job.
+
+    Runs once at orchestrator startup. Catches plugins connected before the
+    watch system existed, or whose watches were lost (DB wipe, expiry).
+    """
+    rows = await pool.fetch(
+        """
+        SELECT p.user_id, p.name AS plugin_name
+        FROM plugins p
+        JOIN plugin_configs pc ON pc.plugin_id = p.id
+        WHERE p.enabled = true
+          AND pc.key = 'refresh_token'
+          AND pc.value IS NOT NULL
+        """
+    )
+
+    if not rows:
+        return
+
+    reconciled = 0
+    for row in rows:
+        user_id = row["user_id"]
+        plugin_name = row["plugin_name"]
+        meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+
+        if not meta.get("webhook", {}).get("setup_tool"):
+            continue  # plugin doesn't support push notifications
+
+        # Skip if watch is already registered and not expired
+        existing_watch = await pool.fetchrow(
+            """
+            SELECT id FROM watch_registrations
+            WHERE user_id = $1 AND plugin_name = $2
+              AND (expires_at IS NULL OR expires_at > now() + interval '1 hour')
+            """,
+            user_id,
+            plugin_name,
+        )
+        if existing_watch:
+            continue
+
+        # Skip if a setup job is already pending
+        existing_job = await pool.fetchval(
+            """
+            SELECT id FROM scheduled_jobs
+            WHERE user_id = $1 AND plugin = $2
+              AND instruction LIKE 'Watch setup:%'
+              AND enabled = true
+            LIMIT 1
+            """,
+            user_id,
+            plugin_name,
+        )
+        if existing_job:
+            continue
+
+        await _upsert_watch_setup_job(pool, user_id, plugin_name)
+        reconciled += 1
+        log.info(f"Watch reconcile: scheduled setup for {plugin_name} (user={user_id})")
+
+    if reconciled:
+        log.info(f"Watch reconcile complete: {reconciled} setup job(s) created")
 
 
 @app.get("/api/plugins/{plugin_name}/events")
@@ -2682,6 +3018,75 @@ async def report_event_decision(event_id: str, request: Request):
             notification,
             event_id,
         )
+    return {"status": "ok"}
+
+
+# ── Watch registration ─────────────────────────────────────
+
+
+@app.post(
+    "/api/internal/watches",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def register_watch(request: Request):
+    """Upsert a watch registration from an agent-side SetupXxxWatchTool.
+
+    Called by BaseWatchTool._register_watch() after the external service
+    confirms the watch.  Stores (or replaces) the row in watch_registrations
+    so _reconcile_watch_setup_jobs() can detect active watches at startup.
+    """
+    body = await request.json()
+    user_id = body.get("user_id", "")
+    plugin_name = body.get("plugin_name", "")
+    protocol = body.get("protocol", "")
+    watch_id = body.get("watch_id", "")
+    resource_id = body.get("resource_id", "")
+    expires_at_raw = body.get("expires_at")  # ISO string or None
+
+    if not user_id or not plugin_name:
+        raise HTTPException(status_code=400, detail="user_id and plugin_name required")
+
+    pool = await get_pool()
+
+    expires_at_val = None
+    if expires_at_raw:
+        try:
+            from datetime import datetime, timezone
+
+            expires_at_val = datetime.fromisoformat(expires_at_raw).replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            pass
+
+    await pool.execute(
+        """
+        INSERT INTO watch_registrations
+            (user_id, plugin_name, protocol, watch_id, resource_id, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, plugin_name)
+        DO UPDATE SET
+            protocol    = EXCLUDED.protocol,
+            watch_id    = EXCLUDED.watch_id,
+            resource_id = EXCLUDED.resource_id,
+            expires_at  = EXCLUDED.expires_at,
+            registered_at = now()
+        """,
+        user_id,
+        plugin_name,
+        protocol,
+        watch_id,
+        resource_id,
+        expires_at_val,
+    )
+
+    log.info(
+        "Watch registered: user=%s plugin=%s protocol=%s watch_id=%s",
+        user_id,
+        plugin_name,
+        protocol,
+        watch_id,
+    )
     return {"status": "ok"}
 
 

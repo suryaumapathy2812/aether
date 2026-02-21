@@ -1099,24 +1099,65 @@ async def list_plugins_endpoint() -> JSONResponse:
 async def receive_plugin_event(request: Request) -> JSONResponse:
     """
     Receive a plugin event from the orchestrator webhook receiver.
-    Runs through EventProcessor → broadcasts to WS sidecar clients.
+
+    Two paths:
+    1. handle_tool present → run a background LLM session that calls the
+       plugin's handle_tool with the raw payload.  The LLM decides what to
+       do (notify, reply, ignore).  This is the path for Gmail, Calendar, etc.
+
+    2. No handle_tool → legacy EventProcessor path: normalise the event,
+       decide action, broadcast to WS sidecar clients.
     """
     body = await request.json()
 
+    plugin: str = body.get("plugin", "unknown")
+    handle_tool: str | None = body.get("handle_tool")
+    raw_payload: dict = body.get("payload", {})
+
+    # ── Path 1: plugin owns its own event handling via handle_tool ──────────
+    if handle_tool:
+        import json as _json
+
+        session_id = f"webhook-{plugin}"
+        payload_json = _json.dumps(raw_payload, ensure_ascii=False)
+        instruction = (
+            f"A real-time push notification arrived from {plugin}. "
+            f"Call the `{handle_tool}` tool now with the following payload "
+            f"and decide what action to take (notify the user, reply, or ignore).\n\n"
+            f"Payload:\n{payload_json}"
+        )
+
+        logger.info(
+            "Webhook event received (plugin=%s, handle_tool=%s) — running session %s",
+            plugin,
+            handle_tool,
+            session_id,
+        )
+
+        asyncio.create_task(
+            agent_core.run_session(
+                session_id=session_id,
+                user_message=instruction,
+                background=False,
+            )
+        )
+        return JSONResponse({"status": "accepted", "session_id": session_id})
+
+    # ── Path 2: legacy EventProcessor path ──────────────────────────────────
     event = PluginEvent(
         id=body.get("event_id", str(uuid.uuid4())),
-        plugin=body.get("plugin", "unknown"),
+        plugin=plugin,
         event_type=body.get("event_type", "unknown"),
         source_id=body.get("source_id", ""),
         timestamp=time.time(),
         summary=body.get("summary", ""),
-        content=body.get("payload", {}).get("content", ""),
-        sender=body.get("payload", {}).get("sender", {}),
-        urgency=body.get("payload", {}).get("urgency", "medium"),
-        category=body.get("payload", {}).get("category", ""),
-        requires_action=body.get("payload", {}).get("requires_action", False),
-        available_actions=body.get("payload", {}).get("available_actions", []),
-        metadata=body.get("payload", {}).get("metadata", {}),
+        content=raw_payload.get("content", ""),
+        sender=raw_payload.get("sender", {}),
+        urgency=raw_payload.get("urgency", "medium"),
+        category=raw_payload.get("category", ""),
+        requires_action=raw_payload.get("requires_action", False),
+        available_actions=raw_payload.get("available_actions", []),
+        metadata=raw_payload.get("metadata", {}),
     )
 
     decision = await event_processor.process(event)

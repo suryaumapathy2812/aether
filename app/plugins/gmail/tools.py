@@ -29,6 +29,7 @@ import httpx
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
 from aether.tools.refresh_oauth_token import RefreshOAuthTokenTool
+from aether.tools.base_watch_tool import BaseWatchTool
 
 logger = logging.getLogger(__name__)
 
@@ -1139,3 +1140,255 @@ class RefreshGmailTokenTool(RefreshOAuthTokenTool):
         "Call this when Gmail tools return authentication errors, "
         "or when instructed by the system to prevent token expiry."
     )
+
+
+import os as _os
+
+_GCP_PROJECT_ID = _os.getenv("GCP_PROJECT_ID", "")
+_PUBSUB_TOPIC = _os.getenv(
+    "GMAIL_PUBSUB_TOPIC", f"projects/{_GCP_PROJECT_ID}/topics/aether-gmail-events"
+)
+_ORCHESTRATOR_URL_W = _os.getenv("ORCHESTRATOR_URL", "")
+_AGENT_USER_ID_W = _os.getenv("AETHER_USER_ID", "")
+
+
+class SetupGmailWatchTool(BaseWatchTool):
+    """Register Gmail push notifications via Google Cloud Pub/Sub.
+
+    Called once by the cron system ~30 seconds after OAuth connect.
+    Calls gmail.users.watch() to tell Google to push new-message
+    notifications to our Pub/Sub topic.
+
+    After successful registration, schedules a renewal job 1 day before
+    the watch expires (watches expire after 7 days).
+    """
+
+    name = "setup_gmail_watch"
+    plugin_name = "gmail"
+    description = (
+        "Register Gmail push notifications via Google Cloud Pub/Sub. "
+        "Call this after connecting Gmail to start receiving real-time "
+        "email events. Called automatically by the system."
+    )
+    status_text = "Setting up Gmail push notifications..."
+
+    async def execute(self, **_) -> ToolResult:  # type: ignore[override]
+        token = self._get_token()
+        if not token:
+            return ToolResult.fail(
+                "Cannot set up Gmail watch: no access token available. "
+                "Ensure Gmail is connected and the token is valid."
+            )
+
+        if not _GCP_PROJECT_ID:
+            return ToolResult.fail(
+                "Cannot set up Gmail watch: GCP_PROJECT_ID environment variable not set. "
+                "Set it to your Google Cloud project ID."
+            )
+
+        topic_name = _PUBSUB_TOPIC
+        # Build the Pub/Sub push endpoint URL
+        # Format: /api/hooks/pubsub/gmail/{user_id}
+        if not _ORCHESTRATOR_URL_W or not _AGENT_USER_ID_W:
+            return ToolResult.fail(
+                "Cannot set up Gmail watch: ORCHESTRATOR_URL or AETHER_USER_ID not configured."
+            )
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/watch",
+                    headers=self._auth_headers(),
+                    json={
+                        "topicName": topic_name,
+                        "labelIds": ["INBOX"],
+                        "labelFilterBehavior": "INCLUDE",
+                    },
+                )
+                if resp.status_code == 403:
+                    return ToolResult.fail(
+                        "Gmail watch registration failed: permission denied. "
+                        "Ensure the Pub/Sub topic grants publish access to "
+                        "gmail-api-push@system.gserviceaccount.com"
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Gmail watch setup failed: %s — %s", e, e.response.text)
+            return ToolResult.fail(
+                f"Gmail watch setup failed (HTTP {e.response.status_code}): {e.response.text}"
+            )
+        except Exception as e:
+            logger.error("Gmail watch setup error: %s", e)
+            return ToolResult.fail(f"Gmail watch setup error: {e}")
+
+        history_id = data.get("historyId", "")
+        expiration_ms = int(data.get("expiration", 0))
+
+        # Persist watch registration to orchestrator DB
+        await self._register_watch(
+            watch_id=history_id,
+            resource_id=topic_name,
+            protocol="pubsub",
+            expires_at=expiration_ms,
+        )
+
+        # Schedule renewal 1 day before expiry
+        await self._schedule_renewal(
+            renew_tool="renew_gmail_watch",
+            expires_at_ms=expiration_ms,
+            renew_interval_s=518400,
+        )
+
+        logger.info(
+            "Gmail watch registered: historyId=%s expiration=%s",
+            history_id,
+            expiration_ms,
+        )
+        return ToolResult.success(
+            f"Gmail push notifications enabled. "
+            f"New emails will be delivered in real time via Pub/Sub. "
+            f"Watch expires in ~7 days and will be renewed automatically.",
+            history_id=history_id,
+        )
+
+
+class RenewGmailWatchTool(BaseWatchTool):
+    """Renew the Gmail Pub/Sub watch before it expires.
+
+    Called automatically by the cron system 1 day before the watch expires.
+    Calls gmail.users.watch() again — Gmail treats this as a renewal.
+    """
+
+    name = "renew_gmail_watch"
+    plugin_name = "gmail"
+    description = (
+        "Renew the Gmail push notification watch before it expires. "
+        "Called automatically by the system. Do not call manually."
+    )
+    status_text = "Renewing Gmail push notifications..."
+
+    async def execute(self, **_) -> ToolResult:  # type: ignore[override]
+        # Renewal is identical to setup — Gmail replaces the existing watch
+        setup = SetupGmailWatchTool()
+        object.__setattr__(setup, "_context", getattr(self, "_context", None))
+        return await setup.execute()
+
+
+class HandleGmailEventTool(BaseWatchTool):
+    """Process an inbound Gmail Pub/Sub push notification.
+
+    Called by the agent when a webhook event arrives from Gmail.
+    The raw Pub/Sub payload contains only emailAddress + historyId.
+    This tool fetches the actual email(s) from the Gmail API and
+    returns a summary for the LLM to decide what to do.
+
+    The LLM then decides: notify the user, draft a reply, archive, etc.
+    """
+
+    name = "handle_gmail_event"
+    plugin_name = "gmail"
+    description = (
+        "Process an inbound Gmail push notification. "
+        "Fetches the new email(s) from Gmail and returns their content "
+        "so you can decide whether to notify the user, reply, or ignore."
+    )
+    status_text = "Fetching new Gmail messages..."
+    parameters = [
+        ToolParam(
+            name="payload",
+            type="object",
+            description="Raw webhook payload from the Gmail Pub/Sub notification",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, payload: dict, **_) -> ToolResult:  # type: ignore[override]
+        token = self._get_token()
+        if not token:
+            return ToolResult.fail("Cannot handle Gmail event: no access token.")
+
+        # Extract historyId from Pub/Sub-decoded payload
+        # Gmail sends: {"emailAddress": "user@gmail.com", "historyId": "12345"}
+        history_id = str(payload.get("historyId", ""))
+        if not history_id:
+            return ToolResult.fail("Gmail event payload missing historyId.")
+
+        headers = self._auth_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                # Fetch history since this historyId to find new messages
+                hist_resp = await client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/history",
+                    headers=headers,
+                    params={
+                        "startHistoryId": history_id,
+                        "historyTypes": "messageAdded",
+                        "labelId": "INBOX",
+                    },
+                )
+                if hist_resp.status_code == 404:
+                    # historyId too old — just list recent unread instead
+                    return ToolResult.success(
+                        "Gmail notification received but history expired. "
+                        "Use list_unread to check for new messages."
+                    )
+                hist_resp.raise_for_status()
+                history = hist_resp.json()
+
+            # Collect new message IDs
+            message_ids: list[str] = []
+            for record in history.get("history", []):
+                for added in record.get("messagesAdded", []):
+                    msg_id = added.get("message", {}).get("id")
+                    if msg_id and msg_id not in message_ids:
+                        message_ids.append(msg_id)
+
+            if not message_ids:
+                return ToolResult.success(
+                    "Gmail notification received — no new inbox messages found."
+                )
+
+            # Fetch details for each new message (up to 5)
+            summaries: list[str] = []
+            async with httpx.AsyncClient(timeout=20) as client:
+                for msg_id in message_ids[:5]:
+                    msg_resp = await client.get(
+                        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
+                        headers=headers,
+                        params={
+                            "format": "metadata",
+                            "metadataHeaders": ["From", "Subject", "Date"],
+                        },
+                    )
+                    if msg_resp.status_code != 200:
+                        continue
+                    msg = msg_resp.json()
+                    hdrs = {
+                        h["name"]: h["value"]
+                        for h in msg.get("payload", {}).get("headers", [])
+                    }
+                    sender = hdrs.get("From", "Unknown sender")
+                    subject = hdrs.get("Subject", "(no subject)")
+                    summaries.append(f"From: {sender} | Subject: {subject}")
+
+            count = len(message_ids)
+            summary_text = "\n".join(summaries)
+            return ToolResult.success(
+                f"{count} new email{'s' if count > 1 else ''} in inbox:\n{summary_text}\n\n"
+                f"Use read_email with the message ID to read the full content, "
+                f"or list_unread to see all unread messages.",
+                message_count=count,
+                messages=summaries,
+            )
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Gmail event handling failed: %s", e)
+            return ToolResult.fail(
+                f"Failed to fetch Gmail messages (HTTP {e.response.status_code})"
+            )
+        except Exception as e:
+            logger.error("Gmail event handling error: %s", e)
+            return ToolResult.fail(f"Gmail event handling error: {e}")

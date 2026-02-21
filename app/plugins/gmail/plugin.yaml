@@ -20,8 +20,10 @@ auth:
       required: true
 
 webhook:
-  events:
-    - message.new
+  protocol: pubsub
+  setup_tool: setup_gmail_watch
+  handle_tool: handle_gmail_event
+  renew_interval: 518400
 
 tools:
   - class: ListUnreadTool
@@ -40,3 +42,6 @@ tools:
   - class: AddLabelTool
   - class: RemoveLabelTool
   - class: RefreshGmailTokenTool
+  - class: SetupGmailWatchTool
+  - class: RenewGmailWatchTool
+  - class: HandleGmailEventTool

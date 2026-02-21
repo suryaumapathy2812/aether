@@ -213,4 +213,25 @@ async def bootstrap_schema():
             CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due
                 ON scheduled_jobs(run_at)
                 WHERE enabled = true;
+
+            -- ── Watch registrations ──
+            -- Tracks active push-notification watches registered with external
+            -- services (Gmail Pub/Sub, Google Calendar direct push, etc.).
+            -- One row per (user, plugin). Renewed before expiry via cron.
+
+            CREATE TABLE IF NOT EXISTS watch_registrations (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+                plugin_name TEXT NOT NULL,
+                protocol    TEXT NOT NULL,          -- 'pubsub' | 'http'
+                watch_id    TEXT,                   -- service-assigned watch/channel ID
+                resource_id TEXT,                   -- Google resource ID (for stop/renew)
+                expires_at  TIMESTAMPTZ,            -- when the watch expires
+                registered_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(user_id, plugin_name)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_watch_registrations_expiry
+                ON watch_registrations(expires_at)
+                WHERE expires_at IS NOT NULL;
         """)
