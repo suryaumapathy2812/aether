@@ -28,6 +28,7 @@ from typing import Optional
 import httpx
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
+from aether.tools.refresh_oauth_token import RefreshOAuthTokenTool
 
 logger = logging.getLogger(__name__)
 
@@ -1122,3 +1123,19 @@ class RemoveLabelTool(_GmailTool):
         except Exception as e:
             logger.error(f"Error removing label: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")
+
+
+class RefreshGmailTokenTool(RefreshOAuthTokenTool):
+    """Refresh the Gmail OAuth access token before it expires.
+
+    Called automatically by the cron system every 50 minutes.
+    Can also be called manually if Gmail tools start returning auth errors.
+    """
+
+    name = "refresh_gmail_token"
+    plugin_name = "gmail"
+    description = (
+        "Refresh the Gmail OAuth access token. "
+        "Call this when Gmail tools return authentication errors, "
+        "or when instructed by the system to prevent token expiry."
+    )

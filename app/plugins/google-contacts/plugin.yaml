@@ -6,7 +6,10 @@ version: 0.2.0
 auth:
   type: oauth2
   provider: google
+  token_refresh_interval: 3000
+  refresh_tool: refresh_google_contacts_token
 
 tools:
   - class: SearchContactsTool
   - class: GetContactTool
+  - class: RefreshGoogleContactsTokenTool

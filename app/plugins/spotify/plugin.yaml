@@ -6,6 +6,8 @@ version: 0.1.0
 auth:
   type: oauth2
   provider: spotify
+  token_refresh_interval: 3000
+  refresh_tool: refresh_spotify_token
   scopes:
     - user-read-playback-state
     - user-modify-playback-state
@@ -26,3 +28,4 @@ tools:
   - class: SearchSpotifyTool
   - class: QueueTrackTool
   - class: RecentTracksTool
+  - class: RefreshSpotifyTokenTool

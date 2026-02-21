@@ -20,6 +20,7 @@ import logging
 import httpx
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
+from aether.tools.refresh_oauth_token import RefreshOAuthTokenTool
 
 logger = logging.getLogger(__name__)
 
@@ -1559,3 +1560,19 @@ class UpdateDocumentTool(_DriveTool):
         except Exception as e:
             logger.error(f"Error updating document: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")
+
+
+class RefreshGoogleDriveTokenTool(RefreshOAuthTokenTool):
+    """Refresh the Google Drive OAuth access token before it expires.
+
+    Called automatically by the cron system every 50 minutes.
+    Can also be called manually if Drive tools start returning auth errors.
+    """
+
+    name = "refresh_google_drive_token"
+    plugin_name = "google-drive"
+    description = (
+        "Refresh the Google Drive OAuth access token. "
+        "Call this when Drive tools return authentication errors, "
+        "or when instructed by the system to prevent token expiry."
+    )

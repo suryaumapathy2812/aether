@@ -544,7 +544,8 @@ class TestCronRunner:
 
 class TestUpsertTokenRefreshJob:
     @pytest.mark.asyncio
-    async def test_inserts_recurring_job(self, mock_pool):
+    async def test_inserts_recurring_job_for_known_plugin(self, mock_pool):
+        """google-drive is in AVAILABLE_PLUGINS with token_refresh_interval."""
         mock_pool.execute = AsyncMock(return_value=None)
 
         with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
@@ -557,12 +558,30 @@ class TestUpsertTokenRefreshJob:
                 provider_name="google",
             )
 
-        # Should have called execute twice: DELETE old + INSERT new
+        # DELETE old + INSERT new = 2 execute calls
         assert mock_pool.execute.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_instruction_mentions_plugin_and_provider(self, mock_pool):
+    async def test_skips_plugin_without_refresh_config(self, mock_pool):
+        """Plugins without token_refresh_interval should be silently skipped."""
         mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _upsert_token_refresh_job
+
+            await _upsert_token_refresh_job(
+                pool=mock_pool,
+                user_id="user-1",
+                plugin_name="brave-search",  # api_key plugin — no refresh
+                provider_name="",
+            )
+
+        # No DB writes — plugin doesn't need refresh
+        mock_pool.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_instruction_embeds_refresh_tool_name(self, mock_pool):
+        """The instruction must name the exact tool the LLM should call."""
         captured_sql = []
 
         async def capture_execute(sql, *args):
@@ -580,16 +599,39 @@ class TestUpsertTokenRefreshJob:
                 provider_name="google",
             )
 
-        # The INSERT call (second execute) should have the instruction as an arg
-        insert_args = captured_sql[1][1]  # (sql, args) → args tuple
+        insert_args = captured_sql[1][1]
         instruction = insert_args[3]  # 4th positional arg = instruction
         assert "gmail" in instruction
-        assert "google" in instruction
+        assert "refresh_gmail_token" in instruction  # tool name from AVAILABLE_PLUGINS
+
+    @pytest.mark.asyncio
+    async def test_uses_interval_from_available_plugins(self, mock_pool):
+        """interval_s in the INSERT must come from AVAILABLE_PLUGINS, not a hardcoded constant."""
+        captured_sql = []
+
+        async def capture_execute(sql, *args):
+            captured_sql.append((sql, args))
+
+        mock_pool.execute = AsyncMock(side_effect=capture_execute)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _upsert_token_refresh_job, AVAILABLE_PLUGINS
+
+            await _upsert_token_refresh_job(
+                pool=mock_pool,
+                user_id="user-1",
+                plugin_name="spotify",
+                provider_name="spotify",
+            )
+
+        insert_args = captured_sql[1][1]
+        interval_s = insert_args[4]  # 5th positional arg = interval_s
+        expected = AVAILABLE_PLUGINS["spotify"]["token_refresh_interval"]
+        assert interval_s == expected
 
     @pytest.mark.asyncio
     async def test_deletes_existing_job_before_inserting(self, mock_pool):
-        """Re-connecting a plugin should reset the schedule cleanly."""
-        mock_pool.execute = AsyncMock(return_value=None)
+        """Re-connecting a plugin must reset the schedule (idempotent)."""
         call_sqls = []
 
         async def capture(sql, *args):
@@ -609,3 +651,97 @@ class TestUpsertTokenRefreshJob:
 
         assert "DELETE" in call_sqls[0].upper()
         assert "INSERT" in call_sqls[1].upper()
+
+
+# ── _reconcile_token_refresh_jobs ─────────────────────────
+
+
+class TestReconcileTokenRefreshJobs:
+    @pytest.mark.asyncio
+    async def test_creates_missing_job_for_connected_plugin(self, mock_pool):
+        """A connected OAuth plugin with no active job should get one created."""
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                make_record(user_id="user-1", plugin_name="google-drive"),
+            ]
+        )
+        mock_pool.fetchval = AsyncMock(return_value=None)  # no existing job
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _reconcile_token_refresh_jobs
+
+            await _reconcile_token_refresh_jobs(mock_pool)
+
+        # execute called: DELETE + INSERT for the missing job
+        assert mock_pool.execute.await_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_skips_plugin_that_already_has_job(self, mock_pool):
+        """If an active job already exists, no new job should be created."""
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                make_record(user_id="user-1", plugin_name="google-drive"),
+            ]
+        )
+        mock_pool.fetchval = AsyncMock(return_value="existing-job-id")  # job exists
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _reconcile_token_refresh_jobs
+
+            await _reconcile_token_refresh_jobs(mock_pool)
+
+        mock_pool.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_plugin_without_refresh_config(self, mock_pool):
+        """Plugins not in AVAILABLE_PLUGINS or without token_refresh_interval are skipped."""
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                make_record(user_id="user-1", plugin_name="brave-search"),
+            ]
+        )
+        mock_pool.fetchval = AsyncMock(return_value=None)
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _reconcile_token_refresh_jobs
+
+            await _reconcile_token_refresh_jobs(mock_pool)
+
+        mock_pool.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_handles_no_connected_plugins(self, mock_pool):
+        """Empty result set — no jobs to create, no errors."""
+        mock_pool.fetch = AsyncMock(return_value=[])
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _reconcile_token_refresh_jobs
+
+            await _reconcile_token_refresh_jobs(mock_pool)
+
+        mock_pool.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reconciles_multiple_plugins(self, mock_pool):
+        """Multiple connected plugins each missing a job — all get created."""
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                make_record(user_id="user-1", plugin_name="google-drive"),
+                make_record(user_id="user-1", plugin_name="gmail"),
+                make_record(user_id="user-1", plugin_name="spotify"),
+            ]
+        )
+        mock_pool.fetchval = AsyncMock(return_value=None)  # none have existing jobs
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("src.main.get_pool", AsyncMock(return_value=mock_pool)):
+            from src.main import _reconcile_token_refresh_jobs
+
+            await _reconcile_token_refresh_jobs(mock_pool)
+
+        # 3 plugins × 2 execute calls (DELETE + INSERT) = 6
+        assert mock_pool.execute.await_count == 6

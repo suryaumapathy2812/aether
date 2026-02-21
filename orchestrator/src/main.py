@@ -125,6 +125,7 @@ async def startup():
 
     pool = await get_pool()
     await reconcile_containers(pool)
+    await _reconcile_token_refresh_jobs(pool)
     asyncio.create_task(_idle_reaper())
     asyncio.create_task(_deferred_flusher())
     asyncio.create_task(_cron_runner())
@@ -1242,6 +1243,11 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/userinfo.email",
         ],
         "config_fields": [],
+        # Token refresh — plugin ships a refresh_token tool; cron delivers the
+        # instruction to the LLM which calls the tool. 3000 s = 50 min (Google
+        # access tokens expire at 60 min).
+        "token_refresh_interval": 3000,
+        "refresh_tool": "refresh_gmail_token",
     },
     "google-calendar": {
         "name": "google-calendar",
@@ -1255,6 +1261,8 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/userinfo.email",
         ],
         "config_fields": [],
+        "token_refresh_interval": 3000,
+        "refresh_tool": "refresh_google_calendar_token",
     },
     "google-contacts": {
         "name": "google-contacts",
@@ -1267,6 +1275,8 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/userinfo.email",
         ],
         "config_fields": [],
+        "token_refresh_interval": 3000,
+        "refresh_tool": "refresh_google_contacts_token",
     },
     "google-drive": {
         "name": "google-drive",
@@ -1282,6 +1292,8 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/userinfo.email",
         ],
         "config_fields": [],
+        "token_refresh_interval": 3000,
+        "refresh_tool": "refresh_google_drive_token",
     },
     "spotify": {
         "name": "spotify",
@@ -1305,6 +1317,9 @@ AVAILABLE_PLUGINS = {
                 "required": True,
             },
         ],
+        # Spotify access tokens expire at 60 min; refresh at 50 min.
+        "token_refresh_interval": 3000,
+        "refresh_tool": "refresh_spotify_token",
     },
     "weather": {
         "name": "weather",
@@ -2284,18 +2299,30 @@ async def oauth_callback(
     return RedirectResponse(f"/plugins/{plugin_name}?connected=true")
 
 
-_TOKEN_REFRESH_INTERVAL_S = int(os.getenv("TOKEN_REFRESH_INTERVAL_S", "3000"))  # 50 min
-
-
 async def _upsert_token_refresh_job(
     pool, user_id: str, plugin_name: str, provider_name: str
 ) -> None:
     """Insert (or replace) a recurring cron job that tells the LLM to refresh
     the OAuth token for *plugin_name* before it expires.
 
+    The interval and refresh tool name are read from AVAILABLE_PLUGINS so the
+    orchestrator never hardcodes plugin-specific logic — adding a new plugin
+    only requires updating AVAILABLE_PLUGINS and shipping a refresh tool.
+
     One job per (user, plugin) — we delete any existing job first so
     re-connecting a plugin resets the schedule cleanly.
     """
+    meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+    interval_s = meta.get("token_refresh_interval")
+    refresh_tool = meta.get("refresh_tool")
+
+    if not interval_s or not refresh_tool:
+        log.debug(
+            f"Plugin {plugin_name} has no token_refresh_interval or refresh_tool — skipping cron"
+        )
+        return
+
+    # Remove any existing refresh job for this plugin (idempotent re-connect)
     await pool.execute(
         "DELETE FROM scheduled_jobs WHERE user_id = $1 AND plugin = $2 "
         "AND instruction LIKE 'OAuth token refresh:%'",
@@ -2306,8 +2333,8 @@ async def _upsert_token_refresh_job(
     job_id = uuid.uuid4().hex
     instruction = (
         f"OAuth token refresh: the {plugin_name} plugin's {provider_name} access token "
-        f"is about to expire. Call the refresh token tool for {plugin_name} now to obtain "
-        f"a new access token and keep the plugin working without interruption."
+        f"is about to expire. Call the `{refresh_tool}` tool now to obtain a new access "
+        f"token and keep the plugin working without interruption."
     )
     await pool.execute(
         """
@@ -2318,12 +2345,78 @@ async def _upsert_token_refresh_job(
         user_id,
         plugin_name,
         instruction,
-        _TOKEN_REFRESH_INTERVAL_S,
+        interval_s,
     )
     log.info(
         f"Token refresh job scheduled for {plugin_name} (user={user_id}, "
-        f"interval={_TOKEN_REFRESH_INTERVAL_S}s)"
+        f"tool={refresh_tool}, interval={interval_s}s)"
     )
+
+
+async def _reconcile_token_refresh_jobs(pool) -> None:
+    """Ensure every connected OAuth plugin has an active token refresh job.
+
+    Runs once at orchestrator startup. Catches plugins that were connected
+    before the cron system existed, or whose jobs were lost (DB wipe, migration).
+
+    For each enabled plugin that declares token_refresh_interval in
+    AVAILABLE_PLUGINS and has a stored refresh_token, we insert a scheduled_job
+    if one doesn't already exist.
+    """
+    # Find all enabled OAuth plugins that have a refresh_token stored
+    rows = await pool.fetch(
+        """
+        SELECT p.user_id, p.name AS plugin_name
+        FROM plugins p
+        JOIN plugin_configs pc ON pc.plugin_id = p.id
+        WHERE p.enabled = true
+          AND pc.key = 'refresh_token'
+          AND pc.value IS NOT NULL
+        """
+    )
+
+    if not rows:
+        log.info("Cron reconcile: no connected OAuth plugins found")
+        return
+
+    reconciled = 0
+    for row in rows:
+        user_id = row["user_id"]
+        plugin_name = row["plugin_name"]
+        meta = AVAILABLE_PLUGINS.get(plugin_name, {})
+
+        if not meta.get("token_refresh_interval") or not meta.get("refresh_tool"):
+            continue  # plugin doesn't declare refresh needs
+
+        # Check if an active refresh job already exists
+        existing = await pool.fetchval(
+            """
+            SELECT id FROM scheduled_jobs
+            WHERE user_id = $1 AND plugin = $2
+              AND instruction LIKE 'OAuth token refresh:%'
+              AND enabled = true
+            LIMIT 1
+            """,
+            user_id,
+            plugin_name,
+        )
+        if existing:
+            continue  # already scheduled — nothing to do
+
+        # Create the missing job
+        provider_name = meta.get("auth_provider", plugin_name)
+        await _upsert_token_refresh_job(
+            pool=pool,
+            user_id=user_id,
+            plugin_name=plugin_name,
+            provider_name=provider_name,
+        )
+        reconciled += 1
+        log.info(
+            f"Cron reconcile: created missing refresh job for {plugin_name} (user={user_id})"
+        )
+
+    log.info(f"Cron reconcile complete: {reconciled} job(s) created")
 
 
 async def _signal_agent_plugin_reload(user_id: str) -> None:

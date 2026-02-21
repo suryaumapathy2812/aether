@@ -6,6 +6,8 @@ version: 0.3.0
 auth:
   type: oauth2
   provider: google
+  token_refresh_interval: 3000
+  refresh_tool: refresh_google_drive_token
 
 tools:
   - class: SearchDriveTool
@@ -26,3 +28,4 @@ tools:
   - class: CopyFileTool
   - class: CreateFolderTool
   - class: UpdateDocumentTool
+  - class: RefreshGoogleDriveTokenTool

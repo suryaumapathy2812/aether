@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
+from aether.tools.refresh_oauth_token import RefreshOAuthTokenTool
 
 logger = logging.getLogger(__name__)
 
@@ -332,3 +333,19 @@ class GetEventTool(_CalendarTool):
         except Exception as e:
             logger.error(f"Error fetching event: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")
+
+
+class RefreshGoogleCalendarTokenTool(RefreshOAuthTokenTool):
+    """Refresh the Google Calendar OAuth access token before it expires.
+
+    Called automatically by the cron system every 50 minutes.
+    Can also be called manually if Calendar tools start returning auth errors.
+    """
+
+    name = "refresh_google_calendar_token"
+    plugin_name = "google-calendar"
+    description = (
+        "Refresh the Google Calendar OAuth access token. "
+        "Call this when Calendar tools return authentication errors, "
+        "or when instructed by the system to prevent token expiry."
+    )
