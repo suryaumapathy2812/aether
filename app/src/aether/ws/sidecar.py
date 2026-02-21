@@ -11,10 +11,16 @@ Client messages:
 Server pushes:
 - notification: Plugin event surfaced by NotificationService
 - status: Agent status updates
+- task_completed: Sub-agent task finished (from EventBus)
+
+Session-level streaming (text chunks, tool calls) is SSE-only via
+/v1/sessions/{id}/events. The WS sidecar handles system-level
+notifications, not per-session event streams.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -22,6 +28,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
     from aether.agent import AgentCore
+    from aether.kernel.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +37,18 @@ class WSSidecar:
     """
     Push-only WebSocket for dashboard notifications.
 
-    Each connected WebSocket subscribes to AgentCore notifications.
-    On disconnect, the subscription is automatically cleaned up.
+    Each connected WebSocket subscribes to AgentCore notifications
+    and EventBus task.completed events. On disconnect, subscriptions
+    are automatically cleaned up.
     """
 
-    def __init__(self, agent: "AgentCore") -> None:
+    def __init__(
+        self,
+        agent: "AgentCore",
+        event_bus: "EventBus | None" = None,
+    ) -> None:
         self.agent = agent
+        self._event_bus = event_bus
         self._connections: list[WebSocket] = []
 
     async def handle_connection(self, ws: WebSocket) -> None:
@@ -48,6 +61,16 @@ class WSSidecar:
             await self._send(ws, "notification", notif)
 
         self.agent.subscribe_notifications(on_notification)
+
+        # Subscribe to EventBus task.completed events
+        event_queue = None
+        event_listener_task = None
+        if self._event_bus is not None:
+            event_queue = self._event_bus.subscribe("task.completed")
+            event_listener_task = asyncio.create_task(
+                self._forward_events(ws, event_queue)
+            )
+
         logger.info("WS sidecar connected (%d total)", len(self._connections))
 
         try:
@@ -71,9 +94,32 @@ class WSSidecar:
             if ws in self._connections:
                 self._connections.remove(ws)
             self.agent.unsubscribe_notifications(on_notification)
+
+            # Clean up EventBus subscription
+            if event_listener_task is not None:
+                event_listener_task.cancel()
+                try:
+                    await event_listener_task
+                except asyncio.CancelledError:
+                    pass
+            if self._event_bus is not None and event_queue is not None:
+                self._event_bus.unsubscribe("task.completed", event_queue)
+
             logger.info(
                 "WS sidecar disconnected (%d remaining)", len(self._connections)
             )
+
+    async def _forward_events(self, ws: WebSocket, queue: asyncio.Queue) -> None:
+        """Forward EventBus events to a WebSocket connection."""
+        try:
+            assert self._event_bus is not None
+            async for event in self._event_bus.listen(queue):
+                try:
+                    await self._send(ws, "task_completed", event)
+                except Exception:
+                    break  # WebSocket closed
+        except asyncio.CancelledError:
+            pass
 
     async def push(self, event_type: str, data: dict) -> None:
         """Push event to all connected sidecar clients."""

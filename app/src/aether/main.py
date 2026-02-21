@@ -58,6 +58,12 @@ from aether.llm.core import LLMCore
 from aether.llm.context_builder import ContextBuilder
 from aether.tools.orchestrator import ToolOrchestrator
 from aether.http.openai_compat import create_router as create_openai_router
+from aether.http.sessions import create_session_router
+from aether.kernel.event_bus import EventBus
+from aether.session.store import SessionStore
+from aether.agents.manager import SubAgentManager
+from aether.tools.spawn_task import SpawnTaskTool
+from aether.tools.check_task import CheckTaskTool
 from aether.ws.sidecar import WSSidecar
 
 # Optional: WebRTC voice transport (requires aiortc)
@@ -103,6 +109,8 @@ if STATIC_DIR.exists():
 
 # --- Shared state (created once, shared across connections) ---
 memory_store = MemoryStore()
+session_store = SessionStore()
+event_bus = EventBus()
 stt_provider = get_stt_provider()
 llm_provider = get_llm_provider()
 tts_provider = get_tts_provider()
@@ -119,8 +127,8 @@ tool_registry.register(WebSearchTool())
 tool_registry.register(SaveMemoryTool(memory_store=memory_store))
 
 # --- Background Task Runner ---
-task_runner = TaskRunner(provider=llm_provider, tool_registry=tool_registry)
-tool_registry.register(RunTaskTool(task_runner))
+# TaskRunner is created after SubAgentManager (below) since it now delegates to it.
+# The RunTaskTool registration is also deferred.
 
 # --- Skill Loader ---
 APP_ROOT = Path(__file__).parent.parent.parent
@@ -213,14 +221,43 @@ agent_core = AgentCore(
     tool_registry=tool_registry,
     skill_loader=skill_loader,
     plugin_context=plugin_context_store,
+    session_store=session_store,
+    event_bus=event_bus,
+    llm_core=llm_core,
+    context_builder=context_builder,
 )
+
+# --- Sub-Agent Manager ---
+sub_agent_manager = SubAgentManager(
+    session_store=session_store,
+    llm_core=llm_core,
+    context_builder=context_builder,
+    event_bus=event_bus,
+)
+
+# --- Background Task Runner (delegates to SubAgentManager) ---
+task_runner = TaskRunner(sub_agent_manager=sub_agent_manager)
+tool_registry.register(RunTaskTool(task_runner))
+
+# Register spawn_task and check_task tools
+tool_registry.register(SpawnTaskTool(sub_agent_manager))
+tool_registry.register(CheckTaskTool(sub_agent_manager))
 
 # --- Mount OpenAI-compatible HTTP API ---
 openai_router = create_openai_router(agent_core)
 app.include_router(openai_router)
 
+# --- Mount Session API ---
+session_router = create_session_router(
+    agent=agent_core,
+    session_store=session_store,
+    event_bus=event_bus,
+    sub_agent_manager=sub_agent_manager,
+)
+app.include_router(session_router)
+
 # --- WS Notification Sidecar ---
-ws_sidecar = WSSidecar(agent=agent_core)
+ws_sidecar = WSSidecar(agent=agent_core, event_bus=event_bus)
 
 # --- WebRTC Voice Transport (optional) ---
 webrtc_transport = None
@@ -606,10 +643,11 @@ async def startup() -> None:
     # Fetch plugin configs
     await _fetch_plugin_configs()
 
-    # Start providers
+    # Start providers and stores
     await llm_provider.start()
     await tts_provider.start()
     await memory_store.start()
+    await session_store.start()
 
     # Start AgentCore (starts the scheduler worker pools)
     await agent_core.start()
@@ -641,9 +679,10 @@ async def shutdown() -> None:
     if webrtc_transport:
         await webrtc_transport.close_all()
 
-    # Stop providers
+    # Stop providers and stores
     await llm_provider.stop()
     await tts_provider.stop()
+    await session_store.stop()
 
 
 # ── WebSocket endpoint — notification sidecar ──────────────────

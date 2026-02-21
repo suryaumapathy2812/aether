@@ -6,6 +6,7 @@ jobs of various kinds (reply_text, reply_voice, memory_*, notification_*, etc.).
 
 Architecture:
   AgentCore (facade) → KernelScheduler (2P+2E workers) → ServiceRouter → Services
+  EventBus provides decoupled pub/sub for session events and task completion.
 """
 
 from aether.kernel.contracts import (
@@ -17,6 +18,7 @@ from aether.kernel.contracts import (
     KernelRequest,
     KernelResult,
 )
+from aether.kernel.event_bus import EventBus
 from aether.kernel.scheduler import KernelScheduler, ServiceRouter
 
 __all__ = [
@@ -28,6 +30,8 @@ __all__ = [
     "JobModality",
     "JobPriority",
     "JobStatus",
+    # Event Bus
+    "EventBus",
     # Scheduler
     "KernelScheduler",
     "ServiceRouter",

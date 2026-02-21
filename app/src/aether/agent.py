@@ -12,14 +12,20 @@ All job scheduling, routing, and execution is handled by the scheduler
 and services underneath — AgentCore just submits jobs and streams results.
 
 Single-user, single-container: no auth, no multi-user isolation.
+
+Session history is persisted to SQLite via SessionStore. The in-memory
+dict fallback is kept only for backward compatibility when SessionStore
+is not provided.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import time
+import uuid
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
 from aether.kernel.contracts import (
@@ -31,10 +37,14 @@ from aether.kernel.contracts import (
 )
 
 if TYPE_CHECKING:
+    from aether.kernel.event_bus import EventBus
     from aether.kernel.scheduler import KernelScheduler
+    from aether.llm.context_builder import ContextBuilder
+    from aether.llm.core import LLMCore
     from aether.memory.store import MemoryStore
     from aether.plugins.context import PluginContextStore
     from aether.providers.base import LLMProvider
+    from aether.session.store import SessionStore
     from aether.services.notification_service import NotificationDecision
     from aether.skills.loader import SkillLoader
     from aether.tools.registry import ToolRegistry
@@ -59,6 +69,10 @@ class AgentCore:
         tool_registry: "ToolRegistry",
         skill_loader: "SkillLoader",
         plugin_context: "PluginContextStore",
+        session_store: "SessionStore | None" = None,
+        event_bus: "EventBus | None" = None,
+        llm_core: "LLMCore | None" = None,
+        context_builder: "ContextBuilder | None" = None,
     ) -> None:
         self._scheduler = scheduler
         self._memory_store = memory_store
@@ -66,8 +80,13 @@ class AgentCore:
         self._tool_registry = tool_registry
         self._skill_loader = skill_loader
         self._plugin_context = plugin_context
+        self._session_store = session_store
+        self._event_bus = event_bus
+        self._llm_core = llm_core
+        self._context_builder = context_builder
 
-        # Conversation history per session (in-memory, single user)
+        # In-memory fallback when SessionStore is not provided.
+        # When session_store is set, this dict is unused.
         self._sessions: dict[str, list[dict]] = {}
 
         # Notification subscribers (WS sidecar connections)
@@ -82,15 +101,43 @@ class AgentCore:
         # Briefing queue for temporal greetings (notifications/weather)
         self._briefing_items: list[dict[str, Any]] = []
 
+        # Active session loop tasks (for background/autonomous work)
+        self._session_tasks: dict[str, asyncio.Task] = {}
+
+        # EventBus subscription task for task.completed events
+        self._task_completed_listener: asyncio.Task | None = None
+        self._task_completed_queue: asyncio.Queue | None = None
+
     # ─── Lifecycle ───────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start the scheduler (worker pools)."""
+        """Start the scheduler (worker pools) and event subscriptions."""
         await self._scheduler.start()
+
+        # Subscribe to task.completed events from SubAgentManager
+        if self._event_bus is not None:
+            self._task_completed_queue = self._event_bus.subscribe("task.completed")
+            self._task_completed_listener = asyncio.create_task(
+                self._listen_task_completed()
+            )
+
         logger.info("AgentCore started")
 
     async def stop(self) -> None:
         """Stop the scheduler and clean up."""
+        # Cancel task.completed listener
+        if self._task_completed_listener is not None:
+            self._task_completed_listener.cancel()
+            try:
+                await self._task_completed_listener
+            except asyncio.CancelledError:
+                pass
+            self._task_completed_listener = None
+
+        if self._event_bus is not None and self._task_completed_queue is not None:
+            self._event_bus.unsubscribe("task.completed", self._task_completed_queue)
+            self._task_completed_queue = None
+
         await self._scheduler.stop()
         logger.info("AgentCore stopped")
 
@@ -114,7 +161,7 @@ class AgentCore:
         background memory extraction on E-Cores.
         """
         if history is None:
-            history = self._sessions.get(session_id, [])
+            history = await self._get_history(session_id)
 
         request = KernelRequest(
             kind=JobKind.REPLY_TEXT.value,
@@ -140,10 +187,7 @@ class AgentCore:
 
         # Update session history
         full_response = "".join(collected_text).strip()
-        session_history = self._sessions.setdefault(session_id, [])
-        session_history.append({"role": "user", "content": text})
-        if full_response:
-            session_history.append({"role": "assistant", "content": full_response})
+        await self._save_turn(session_id, text, full_response)
 
         # Fire background memory extraction on E-Cores
         await self._submit_memory_extraction(text, full_response, session_id)
@@ -159,7 +203,7 @@ class AgentCore:
         The scheduler routes this to ReplyService with mode="voice",
         which adjusts context (shorter system prompt, voice-friendly output).
         """
-        history = self._sessions.get(session_id, [])
+        history = await self._get_history(session_id)
 
         request = KernelRequest(
             kind=JobKind.REPLY_VOICE.value,
@@ -184,13 +228,163 @@ class AgentCore:
 
         # Update session history
         full_response = "".join(collected_text).strip()
-        session_history = self._sessions.setdefault(session_id, [])
-        session_history.append({"role": "user", "content": text})
-        if full_response:
-            session_history.append({"role": "assistant", "content": full_response})
+        await self._save_turn(session_id, text, full_response)
 
         # Fire background memory extraction on E-Cores
         await self._submit_memory_extraction(text, full_response, session_id)
+
+    # ─── Session History Helpers ─────────────────────────────────
+
+    async def _get_history(self, session_id: str) -> list[dict]:
+        """Get conversation history — from SessionStore if available, else in-memory."""
+        if self._session_store is not None:
+            await self._session_store.ensure_session(session_id)
+            return await self._session_store.get_messages_as_openai(session_id)
+        return self._sessions.get(session_id, [])
+
+    async def _save_turn(
+        self, session_id: str, user_text: str, assistant_text: str
+    ) -> None:
+        """Persist a user+assistant turn — to SessionStore if available, else in-memory."""
+        if self._session_store is not None:
+            await self._session_store.ensure_session(session_id)
+            await self._session_store.append_user_message(session_id, user_text)
+            if assistant_text:
+                await self._session_store.append_assistant_message(
+                    session_id, assistant_text
+                )
+        else:
+            session_history = self._sessions.setdefault(session_id, [])
+            session_history.append({"role": "user", "content": user_text})
+            if assistant_text:
+                session_history.append({"role": "assistant", "content": assistant_text})
+
+    # ─── Session Loop (Autonomous Agent) ───────────────────────────
+
+    async def run_session(
+        self,
+        session_id: str,
+        user_message: str,
+        enabled_plugins: list[str] | None = None,
+        background: bool = False,
+    ) -> str | None:
+        """
+        Run the autonomous agent loop for a session.
+
+        This is the entry point for Scenario 2 (background tasks) and
+        Scenario 3 (long-running autonomous work). It creates a SessionLoop
+        and runs it until the agent decides it's done.
+
+        Args:
+            session_id: Session to run (created if needed)
+            user_message: The user's request to process
+            enabled_plugins: Plugin names for context building
+            background: If True, run as a background task and return immediately.
+                        The caller can monitor progress via EventBus.
+
+        Returns:
+            The final assistant text if run synchronously (background=False).
+            The session_id if run as a background task (background=True).
+        """
+        if (
+            self._session_store is None
+            or self._llm_core is None
+            or self._context_builder is None
+        ):
+            raise RuntimeError(
+                "run_session requires session_store, llm_core, and context_builder"
+            )
+
+        from aether.session.loop import SessionLoop
+
+        # Ensure session exists and add the user message
+        await self._session_store.ensure_session(session_id)
+        await self._session_store.append_user_message(session_id, user_message)
+
+        loop = SessionLoop(
+            session_store=self._session_store,
+            llm_core=self._llm_core,
+            context_builder=self._context_builder,
+            event_bus=self._event_bus,
+        )
+
+        if enabled_plugins is None:
+            enabled_plugins = self._plugin_context.loaded_plugins()
+
+        if background:
+            # Run as a background task — return immediately
+            abort = asyncio.Event()
+            task = asyncio.create_task(
+                loop.run(session_id, abort=abort, enabled_plugins=enabled_plugins)
+            )
+            self._session_tasks[session_id] = task
+
+            # Clean up when done
+            def _on_done(t: asyncio.Task) -> None:
+                self._session_tasks.pop(session_id, None)
+
+            task.add_done_callback(_on_done)
+
+            logger.info("Session %s started in background", session_id)
+            return session_id
+        else:
+            # Run synchronously — block until done
+            return await loop.run(session_id, enabled_plugins=enabled_plugins)
+
+    async def cancel_session_loop(self, session_id: str) -> bool:
+        """Cancel a running background session loop.
+
+        Returns True if a task was found and canceled, False otherwise.
+        """
+        task = self._session_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+            logger.info("Session loop %s canceled", session_id)
+            return True
+        return False
+
+    def get_active_session_loops(self) -> list[str]:
+        """Return session IDs with active background loops."""
+        return [sid for sid, task in self._session_tasks.items() if not task.done()]
+
+    # ─── Task Completion Listener ────────────────────────────────
+
+    async def _listen_task_completed(self) -> None:
+        """
+        Listen for task.completed events from SubAgentManager and push
+        notifications to WS sidecar clients.
+
+        Runs as a background task for the lifetime of AgentCore.
+        """
+        if self._event_bus is None or self._task_completed_queue is None:
+            return
+
+        try:
+            async for event in self._event_bus.listen(self._task_completed_queue):
+                session_id = event.get("session_id", "unknown")
+                logger.info("Task completed notification: %s", session_id)
+
+                # Get the result text for the notification
+                result_text = None
+                if self._session_store is not None:
+                    result_text = await self._session_store.get_last_assistant_text(
+                        session_id
+                    )
+
+                # Build notification
+                preview = (result_text or "")[:200].strip()
+                notification = {
+                    "type": "task_completed",
+                    "session_id": session_id,
+                    "preview": preview or "(no output)",
+                }
+
+                await self.broadcast_notification(notification)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Task completed listener failed: %s", e, exc_info=True)
 
     # ─── Background Jobs ─────────────────────────────────────────
 
@@ -260,7 +454,7 @@ class AgentCore:
             logger.info("Greeting: silent resume (gap < 30 min)")
             return None
 
-        history = self._sessions.get(session_id, [])
+        history = await self._get_history(session_id)
         has_conversation = bool(history)
 
         # Extract known user name for greeting personalization.
@@ -333,12 +527,16 @@ class AgentCore:
 
     # ─── Session Management ──────────────────────────────────────
 
-    def get_history(self, session_id: str) -> list[dict]:
+    async def get_history(self, session_id: str) -> list[dict]:
         """Get conversation history for a session."""
-        return self._sessions.get(session_id, [])
+        return await self._get_history(session_id)
 
     def clear_history(self, session_id: str) -> None:
-        """Clear conversation history for a session."""
+        """Clear conversation history for a session (in-memory only).
+
+        Note: When using SessionStore, session data persists in SQLite.
+        Use cancel_session() to stop active work on a session.
+        """
         self._sessions.pop(session_id, None)
 
     async def cancel_session(self, session_id: str) -> int:
@@ -462,9 +660,20 @@ class AgentCore:
     async def health_check(self) -> dict:
         """Return AgentCore + scheduler health."""
         scheduler_health = await self._scheduler.health_check()
+
+        if self._session_store is not None:
+            sessions = await self._session_store.list_sessions(limit=1000)
+            session_count = len(sessions)
+            session_backend = "sqlite"
+        else:
+            session_count = len(self._sessions)
+            session_backend = "memory"
+
         return {
             "agent_core": True,
-            "sessions": len(self._sessions),
+            "sessions": session_count,
+            "session_backend": session_backend,
+            "active_session_loops": self.get_active_session_loops(),
             "last_greeting_at": self._last_greeting_at,
             "notification_subscribers": len(self._notification_subscribers),
             "scheduler": scheduler_health,

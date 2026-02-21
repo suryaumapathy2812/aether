@@ -1,9 +1,13 @@
 """
-Run Task tool — delegate work to a sub-agent.
+Run Task tool — delegate work to a sub-agent (blocking).
 
 Blocks until the sub-agent finishes and returns the result directly.
 Like Claude Code's Task tool — the parent LLM calls it, waits for
 the result, and continues.
+
+Uses TaskRunner which delegates to SubAgentManager under the hood,
+so sub-agents get full SessionLoop capabilities (persistent state,
+agent types, tool filtering, event bus).
 """
 
 from __future__ import annotations
