@@ -37,6 +37,7 @@ class Skill:
     description: str
     location: str  # File path to SKILL.md
     _content: str | None = field(default=None, repr=False)
+    plugin_name: str | None = field(default=None)  # Set for plugin-sourced skills
 
     @property
     def content(self) -> str:
@@ -119,14 +120,28 @@ class SkillLoader:
         matches.sort(key=lambda x: x[0], reverse=True)
         return [skill for _, skill in matches]
 
-    def get_system_prompt_section(self) -> str:
-        """Generate a system prompt section listing all available skills."""
+    def get_system_prompt_section(
+        self, enabled_plugins: list[str] | None = None
+    ) -> str:
+        """Generate a system prompt section listing available skills.
+
+        Plugin-sourced skills are only listed if their plugin is enabled.
+        Built-in skills (no plugin_name) are always listed.
+        """
         if not self._skills:
             return ""
 
+        enabled_set = set(enabled_plugins) if enabled_plugins else set()
         lines = ["Available skills (use when relevant):"]
         for skill in self._skills.values():
+            # Skip plugin skills whose plugin is not enabled
+            if skill.plugin_name and skill.plugin_name not in enabled_set:
+                continue
             lines.append(f"- **{skill.name}**: {skill.description}")
+
+        # If only the header remains, no skills to show
+        if len(lines) == 1:
+            return ""
 
         return "\n".join(lines)
 

@@ -148,6 +148,7 @@ for plugin in loaded_plugins:
             description=plugin.manifest.description or plugin.manifest.display_name,
             location=f"{plugin.manifest.location}/SKILL.md",
             _content=plugin.skill_content,
+            plugin_name=plugin.manifest.name,
         )
         skill_loader.register(skill)
 
@@ -377,8 +378,10 @@ async def _set_keep_alive(enabled: bool) -> None:
 
 async def _fetch_plugin_configs() -> None:
     if not ORCHESTRATOR_URL or not AGENT_USER_ID:
-        logger.debug(
-            "No ORCHESTRATOR_URL or AGENT_USER_ID — skipping plugin config fetch"
+        logger.warning(
+            "Plugin config fetch skipped: ORCHESTRATOR_URL=%s, AGENT_USER_ID=%s",
+            bool(ORCHESTRATOR_URL),
+            bool(AGENT_USER_ID),
         )
         return
 
@@ -392,10 +395,16 @@ async def _fetch_plugin_configs() -> None:
                 headers=_agent_auth_headers(),
             )
             if resp.status_code != 200:
-                logger.debug(f"No enabled plugins (status={resp.status_code})")
+                logger.warning(
+                    "Failed to list enabled plugins (status=%d, body=%s)",
+                    resp.status_code,
+                    resp.text[:200],
+                )
                 return
 
             enabled = resp.json().get("plugins", [])
+            logger.info("Enabled plugins from orchestrator: %s", enabled)
+
             for plugin_name in enabled:
                 cfg_resp = await client.get(
                     f"{ORCHESTRATOR_URL}/api/internal/plugins/{plugin_name}/config",
@@ -404,17 +413,25 @@ async def _fetch_plugin_configs() -> None:
                 )
                 if cfg_resp.status_code == 200:
                     config_data = cfg_resp.json()
+                    logger.info(
+                        "Plugin %s config loaded (keys=%s)",
+                        plugin_name,
+                        sorted(config_data.keys()),
+                    )
                     plugin_context_store.set(plugin_name, config_data)
 
                     # Initialize telephony transport for telephony plugins
                     if plugin_name == "vobiz":
                         await _init_vobiz_telephony(config_data)
                 else:
-                    logger.debug(
-                        f"No config for plugin {plugin_name} (status={cfg_resp.status_code})"
+                    logger.warning(
+                        "Failed to fetch config for plugin %s (status=%d, body=%s)",
+                        plugin_name,
+                        cfg_resp.status_code,
+                        cfg_resp.text[:200],
                     )
     except Exception as e:
-        logger.warning(f"Failed to fetch plugin configs: {e}")
+        logger.warning("Failed to fetch plugin configs: %s", e)
 
 
 async def _init_vobiz_telephony(config_data: dict) -> None:
@@ -435,31 +452,34 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
             tts_provider=tts_provider,
         )
 
-        # Set plugin config for routes (dynamic import from plugin directory)
-        import importlib.util
+        # Use the SAME module instance that PluginLoader registered with FastAPI.
+        # Previously this re-imported routes.py, creating a separate module whose
+        # globals (set_transport/set_config) were invisible to the live router.
+        import sys
 
-        routes_path = Path(PLUGINS_DIR) / "vobiz" / "routes.py"
-        if routes_path.exists():
-            spec = importlib.util.spec_from_file_location("vobiz_routes", routes_path)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                set_transport = getattr(module, "set_transport", None)
-                set_config = getattr(module, "set_config", None)
+        routes_module = sys.modules.get("aether_plugin_vobiz_routes")
+        if routes_module:
+            set_transport = getattr(routes_module, "set_transport", None)
+            set_config = getattr(routes_module, "set_config", None)
 
-                if set_transport and set_config:
-                    # Add base_url to config for outbound calls
-                    base_url = os.getenv(
-                        "AETHER_BASE_URL",
-                        f"http://localhost:{_config_mod.config.server.port}",
-                    )
-                    config_with_base = {**config_data, "base_url": base_url}
+            if set_transport and set_config:
+                # Add base_url to config for outbound calls
+                base_url = os.getenv(
+                    "AETHER_BASE_URL",
+                    f"http://localhost:{_config_mod.config.server.port}",
+                )
+                config_with_base = {**config_data, "base_url": base_url}
 
-                    set_transport(telephony_transport)
-                    set_config(config_with_base)
+                set_transport(telephony_transport)
+                set_config(config_with_base)
 
-                    # Also update plugin context store with base_url
-                    plugin_context_store.set("vobiz", config_with_base)
+                # Also update plugin context store with base_url
+                plugin_context_store.set("vobiz", config_with_base)
+        else:
+            logger.warning(
+                "Vobiz routes module not found in sys.modules — "
+                "routes will not receive transport/config"
+            )
 
         logger.info("Vobiz telephony transport initialized")
     except Exception as e:

@@ -200,17 +200,24 @@ class ContextBuilder:
 
         # Skill injection
         if self.skill_loader:
-            # Always list available skills
-            skills_section = self.skill_loader.get_system_prompt_section()
+            # List available skills (plugin skills filtered by enabled_plugins)
+            skills_section = self.skill_loader.get_system_prompt_section(
+                enabled_plugins=enabled_plugins
+            )
             if skills_section:
                 parts.append("\n\n" + skills_section)
 
             # If a skill matches the query, inject its full instructions
+            # (skip plugin skills whose plugin is not enabled)
+            enabled_set = set(enabled_plugins)
             matched = self.skill_loader.match(user_message)
             if matched:
                 skill = matched[0]  # Best match
-                logger.info(f"Skill: {skill.name}")
-                parts.append(f"\n\n--- Active Skill: {skill.name} ---\n{skill.content}")
+                if skill.plugin_name is None or skill.plugin_name in enabled_set:
+                    logger.info(f"Skill: {skill.name}")
+                    parts.append(
+                        f"\n\n--- Active Skill: {skill.name} ---\n{skill.content}"
+                    )
 
         # Plugin instructions (from SKILL.md)
         plugin_instructions = self._get_plugin_instructions(enabled_plugins)
@@ -300,19 +307,23 @@ class ContextBuilder:
         return messages
 
     def _build_tool_schemas(self, enabled_plugins: list[str]) -> list[dict[str, Any]]:
-        """Build tool schemas from registry + plugin tools."""
+        """Build tool schemas from registry, filtering out disabled plugin tools.
+
+        Built-in tools are always included. Plugin tools are only included
+        if their plugin is in the enabled_plugins list.
+        """
         if not self.tool_registry:
             return []
 
+        enabled_set = set(enabled_plugins)
         tools = []
 
-        # Built-in tools
         for tool in self.tool_registry.list_tools():
-            tools.append(tool.to_openai_schema())
-
-        # Note: Plugin tools are already registered in the tool_registry
-        # with plugin_name, so they're included above.
-        # The tool_orchestrator will filter by plugin_context at execution time.
+            plugin_name = self.tool_registry.get_plugin_for_tool(tool.name)
+            # Built-in tool (no plugin) → always include
+            # Plugin tool → only include if plugin is enabled
+            if plugin_name is None or plugin_name in enabled_set:
+                tools.append(tool.to_openai_schema())
 
         return tools
 
