@@ -30,14 +30,13 @@ interface STTProvider {
 }
 
 interface LLMModel {
+  provider: string;
   description: string;
   recommended: boolean;
 }
 
-interface LLMProvider {
-  display_name: string;
-  models: Record<string, LLMModel>;
-}
+// Flat model list — all models route through OpenRouter.
+// Provider is display-only (shown as a label in the picker).
 
 interface TTSModel {
   description: string;
@@ -56,7 +55,7 @@ interface STTConfig {
 }
 
 interface LLMConfig {
-  providers: Record<string, LLMProvider>;
+  models: Record<string, LLMModel>;
 }
 
 interface TTSConfig {
@@ -68,9 +67,7 @@ const DEFAULTS: UserPreferences = {
   stt_provider: "deepgram",
   stt_model: "nova-3",
   stt_language: "en",
-  llm_provider: "openai",
   llm_model: "gpt-4o",
-  llm_base_url: null,
   tts_provider: "openai",
   tts_model: "tts-1",
   tts_voice: "nova",
@@ -163,19 +160,16 @@ export default function AgentPage() {
         ).map(([id, m]) => ({ id, label: id, description: m.description, recommended: m.recommended }))
       : [];
 
-  const llmProviders = llmConfig
-    ? Object.entries(llmConfig.providers).map(([id, p]) => ({
+  // Flat model list — all models route through OpenRouter.
+  // Show "provider · model" as the label for clarity.
+  const llmModels = llmConfig
+    ? Object.entries(llmConfig.models).map(([id, m]) => ({
         id,
-        label: p.display_name,
+        label: `${m.provider} · ${id}`,
+        description: m.description,
+        recommended: m.recommended,
       }))
     : [];
-
-  const llmModels =
-    llmConfig && prefs.llm_provider
-      ? Object.entries(
-          llmConfig.providers[prefs.llm_provider]?.models || {}
-        ).map(([id, m]) => ({ id, label: id, description: m.description, recommended: m.recommended }))
-      : [];
 
   const ttsProviders = ttsConfig
     ? Object.entries(ttsConfig.providers).map(([id, p]) => ({
@@ -291,19 +285,11 @@ export default function AgentPage() {
 
         <Section title="LLM">
           <Picker
-            label="LLM Provider"
-            value={prefs.llm_provider}
-            options={llmProviders}
-            onChange={(v) => save({ llm_provider: v, llm_model: null })}
+            label="Model"
+            value={prefs.llm_model}
+            options={llmModels}
+            onChange={(v) => save({ llm_model: v })}
           />
-          {llmModels.length > 0 && (
-            <Picker
-              label="Model"
-              value={prefs.llm_model}
-              options={llmModels}
-              onChange={(v) => save({ llm_model: v })}
-            />
-          )}
         </Section>
 
       </div>

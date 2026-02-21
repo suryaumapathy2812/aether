@@ -42,7 +42,7 @@ docker build -t aether-agent:local .
 
 - Runtime: `AETHER_HOST`, `AETHER_PORT`, `AETHER_DB_PATH`, `AETHER_WORKING_DIR`
 - LLM/TTS/STT: `AETHER_LLM_MODEL`, `AETHER_TTS_PROVIDER`, `AETHER_STT_PROVIDER`
-- Keys: `OPENROUTER_API_KEY` (LLM — always routes through OpenRouter), `OPENAI_API_KEY` (TTS + embeddings — direct OpenAI), `DEEPGRAM_API_KEY`
+- Keys: `OPENROUTER_API_KEY` (LLM + embeddings — always routes through OpenRouter), `OPENAI_API_KEY` (TTS — direct OpenAI), `DEEPGRAM_API_KEY`
 - Voice tuning: `AETHER_VAD_MODE`, `AETHER_TURN_DETECTION_MODE`, `AETHER_WEBRTC_SESSION_TTL`
 
 ## Current constraints

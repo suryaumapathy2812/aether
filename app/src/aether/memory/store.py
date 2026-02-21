@@ -171,7 +171,7 @@ class MemoryStore:
 
         try:
             response = await self._get_openai_client().chat.completions.create(
-                model="gpt-4o-mini",  # Fast and cheap for extraction
+                model="openai/gpt-4o-mini",  # Fast and cheap for extraction
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 temperature=0.0,
@@ -607,7 +607,7 @@ class MemoryStore:
 
         try:
             response = await self._get_openai_client().chat.completions.create(
-                model="gpt-4o-mini",
+                model="openai/gpt-4o-mini",
                 messages=[
                     {
                         "role": "user",
@@ -654,14 +654,18 @@ class MemoryStore:
             logger.error(f"Action compaction failed: {e}")
 
     async def _embed(self, text: str) -> list[float]:
-        """Get embedding vector for text.
+        """Get embedding vector for text via OpenRouter.
 
-        Embeddings always use direct OpenAI (not OpenRouter) — no extra hop,
-        and embedding models don't need provider prefixes.
+        Embedding model is prefixed with 'openai/' for OpenRouter routing
+        (e.g. 'text-embedding-3-small' → 'openai/text-embedding-3-small').
         """
         client = self._get_openai_client()
+        model = config_module.config.memory.embedding_model
+        if "/" not in model:
+            model = f"openai/{model}"
+
         response = await client.embeddings.create(
-            model=config_module.config.memory.embedding_model,
+            model=model,
             input=text,
         )
         return response.data[0].embedding
@@ -669,13 +673,10 @@ class MemoryStore:
     def _get_openai_client(self) -> AsyncOpenAI:
         """Return an OpenAI client for embeddings and internal LLM calls.
 
-        Uses OPENAI_API_KEY directly (pinned to api.openai.com) — same as TTS.
-        Embeddings and internal calls (fact extraction, action compaction) always
-        use OpenAI models, so there is no reason to route through OpenRouter.
+        Routes through OpenRouter (same as LLM) using OPENROUTER_API_KEY.
+        This gives access to any embedding model available on OpenRouter.
         """
-        import os
-
-        current_api_key = os.getenv("OPENAI_API_KEY", "")
+        current_api_key = config_module.config.llm.api_key or ""
 
         # Test hook: if a client was injected directly, prefer it.
         if (
@@ -690,8 +691,8 @@ class MemoryStore:
 
         self.openai = AsyncOpenAI(
             api_key=current_api_key,
-            base_url="https://api.openai.com/v1",
+            base_url="https://openrouter.ai/api/v1",
         )
-        self._openai_base_url = "https://api.openai.com/v1"
+        self._openai_base_url = "https://openrouter.ai/api/v1"
         self._openai_api_key = current_api_key
         return self.openai
