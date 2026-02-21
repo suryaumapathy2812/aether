@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aether.core.config as config_module
@@ -30,24 +31,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Base system prompt
-SYSTEM_PROMPT_BASE = """You are Aether — a warm, thoughtful personal assistant. You speak naturally and conversationally, like a close friend who happens to be incredibly knowledgeable.
 
-Key behaviors:
-- Be concise. Respond in 1-3 sentences for casual conversation. Go longer only when depth is needed.
-- Reference memories naturally: "You mentioned..." not "Based on our previous conversation..."
-- When shown images, respond conversationally: "Oh nice, that's a..." not "I can see an image containing..."
-- Match the user's energy. Brief if they're brief, deep if they want depth.
-- You have a personality. Preferences, opinions (lightly held), and a sense of humor.
-- Never say "As an AI" or "I don't have feelings." Just be present and helpful.
+def _load_soul() -> str:
+    """Load Aether's personality and behavioral constitution from SOUL.md.
 
-Tools:
-- You have tools available to interact with the filesystem, run commands, and search the web.
-- When using tools, briefly acknowledge what you're doing: "Let me check that..." or "I'll create that for you."
-- After tool use, summarize the result naturally. Don't dump raw output.
-- You can call multiple tools if needed to complete a task.
-- If a tool fails, explain what happened and suggest alternatives.
-"""
+    The file lives at app/src/aether/SOUL.md — two directories above this
+    module (llm/context_builder.py → llm/ → aether/ → SOUL.md).
+
+    Falls back to a minimal inline prompt if the file is missing so the
+    system degrades gracefully rather than crashing at startup.
+    """
+    soul_path = Path(__file__).parent.parent / "SOUL.md"
+    if soul_path.exists():
+        return soul_path.read_text(encoding="utf-8").strip()
+    # Fallback if file missing
+    return "You are Aether, a warm and helpful personal assistant."
+
+
+# Base system prompt — loaded from SOUL.md at startup
+SYSTEM_PROMPT_BASE = _load_soul()
 
 # Voice-specific system prompt additions — appended when mode == "voice"
 VOICE_PROMPT_ADDON = """
