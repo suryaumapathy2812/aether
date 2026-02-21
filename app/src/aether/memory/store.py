@@ -654,29 +654,28 @@ class MemoryStore:
             logger.error(f"Action compaction failed: {e}")
 
     async def _embed(self, text: str) -> list[float]:
-        """Get embedding vector for text."""
-        client = self._get_openai_client()
-        model = config_module.config.memory.embedding_model
-        llm_cfg = config_module.config.llm
-        if (
-            llm_cfg.base_url
-            and "openrouter" in llm_cfg.base_url.lower()
-            and "/" not in model
-        ):
-            # Embeddings on OpenRouter should use an embedding-capable provider.
-            # Default to OpenAI embedding models unless caller already provided a scoped model.
-            model = f"openai/{model}"
+        """Get embedding vector for text.
 
+        Embeddings always use direct OpenAI (not OpenRouter) — no extra hop,
+        and embedding models don't need provider prefixes.
+        """
+        client = self._get_openai_client()
         response = await client.embeddings.create(
-            model=model,
+            model=config_module.config.memory.embedding_model,
             input=text,
         )
         return response.data[0].embedding
 
     def _get_openai_client(self) -> AsyncOpenAI:
-        """Return an OpenAI client configured for the current runtime config."""
-        current_base_url = config_module.config.llm.base_url or ""
-        current_api_key = config_module.config.llm.api_key or ""
+        """Return an OpenAI client for embeddings and internal LLM calls.
+
+        Uses OPENAI_API_KEY directly (pinned to api.openai.com) — same as TTS.
+        Embeddings and internal calls (fact extraction, action compaction) always
+        use OpenAI models, so there is no reason to route through OpenRouter.
+        """
+        import os
+
+        current_api_key = os.getenv("OPENAI_API_KEY", "")
 
         # Test hook: if a client was injected directly, prefer it.
         if (
@@ -686,20 +685,13 @@ class MemoryStore:
         ):
             return self.openai
 
-        if (
-            self.openai
-            and self._openai_base_url == current_base_url
-            and self._openai_api_key == current_api_key
-        ):
+        if self.openai and self._openai_api_key == current_api_key:
             return self.openai
 
-        if current_base_url:
-            self.openai = AsyncOpenAI(
-                api_key=current_api_key,
-                base_url=current_base_url,
-            )
-        else:
-            self.openai = AsyncOpenAI(api_key=current_api_key)
-        self._openai_base_url = current_base_url
+        self.openai = AsyncOpenAI(
+            api_key=current_api_key,
+            base_url="https://api.openai.com/v1",
+        )
+        self._openai_base_url = "https://api.openai.com/v1"
         self._openai_api_key = current_api_key
         return self.openai

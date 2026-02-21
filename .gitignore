@@ -4,6 +4,9 @@
 docker/.env
 docker/.env.prod
 
+# IDE / run configs
+.run/
+
 # macOS
 .DS_Store
 

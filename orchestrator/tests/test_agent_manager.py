@@ -83,24 +83,35 @@ class TestProvisionAgent:
         assert run_kwargs[1]["detach"] is True
 
     @pytest.mark.asyncio
-    async def test_provision_restarts_stopped_container(self):
-        """Restarts a stopped container instead of creating a new one."""
+    async def test_provision_recreates_stopped_container(self):
+        """Removes a stopped container and recreates it from scratch."""
         docker_client = self._mock_docker()
 
-        mock_container = MagicMock()
-        mock_container.id = "existing123456"
-        mock_container.status = "exited"
-        docker_client.containers.get.return_value = mock_container
+        stopped_container = MagicMock()
+        stopped_container.id = "existing123456"
+        stopped_container.status = "exited"
+        docker_client.containers.get.return_value = stopped_container
+
+        # volumes.get raises (volumes don't exist)
+        docker_client.volumes.get.side_effect = Exception("Not found")
+        docker_client.volumes.create.return_value = MagicMock()
+
+        # containers.run returns a new container
+        new_container = MagicMock()
+        new_container.id = "newcontainer12"
+        docker_client.containers.run.return_value = new_container
 
         with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import provision_agent
 
             result = await provision_agent("user-42")
 
-        assert result["container_id"] == "existing1234"  # Truncated to 12 chars
-        mock_container.start.assert_called_once()
-        # Should NOT have called containers.run
-        docker_client.containers.run.assert_not_called()
+        # Stopped container should be removed, not restarted
+        stopped_container.remove.assert_called_once_with(force=True)
+        stopped_container.start.assert_not_called()
+        # A new container should be created
+        docker_client.containers.run.assert_called_once()
+        assert result["container_id"] == "newcontainer"  # Truncated to 12 chars
 
     @pytest.mark.asyncio
     async def test_provision_returns_running_container(self):

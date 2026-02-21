@@ -581,13 +581,16 @@ async def delete_api_key(provider: str, user_id: str = Depends(get_user_id)):
 
 # ── User Preferences ───────────────────────────────────────
 
+# DB columns exposed to the dashboard via GET/PUT /api/preferences.
+# NOTE: llm_provider and llm_base_url are stored for dashboard display only —
+# they are NOT injected into agent containers (see PREF_TO_ENV below).
 PREFERENCE_COLUMNS = [
     "stt_provider",
     "stt_model",
     "stt_language",
-    "llm_provider",
+    "llm_provider",  # display-only (agent derives provider from model name)
     "llm_model",
-    "llm_base_url",
+    "llm_base_url",  # display-only (agent hardcodes OpenRouter)
     "tts_provider",
     "tts_model",
     "tts_voice",
