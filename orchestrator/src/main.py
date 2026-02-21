@@ -1102,13 +1102,18 @@ AVAILABLE_PLUGINS = {
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.compose",
             # Calendar
             "https://www.googleapis.com/auth/calendar.readonly",
             "https://www.googleapis.com/auth/calendar.events",
             # Contacts
             "https://www.googleapis.com/auth/contacts.readonly",
-            # Drive (read-only)
-            "https://www.googleapis.com/auth/drive.readonly",
+            # Drive (read + create)
+            "https://www.googleapis.com/auth/drive",
+            # Docs / Sheets / Slides (create + edit)
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/presentations",
             # User info
             "https://www.googleapis.com/auth/userinfo.email",
         ],

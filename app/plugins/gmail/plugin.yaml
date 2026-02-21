@@ -1,7 +1,7 @@
 name: gmail
 display_name: Gmail
 description: Monitor and respond to Gmail emails
-version: 0.1.0
+version: 0.2.0
 
 auth:
   type: oauth2
@@ -10,6 +10,7 @@ auth:
     - https://www.googleapis.com/auth/gmail.readonly
     - https://www.googleapis.com/auth/gmail.send
     - https://www.googleapis.com/auth/gmail.modify
+    - https://www.googleapis.com/auth/gmail.compose
   config_fields:
     - key: account_email
       label: Gmail Address
@@ -23,5 +24,7 @@ webhook:
 tools:
   - class: ListUnreadTool
   - class: ReadEmailTool
+  - class: SendEmailTool
   - class: SendReplyTool
+  - class: CreateDraftTool
   - class: ArchiveEmailTool

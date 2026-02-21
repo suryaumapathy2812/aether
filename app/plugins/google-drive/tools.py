@@ -1,9 +1,8 @@
-"""Google Drive tools for searching, browsing, and reading files.
+"""Google Drive tools for searching, browsing, reading, and creating files.
 
-Uses the Google Drive API v3. Shares OAuth tokens with the Gmail plugin
-(token_source: gmail). Credentials arrive via ``self._context`` at call time.
-
-All access is **read-only** — no create, edit, or delete operations.
+Uses the Google Drive API v3 and Google Docs/Sheets/Slides APIs.
+Shares OAuth tokens with the Gmail plugin (token_source: gmail).
+Credentials arrive via ``self._context`` at call time.
 """
 
 from __future__ import annotations
@@ -144,6 +143,14 @@ class SearchDriveTool(_DriveTool):
 
             return ToolResult.success(output, count=len(files))
 
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
         except Exception as e:
             logger.error(f"Error searching Drive: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")
@@ -458,4 +465,218 @@ class ListSharedDrivesTool(_DriveTool):
 
         except Exception as e:
             logger.error(f"Error listing shared drives: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+# ── Google Workspace Creation APIs ────────────────────────────
+
+DOCS_API = "https://docs.googleapis.com/v1"
+SHEETS_API = "https://sheets.googleapis.com/v4"
+SLIDES_API = "https://slides.googleapis.com/v1"
+
+
+class CreateDocumentTool(_DriveTool):
+    """Create a new Google Doc with optional initial content."""
+
+    name = "create_document"
+    description = "Create a new Google Doc with a title and optional text content"
+    status_text = "Creating document..."
+    parameters = [
+        ToolParam(
+            name="title",
+            type="string",
+            description="Document title",
+            required=True,
+        ),
+        ToolParam(
+            name="content",
+            type="string",
+            description="Initial text content to insert into the document (optional)",
+            required=False,
+            default="",
+        ),
+    ]
+
+    async def execute(self, title: str, content: str = "", **_) -> ToolResult:
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+            headers["Content-Type"] = "application/json"
+
+            # Step 1: Create the document
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{DOCS_API}/documents",
+                    headers=headers,
+                    json={"title": title},
+                )
+                resp.raise_for_status()
+                doc = resp.json()
+
+            doc_id = doc.get("documentId", "")
+            doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+            # Step 2: Insert content if provided
+            if content and doc_id:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{DOCS_API}/documents/{doc_id}:batchUpdate",
+                        headers=headers,
+                        json={
+                            "requests": [
+                                {
+                                    "insertText": {
+                                        "location": {"index": 1},
+                                        "text": content,
+                                    }
+                                }
+                            ]
+                        },
+                    )
+
+            output = f"**Document created:** {title}\n"
+            output += f"   ID: `{doc_id}`\n"
+            output += f"   Link: {doc_url}"
+
+            return ToolResult.success(output, document_id=doc_id, url=doc_url)
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(f"Docs API error {e.response.status_code}: {body}")
+            return ToolResult.fail(f"Docs API error ({e.response.status_code}): {body}")
+        except Exception as e:
+            logger.error(f"Error creating document: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class CreateSpreadsheetTool(_DriveTool):
+    """Create a new Google Sheet."""
+
+    name = "create_spreadsheet"
+    description = "Create a new Google Sheet with a title and optional sheet names"
+    status_text = "Creating spreadsheet..."
+    parameters = [
+        ToolParam(
+            name="title",
+            type="string",
+            description="Spreadsheet title",
+            required=True,
+        ),
+        ToolParam(
+            name="sheet_names",
+            type="string",
+            description="Comma-separated sheet/tab names (optional, default: 'Sheet1')",
+            required=False,
+            default="",
+        ),
+    ]
+
+    async def execute(self, title: str, sheet_names: str = "", **_) -> ToolResult:
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+            headers["Content-Type"] = "application/json"
+
+            # Build sheet properties
+            sheets = []
+            if sheet_names:
+                for name in sheet_names.split(","):
+                    name = name.strip()
+                    if name:
+                        sheets.append({"properties": {"title": name}})
+
+            body: dict = {"properties": {"title": title}}
+            if sheets:
+                body["sheets"] = sheets
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{SHEETS_API}/spreadsheets",
+                    headers=headers,
+                    json=body,
+                )
+                resp.raise_for_status()
+                sheet = resp.json()
+
+            sheet_id = sheet.get("spreadsheetId", "")
+            sheet_url = sheet.get(
+                "spreadsheetUrl",
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit",
+            )
+            created_sheets = [
+                s.get("properties", {}).get("title", "")
+                for s in sheet.get("sheets", [])
+            ]
+
+            output = f"**Spreadsheet created:** {title}\n"
+            output += f"   ID: `{sheet_id}`\n"
+            output += f"   Sheets: {', '.join(created_sheets)}\n"
+            output += f"   Link: {sheet_url}"
+
+            return ToolResult.success(output, spreadsheet_id=sheet_id, url=sheet_url)
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(f"Sheets API error {e.response.status_code}: {body}")
+            return ToolResult.fail(
+                f"Sheets API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating spreadsheet: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class CreatePresentationTool(_DriveTool):
+    """Create a new Google Slides presentation."""
+
+    name = "create_presentation"
+    description = "Create a new Google Slides presentation with a title"
+    status_text = "Creating presentation..."
+    parameters = [
+        ToolParam(
+            name="title",
+            type="string",
+            description="Presentation title",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, title: str, **_) -> ToolResult:
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+            headers["Content-Type"] = "application/json"
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{SLIDES_API}/presentations",
+                    headers=headers,
+                    json={"title": title},
+                )
+                resp.raise_for_status()
+                pres = resp.json()
+
+            pres_id = pres.get("presentationId", "")
+            pres_url = f"https://docs.google.com/presentation/d/{pres_id}/edit"
+
+            output = f"**Presentation created:** {title}\n"
+            output += f"   ID: `{pres_id}`\n"
+            output += f"   Link: {pres_url}"
+
+            return ToolResult.success(output, presentation_id=pres_id, url=pres_url)
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(f"Slides API error {e.response.status_code}: {body}")
+            return ToolResult.fail(
+                f"Slides API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating presentation: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")

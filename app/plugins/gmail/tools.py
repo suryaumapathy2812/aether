@@ -3,7 +3,9 @@
 Provides tools to interact with Gmail API:
 - List unread emails
 - Read specific email by message ID
+- Send a new email
 - Send replies to email threads
+- Create email drafts
 - Archive emails
 
 All tools receive credentials at call time via ``self._context``
@@ -279,6 +281,181 @@ class SendReplyTool(_GmailTool):
         """Create a base64-encoded email message."""
         message = f"To: {to}\nSubject: {subject}\n\n{body}"
         return base64.urlsafe_b64encode(message.encode()).decode()
+
+
+class SendEmailTool(_GmailTool):
+    """Send a new email (not a reply to an existing thread)."""
+
+    name = "send_email"
+    description = "Send a new email to one or more recipients"
+    status_text = "Sending email..."
+    parameters = [
+        ToolParam(
+            name="to",
+            type="string",
+            description="Recipient email address(es), comma-separated for multiple",
+            required=True,
+        ),
+        ToolParam(
+            name="subject",
+            type="string",
+            description="Email subject line",
+            required=True,
+        ),
+        ToolParam(
+            name="body",
+            type="string",
+            description="Email body text",
+            required=True,
+        ),
+        ToolParam(
+            name="cc",
+            type="string",
+            description="CC recipients, comma-separated (optional)",
+            required=False,
+        ),
+        ToolParam(
+            name="bcc",
+            type="string",
+            description="BCC recipients, comma-separated (optional)",
+            required=False,
+        ),
+    ]
+
+    async def execute(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        **_,
+    ) -> ToolResult:
+        """Send a new email via Gmail API."""
+        if not self._get_token():
+            return ToolResult.fail("Gmail not connected — missing access token.")
+
+        try:
+            raw_message = self._build_raw_email(to, subject, body, cc, bcc)
+
+            async with httpx.AsyncClient() as client:
+                url = f"{GMAIL_API_BASE}/messages/send"
+                payload = {"raw": raw_message}
+                response = await client.post(
+                    url, headers=self._auth_headers(), json=payload
+                )
+                response.raise_for_status()
+                result = response.json()
+
+            return ToolResult.success(
+                f"Email sent successfully to {to}",
+                message_id=result.get("id"),
+            )
+
+        except httpx.HTTPError as e:
+            logger.error(f"Gmail API error: {e}", exc_info=True)
+            return ToolResult.fail(f"Failed to send email: {e}")
+        except Exception as e:
+            logger.error(f"Error sending email: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+    @staticmethod
+    def _build_raw_email(
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+    ) -> str:
+        """Build a base64url-encoded RFC 2822 email message."""
+        lines = [f"To: {to}", f"Subject: {subject}"]
+        if cc:
+            lines.append(f"Cc: {cc}")
+        if bcc:
+            lines.append(f"Bcc: {bcc}")
+        lines.append("Content-Type: text/plain; charset=utf-8")
+        lines.append("")
+        lines.append(body)
+        raw = "\r\n".join(lines)
+        return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+class CreateDraftTool(_GmailTool):
+    """Create a draft email in Gmail."""
+
+    name = "create_draft"
+    description = "Create a draft email in Gmail (saved but not sent)"
+    status_text = "Creating draft..."
+    parameters = [
+        ToolParam(
+            name="to",
+            type="string",
+            description="Recipient email address(es), comma-separated for multiple",
+            required=True,
+        ),
+        ToolParam(
+            name="subject",
+            type="string",
+            description="Email subject line",
+            required=True,
+        ),
+        ToolParam(
+            name="body",
+            type="string",
+            description="Email body text",
+            required=True,
+        ),
+        ToolParam(
+            name="cc",
+            type="string",
+            description="CC recipients, comma-separated (optional)",
+            required=False,
+        ),
+        ToolParam(
+            name="bcc",
+            type="string",
+            description="BCC recipients, comma-separated (optional)",
+            required=False,
+        ),
+    ]
+
+    async def execute(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        **_,
+    ) -> ToolResult:
+        """Create a draft via Gmail API."""
+        if not self._get_token():
+            return ToolResult.fail("Gmail not connected — missing access token.")
+
+        try:
+            raw_message = SendEmailTool._build_raw_email(to, subject, body, cc, bcc)
+
+            async with httpx.AsyncClient() as client:
+                url = f"{GMAIL_API_BASE}/drafts"
+                payload = {"message": {"raw": raw_message}}
+                response = await client.post(
+                    url, headers=self._auth_headers(), json=payload
+                )
+                response.raise_for_status()
+                result = response.json()
+
+            draft_id = result.get("id", "")
+            return ToolResult.success(
+                f"Draft created successfully (to: {to}, subject: {subject})\nDraft ID: {draft_id}",
+                draft_id=draft_id,
+            )
+
+        except httpx.HTTPError as e:
+            logger.error(f"Gmail API error: {e}", exc_info=True)
+            return ToolResult.fail(f"Failed to create draft: {e}")
+        except Exception as e:
+            logger.error(f"Error creating draft: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
 
 
 class ArchiveEmailTool(_GmailTool):
