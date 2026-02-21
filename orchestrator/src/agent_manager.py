@@ -34,10 +34,6 @@ AGENT_IMAGE = os.getenv("AGENT_IMAGE", "core-ai-agent:latest")
 AGENT_NETWORK = os.getenv("AGENT_NETWORK", "core-ai_default")
 IDLE_TIMEOUT_MINUTES = int(os.getenv("AGENT_IDLE_TIMEOUT", "30"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
-DEFAULT_AGENT_LLM_PROVIDER = _strip_wrapping_quotes(
-    os.getenv("AETHER_LLM_PROVIDER", "")
-)
-DEFAULT_AGENT_OPENAI_BASE_URL = _strip_wrapping_quotes(os.getenv("OPENAI_BASE_URL", ""))
 
 # Dev: host path to app/ directory for hot-reload mounts into agent containers.
 # When set, agent containers get source + plugin mounts with --reload.
@@ -337,6 +333,84 @@ async def ensure_shared_models() -> None:
 # ── Container lifecycle ────────────────────────────────────
 
 
+def _build_agent_environment(
+    user_id: str,
+    user_api_keys: dict[str, str] | None = None,
+    user_preferences: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the complete environment dict for an agent container.
+
+    This is the SINGLE source of truth for what env vars an agent gets.
+    Priority (highest wins):
+      1. Identity & infrastructure (always hardcoded, cannot be overridden)
+      2. User preferences from DB (override orchestrator defaults)
+      3. Orchestrator defaults (API keys, VAD/turn settings)
+
+    The agent's LLM base_url is hardcoded to OpenRouter in the agent code
+    itself (config.py), so we don't pass OPENAI_BASE_URL or AETHER_LLM_PROVIDER.
+    """
+    agent_id = f"agent-{user_id}"
+
+    # ── Layer 1: Orchestrator defaults (API keys, VAD, turn detection) ──
+    env: dict[str, str] = {}
+
+    # API keys: system defaults from orchestrator env
+    for key, value in SYSTEM_API_KEYS.items():
+        cleaned = _strip_wrapping_quotes(value)
+        if cleaned:
+            env[key] = cleaned
+
+    # User API keys override system defaults
+    if user_api_keys:
+        for provider, key in user_api_keys.items():
+            env_var = _provider_to_env(provider)
+            cleaned = _strip_wrapping_quotes(key)
+            if env_var and cleaned:
+                env[env_var] = cleaned
+
+    # VAD defaults
+    env["AETHER_VAD_MODE"] = AETHER_VAD_MODE_DEFAULT
+    _, agent_model_path = _resolve_model_paths()
+    if agent_model_path:
+        env["AETHER_VAD_MODEL_PATH"] = agent_model_path
+
+    # Turn detection defaults
+    env["AETHER_TURN_DETECTION_MODE"] = AETHER_TURN_DETECTION_MODE_DEFAULT
+    env["AETHER_TURN_MODEL_TYPE"] = AETHER_TURN_MODEL_TYPE
+    env["AETHER_TURN_MODEL_REPO"] = AETHER_TURN_MODEL_REPO
+    env["AETHER_TURN_MODEL_REVISION"] = AETHER_TURN_MODEL_REVISION
+    env["AETHER_TURN_MODEL_FILENAME"] = AETHER_TURN_MODEL_FILENAME
+    _, agent_turn_dir = _resolve_turn_model_paths()
+    if agent_turn_dir:
+        env["AETHER_TURN_MODEL_DIR"] = agent_turn_dir
+    env["AETHER_TURN_MIN_ENDPOINTING_DELAY"] = AETHER_TURN_MIN_ENDPOINTING_DELAY
+    env["AETHER_TURN_MAX_ENDPOINTING_DELAY"] = AETHER_TURN_MAX_ENDPOINTING_DELAY
+    env["AETHER_TURN_INFERENCE_TIMEOUT_SECONDS"] = AETHER_TURN_INFERENCE_TIMEOUT_SECONDS
+
+    # ── Layer 2: User preferences from DB (override defaults) ──
+    if user_preferences:
+        for key, value in user_preferences.items():
+            if value:
+                env[key] = value
+
+    # ── Layer 3: Identity & infrastructure (always win) ──
+    env["AETHER_AGENT_ID"] = agent_id
+    env["AETHER_USER_ID"] = user_id
+    env["AETHER_DB_PATH"] = "/data/aether_memory.db"
+    env["AETHER_WORKING_DIR"] = "/workspace"
+    env["AETHER_HOST"] = "0.0.0.0"
+    env["AETHER_PORT"] = "8000"
+    env["ORCHESTRATOR_URL"] = (
+        "http://localhost:3080" if AGENT_DEV_ROOT else "http://orchestrator:9000"
+    )
+    if AGENT_DEV_ROOT:
+        env["AETHER_AGENT_HOST"] = "host.docker.internal"
+    if AGENT_SECRET:
+        env["AGENT_SECRET"] = AGENT_SECRET
+
+    return env
+
+
 async def provision_agent(
     user_id: str,
     user_api_keys: dict[str, str] | None = None,
@@ -350,77 +424,11 @@ async def provision_agent(
     agent_id = f"agent-{user_id}"
     container_name = f"aether-agent-{user_id}"
 
-    # Merge API keys: user-specific override system defaults
-    env_keys = {
-        key: cleaned
-        for key, value in SYSTEM_API_KEYS.items()
-        if (cleaned := _strip_wrapping_quotes(value))
-    }
-    if user_api_keys:
-        for provider, key in user_api_keys.items():
-            env_var = _provider_to_env(provider)
-            cleaned = _strip_wrapping_quotes(key)
-            if env_var and cleaned:
-                env_keys[env_var] = cleaned
+    environment = _build_agent_environment(user_id, user_api_keys, user_preferences)
 
-    environment = {
-        **env_keys,
-        **(user_preferences or {}),
-        "AETHER_AGENT_ID": agent_id,
-        "AETHER_USER_ID": user_id,
-        "AETHER_DB_PATH": "/data/aether_memory.db",
-        "AETHER_WORKING_DIR": "/workspace",
-        "AETHER_HOST": "0.0.0.0",
-        "AETHER_PORT": "8000",
-        # In dev/host-network mode, agent reaches orchestrator via Caddy on host;
-        # in production, via Docker DNS name.
-        "ORCHESTRATOR_URL": "http://localhost:3080"
-        if AGENT_DEV_ROOT
-        else "http://orchestrator:9000",
-        # Tell the agent what host the orchestrator should use to reach it.
-        # In host-network mode, socket.gethostname() returns the Mac hostname
-        # (e.g. "orbstack") which is unresolvable from inside Docker.
-        **({"AETHER_AGENT_HOST": "host.docker.internal"} if AGENT_DEV_ROOT else {}),
-        **({"AGENT_SECRET": AGENT_SECRET} if AGENT_SECRET else {}),
-    }
-
-    if DEFAULT_AGENT_LLM_PROVIDER and not environment.get("AETHER_LLM_PROVIDER"):
-        environment["AETHER_LLM_PROVIDER"] = DEFAULT_AGENT_LLM_PROVIDER
-    if DEFAULT_AGENT_OPENAI_BASE_URL and not environment.get("OPENAI_BASE_URL"):
-        environment["OPENAI_BASE_URL"] = DEFAULT_AGENT_OPENAI_BASE_URL
-
-    # Configure VAD defaults at container level; user prefs can override.
-    if "AETHER_VAD_MODE" not in environment:
-        environment["AETHER_VAD_MODE"] = AETHER_VAD_MODE_DEFAULT
-
-    _, agent_model_path = _resolve_model_paths()
-    if agent_model_path:
-        environment["AETHER_VAD_MODEL_PATH"] = agent_model_path
-
-    # Download model if configured and missing.
+    # Download shared models if VAD/turn detection is enabled.
     if AETHER_VAD_MODE_DEFAULT in ("shadow", "active"):
         _ensure_vad_model_file()
-
-    if "AETHER_TURN_DETECTION_MODE" not in environment:
-        environment["AETHER_TURN_DETECTION_MODE"] = AETHER_TURN_DETECTION_MODE_DEFAULT
-    environment.setdefault("AETHER_TURN_MODEL_TYPE", AETHER_TURN_MODEL_TYPE)
-    environment.setdefault("AETHER_TURN_MODEL_REPO", AETHER_TURN_MODEL_REPO)
-    environment.setdefault("AETHER_TURN_MODEL_REVISION", AETHER_TURN_MODEL_REVISION)
-    environment.setdefault("AETHER_TURN_MODEL_FILENAME", AETHER_TURN_MODEL_FILENAME)
-    _, agent_turn_dir = _resolve_turn_model_paths()
-    if agent_turn_dir:
-        environment.setdefault("AETHER_TURN_MODEL_DIR", agent_turn_dir)
-    environment.setdefault(
-        "AETHER_TURN_MIN_ENDPOINTING_DELAY", AETHER_TURN_MIN_ENDPOINTING_DELAY
-    )
-    environment.setdefault(
-        "AETHER_TURN_MAX_ENDPOINTING_DELAY", AETHER_TURN_MAX_ENDPOINTING_DELAY
-    )
-    environment.setdefault(
-        "AETHER_TURN_INFERENCE_TIMEOUT_SECONDS",
-        AETHER_TURN_INFERENCE_TIMEOUT_SECONDS,
-    )
-
     if AETHER_TURN_DETECTION_MODE_DEFAULT in ("shadow", "active"):
         _ensure_turn_model_files()
 

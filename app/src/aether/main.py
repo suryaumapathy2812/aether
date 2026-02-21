@@ -519,14 +519,14 @@ async def _fetch_user_preferences() -> str:
                 prefs = payload if isinstance(payload, dict) else {}
                 pref_source = "db_legacy"
                 resolved_user = AGENT_USER_ID or "<unset>"
-            # Map preference keys to env vars
+            # Map preference keys to env vars.
+            # llm_provider and llm_base_url are excluded — OpenRouter is
+            # hardcoded in config.py; provider is derived from model name.
             pref_to_env = {
                 "stt_provider": "AETHER_STT_PROVIDER",
                 "stt_model": "AETHER_STT_MODEL",
                 "stt_language": "AETHER_STT_LANGUAGE",
-                "llm_provider": "AETHER_LLM_PROVIDER",
                 "llm_model": "AETHER_LLM_MODEL",
-                "llm_base_url": "OPENAI_BASE_URL",
                 "tts_provider": "AETHER_TTS_PROVIDER",
                 "tts_model": "AETHER_TTS_MODEL",
                 "tts_voice": "AETHER_TTS_VOICE",
@@ -564,18 +564,13 @@ async def startup() -> None:
 
     # Reload config with user preferences
     reload_config()
-    _log_llm_key_baseurl_mismatch()
-    startup_effective_model = _effective_llm_model(
-        provider=_config_mod.config.llm.provider,
-        model=_config_mod.config.llm.model,
-        base_url=_config_mod.config.llm.base_url,
-    )
+    startup_effective_model = _effective_llm_model(_config_mod.config.llm.model)
     logger.info(
-        "LLM startup policy resolved: provider=%s, model=%s, base_url=%s, effective_model=%s, source=%s",
+        "LLM startup: provider=%s, model=%s, effective_model=%s, base_url=%s, source=%s",
         _config_mod.config.llm.provider,
         _config_mod.config.llm.model,
-        _config_mod.config.llm.base_url or "<default-openai>",
         startup_effective_model,
+        _config_mod.config.llm.base_url,
         pref_source,
     )
 
@@ -931,38 +926,17 @@ async def memory_conversations(limit: int = 20) -> JSONResponse:
 # ── Config endpoints ───────────────────────────────────────────
 
 
-def _effective_llm_model(provider: str, model: str, base_url: str) -> str:
-    """Return the runtime model id that will be sent to the OpenAI SDK."""
-    if "openrouter" in (base_url or "").lower() and "/" not in model:
-        lowered = model.strip().lower()
-        if lowered.startswith("claude"):
-            return f"anthropic/{model}"
-        if lowered.startswith("deepseek"):
-            return f"deepseek/{model}"
-        if lowered.startswith(("gemini", "gemma")):
-            return f"google/{model}"
-        if lowered.startswith("glm"):
-            return f"z-ai/{model}"
-        if lowered.startswith("llama"):
-            return f"meta/{model}"
-        if lowered.startswith(("gpt", "o1", "o3", "o4", "text-embedding")):
-            return f"openai/{model}"
-        if provider and provider != "openrouter":
-            return f"{provider}/{model}"
-        return f"openai/{model}"
+def _effective_llm_model(model: str) -> str:
+    """Return the runtime model id that will be sent to the OpenAI SDK.
+
+    All LLM traffic routes through OpenRouter, so models always get
+    a provider prefix (e.g. 'gpt-4o' → 'openai/gpt-4o').
+    """
+    if "/" not in model:
+        from aether.core.config import _infer_provider_from_model
+
+        return f"{_infer_provider_from_model(model)}/{model}"
     return model
-
-
-def _log_llm_key_baseurl_mismatch() -> None:
-    """Warn when an OpenRouter key is configured without OpenRouter base URL."""
-    llm_key = _config_mod.config.llm.api_key or ""
-    base_url = _config_mod.config.llm.base_url or ""
-    if llm_key.startswith("sk-or-v1") and "openrouter" not in base_url.lower():
-        logger.warning(
-            "Potential LLM config mismatch: active LLM key looks like OpenRouter "
-            "but OPENAI_BASE_URL is not OpenRouter (current=%s).",
-            base_url or "<empty>",
-        )
 
 
 @app.get("/config")
@@ -999,7 +973,6 @@ async def config_reload(request_body: dict | None = None) -> JSONResponse:
             os.environ[key] = str(value)
 
     new_config = reload_config()
-    _log_llm_key_baseurl_mismatch()
     await _fetch_plugin_configs()
 
     # Restart providers to pick up new config
@@ -1010,18 +983,13 @@ async def config_reload(request_body: dict | None = None) -> JSONResponse:
     await tts_provider.stop()
     await tts_provider.start()
 
-    effective_model = _effective_llm_model(
-        provider=new_config.llm.provider,
-        model=new_config.llm.model,
-        base_url=new_config.llm.base_url,
-    )
+    effective_model = _effective_llm_model(new_config.llm.model)
     logger.info(
-        "Config reloaded (STT=%s/%s, LLM=%s/%s, base_url=%s, effective_llm=%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
+        "Config reloaded (STT=%s/%s, LLM=%s/%s, effective_llm=%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
         new_config.stt.provider,
         new_config.stt.model,
         new_config.llm.provider,
         new_config.llm.model,
-        new_config.llm.base_url or "<default-openai>",
         effective_model,
         new_config.tts.provider,
         new_config.tts.model,

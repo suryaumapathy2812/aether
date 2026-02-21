@@ -49,9 +49,15 @@ class STTConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """Language model provider settings."""
+    """Language model provider settings.
 
-    provider: str = "openai"
+    LLM traffic always routes through OpenRouter (hardcoded base URL).
+    OPENROUTER_API_KEY is the only key needed for LLM calls.
+    OPENAI_API_KEY is used separately for TTS and embeddings (direct OpenAI).
+    """
+
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
     api_key: str = ""
     model: str = "gpt-4o"
     # Separate model for voice — gpt-4o-mini is ~1s faster TTFT, good for voice
@@ -59,56 +65,50 @@ class LLMConfig:
     max_tokens: int = 500
     temperature: float = 0.7
     max_history_turns: int = 20
-    # Base URL for OpenAI-compatible APIs (e.g., OpenRouter)
-    # OpenRouter: https://openrouter.ai/api/v1
-    base_url: str = ""
+    # Always OpenRouter — hardcoded, not configurable via env.
+    base_url: str = OPENROUTER_BASE_URL
+    # Derived from model name — used for logging/display only.
+    provider: str = "openai"
 
     @classmethod
     def from_env(cls) -> LLMConfig:
-        provider = os.getenv("AETHER_LLM_PROVIDER", "openai").strip().lower()
         model = os.getenv("AETHER_LLM_MODEL", "gpt-4o").strip()
-        base_url = os.getenv("OPENAI_BASE_URL", "").strip()
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        api_key = openai_key
-        openrouter_routed_providers = {
-            "openrouter",
-            "anthropic",
-            "deepseek",
-            "google",
-            "meta",
-            "minimax",
-            "z-ai",
-        }
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
 
-        # Prefer OpenRouter automatically for non-OpenAI model families.
-        if (
-            not base_url
-            and openrouter_key
-            and (
-                provider in openrouter_routed_providers
-                or "/" in model
-                or model.startswith(("claude", "deepseek", "gemini", "glm"))
-            )
-        ):
-            base_url = "https://openrouter.ai/api/v1"
-        if not base_url and openai_key.startswith("sk-or-v1"):
-            # Auto-fallback for OpenRouter keys when base URL wasn't set via prefs/env.
-            base_url = "https://openrouter.ai/api/v1"
-        if base_url and "openrouter" in base_url.lower():
-            # Split auth: OpenRouter-routed LLM traffic should use OPENROUTER_API_KEY.
-            # Fallback to OPENAI_API_KEY for backward compatibility.
-            api_key = openrouter_key or openai_key
+        # Derive provider from model name for logging/display.
+        provider = _infer_provider_from_model(model)
+
         return cls(
-            provider=provider,
             api_key=api_key,
             model=model,
+            provider=provider,
             voice_model=os.getenv("AETHER_LLM_VOICE_MODEL", "gpt-4o-mini"),
             max_tokens=int(os.getenv("AETHER_LLM_MAX_TOKENS", "500")),
             temperature=float(os.getenv("AETHER_LLM_TEMPERATURE", "0.7")),
             max_history_turns=int(os.getenv("AETHER_LLM_MAX_HISTORY_TURNS", "20")),
-            base_url=base_url,
+            base_url=cls.OPENROUTER_BASE_URL,
         )
+
+
+def _infer_provider_from_model(model: str) -> str:
+    """Infer the LLM provider from the model name (for logging/display)."""
+    # If already scoped (e.g. "anthropic/claude-3.5-sonnet"), extract prefix.
+    if "/" in model:
+        return model.split("/", 1)[0].lower()
+    lowered = model.strip().lower()
+    if lowered.startswith("claude"):
+        return "anthropic"
+    if lowered.startswith("deepseek"):
+        return "deepseek"
+    if lowered.startswith(("gemini", "gemma")):
+        return "google"
+    if lowered.startswith("glm"):
+        return "z-ai"
+    if lowered.startswith("llama"):
+        return "meta"
+    if lowered.startswith("minimax"):
+        return "minimax"
+    return "openai"
 
 
 @dataclass(frozen=True)

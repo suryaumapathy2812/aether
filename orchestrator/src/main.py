@@ -595,14 +595,16 @@ PREFERENCE_COLUMNS = [
     "custom_instructions",
 ]
 
-# Map preference fields to agent env vars
+# Map preference fields to agent env vars.
+# NOTE: llm_provider and llm_base_url are intentionally excluded —
+# the agent hardcodes OpenRouter as the LLM gateway (config.py),
+# and derives the provider from the model name. These DB columns
+# still exist for the dashboard UI but don't map to agent env vars.
 PREF_TO_ENV = {
     "stt_provider": "AETHER_STT_PROVIDER",
     "stt_model": "AETHER_STT_MODEL",
     "stt_language": "AETHER_STT_LANGUAGE",
-    "llm_provider": "AETHER_LLM_PROVIDER",
     "llm_model": "AETHER_LLM_MODEL",
-    "llm_base_url": "OPENAI_BASE_URL",
     "tts_provider": "AETHER_TTS_PROVIDER",
     "tts_model": "AETHER_TTS_MODEL",
     "tts_voice": "AETHER_TTS_VOICE",

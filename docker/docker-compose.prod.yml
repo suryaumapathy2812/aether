@@ -44,8 +44,6 @@ services:
       - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
-      - AETHER_LLM_PROVIDER=${AETHER_LLM_PROVIDER:-openrouter}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}
       # Agent provisioning (per-user containers via Docker SDK)
       - AGENT_IMAGE=${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest
       - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}

@@ -21,8 +21,12 @@ from aether.providers.base import LLMProvider, LLMStreamEvent, LLMToolCall
 logger = logging.getLogger(__name__)
 
 
-def _infer_openrouter_provider_prefix(model: str, configured_provider: str) -> str:
-    """Infer OpenRouter provider prefix for unscoped model names."""
+def _infer_openrouter_provider_prefix(model: str) -> str:
+    """Infer OpenRouter provider prefix from model name.
+
+    OpenRouter requires models to be scoped like 'openai/gpt-4o'.
+    This infers the provider from well-known model name patterns.
+    """
     lowered = model.strip().lower()
     if lowered.startswith("claude"):
         return "anthropic"
@@ -34,33 +38,25 @@ def _infer_openrouter_provider_prefix(model: str, configured_provider: str) -> s
         return "z-ai"
     if lowered.startswith("llama"):
         return "meta"
-    if lowered.startswith(("gpt", "o1", "o3", "o4", "text-embedding")):
-        return "openai"
-
-    provider = configured_provider.strip().lower()
-    if provider and provider != "openrouter":
-        return provider
+    if lowered.startswith("minimax"):
+        return "minimax"
+    # Default: OpenAI models (gpt-*, o1-*, o3-*, o4-*, etc.)
     return "openai"
 
 
 def _get_model_name() -> str:
     """Get the model name, prefixing with provider for OpenRouter.
 
-    When using OpenRouter, models need provider prefix (e.g., openai/gpt-4o).
-    When using direct OpenAI, use the model name as-is.
+    All LLM traffic routes through OpenRouter, so models always need
+    a provider prefix (e.g., openai/gpt-4o, anthropic/claude-3.5-sonnet).
     """
-    llm_cfg = config_module.config.llm
-    model = llm_cfg.model
-    base_url = llm_cfg.base_url.lower() if llm_cfg.base_url else ""
+    model = config_module.config.llm.model
 
-    # Check if using OpenRouter
-    if "openrouter" in base_url:
-        # Check if model already has provider prefix
-        if "/" not in model:
-            # Prefix with inferred provider for OpenRouter routing.
-            provider = _infer_openrouter_provider_prefix(model, llm_cfg.provider)
-            model = f"{provider}/{model}"
-            logger.debug(f"OpenRouter model prefixed: {model}")
+    # Add provider prefix if not already scoped (e.g. "gpt-4o" → "openai/gpt-4o")
+    if "/" not in model:
+        provider = _infer_openrouter_provider_prefix(model)
+        model = f"{provider}/{model}"
+        logger.debug(f"OpenRouter model prefixed: {model}")
 
     return model
 

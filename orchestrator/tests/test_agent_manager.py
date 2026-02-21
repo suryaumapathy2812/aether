@@ -149,8 +149,12 @@ class TestProvisionAgent:
         assert env["DEEPGRAM_API_KEY"] == "dg-user-key"
 
     @pytest.mark.asyncio
-    async def test_provision_sets_llm_defaults_when_missing(self):
-        """Container env inherits orchestrator LLM defaults for spawned agents."""
+    async def test_provision_does_not_inject_llm_provider_or_base_url(self):
+        """Agent env should NOT contain AETHER_LLM_PROVIDER or OPENAI_BASE_URL.
+
+        LLM routing is hardcoded in the agent's config.py (always OpenRouter).
+        The orchestrator should not inject these env vars.
+        """
         docker_client = self._mock_docker()
         docker_client.containers.get.side_effect = Exception("Not found")
         docker_client.volumes.get.side_effect = Exception("Not found")
@@ -159,21 +163,82 @@ class TestProvisionAgent:
         mock_container.id = "newcontainer12"
         docker_client.containers.run.return_value = mock_container
 
-        with (
-            patch("src.agent_manager._get_docker", return_value=docker_client),
-            patch("src.agent_manager.DEFAULT_AGENT_LLM_PROVIDER", "openrouter"),
-            patch(
-                "src.agent_manager.DEFAULT_AGENT_OPENAI_BASE_URL",
-                "https://openrouter.ai/api/v1",
-            ),
-        ):
+        with patch("src.agent_manager._get_docker", return_value=docker_client):
             from src.agent_manager import provision_agent
 
             await provision_agent("user-42")
 
         env = docker_client.containers.run.call_args[1]["environment"]
-        assert env["AETHER_LLM_PROVIDER"] == "openrouter"
-        assert env["OPENAI_BASE_URL"] == "https://openrouter.ai/api/v1"
+        assert "AETHER_LLM_PROVIDER" not in env
+        assert "OPENAI_BASE_URL" not in env
+
+
+# ── Build agent environment ────────────────────────────────
+
+
+class TestBuildAgentEnvironment:
+    def test_identity_always_set(self):
+        """Identity and infrastructure vars are always present."""
+        from src.agent_manager import _build_agent_environment
+
+        env = _build_agent_environment("user-42")
+        assert env["AETHER_AGENT_ID"] == "agent-user-42"
+        assert env["AETHER_USER_ID"] == "user-42"
+        assert env["AETHER_HOST"] == "0.0.0.0"
+        assert env["AETHER_PORT"] == "8000"
+        assert env["AETHER_DB_PATH"] == "/data/aether_memory.db"
+        assert env["ORCHESTRATOR_URL"]  # always set
+
+    def test_no_llm_provider_or_base_url(self):
+        """LLM routing is hardcoded in agent code — not injected via env."""
+        from src.agent_manager import _build_agent_environment
+
+        env = _build_agent_environment("user-42")
+        assert "AETHER_LLM_PROVIDER" not in env
+        assert "OPENAI_BASE_URL" not in env
+
+    def test_user_prefs_override_defaults(self):
+        """User preferences override orchestrator defaults."""
+        from src.agent_manager import _build_agent_environment
+
+        env = _build_agent_environment(
+            "user-42",
+            user_preferences={"AETHER_VAD_MODE": "shadow"},
+        )
+        assert env["AETHER_VAD_MODE"] == "shadow"
+
+    def test_identity_cannot_be_overridden_by_prefs(self):
+        """Infrastructure vars cannot be overridden by user preferences."""
+        from src.agent_manager import _build_agent_environment
+
+        env = _build_agent_environment(
+            "user-42",
+            user_preferences={"AETHER_HOST": "evil.host", "AETHER_PORT": "9999"},
+        )
+        assert env["AETHER_HOST"] == "0.0.0.0"
+        assert env["AETHER_PORT"] == "8000"
+
+    def test_user_api_keys_override_system(self):
+        """User API keys override system defaults."""
+        with patch(
+            "src.agent_manager.SYSTEM_API_KEYS", {"OPENAI_API_KEY": "sk-system"}
+        ):
+            from src.agent_manager import _build_agent_environment
+
+            env = _build_agent_environment(
+                "user-42",
+                user_api_keys={"openai": "sk-user-key"},
+            )
+        assert env["OPENAI_API_KEY"] == "sk-user-key"
+
+    def test_vad_and_turn_defaults_present(self):
+        """VAD and turn detection defaults are always set."""
+        from src.agent_manager import _build_agent_environment
+
+        env = _build_agent_environment("user-42")
+        assert "AETHER_VAD_MODE" in env
+        assert "AETHER_TURN_DETECTION_MODE" in env
+        assert "AETHER_TURN_MODEL_TYPE" in env
 
 
 # ── Container stop/destroy ─────────────────────────────────
