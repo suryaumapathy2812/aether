@@ -113,6 +113,138 @@ Create a new Google Slides presentation.
 
 ---
 
+### `share_file`
+Share a file with specific people by email address.
+
+**Parameters:**
+- `file_id` (required) — The file ID to share
+- `email` (required) — Email address(es), comma-separated for multiple
+- `role` (optional, default `viewer`) — `viewer`, `commenter`, or `editor`
+- `send_notification` (optional, default `true`) — Whether to email the recipients
+
+**Returns:** Confirmation with list of emails shared, their role, and the file's web link.
+
+**Use when:** The user wants to give someone access to a file. **Always confirm who you're sharing with and what role before calling this tool.**
+
+---
+
+### `list_permissions`
+List all people who have access to a file.
+
+**Parameters:**
+- `file_id` (required) — The file ID
+
+**Returns:** Each person's name, email, role (viewer/commenter/editor), and permission type.
+
+**Use when:** The user asks who has access to a file, or before calling `update_permission` or `remove_sharing` to confirm the current state.
+
+---
+
+### `update_permission`
+Change someone's access level on a file.
+
+**Parameters:**
+- `file_id` (required) — The file ID
+- `email` (required) — Email address of the person whose access to change
+- `role` (required) — New role: `viewer`, `commenter`, or `editor`
+
+**Use when:** The user wants to upgrade or downgrade someone's access. Call `list_permissions` first to confirm the person currently has access.
+
+---
+
+### `remove_sharing`
+Revoke someone's access to a file.
+
+**Parameters:**
+- `file_id` (required) — The file ID
+- `email` (required) — Email address of the person to remove
+
+**Use when:** The user wants to remove someone's access. Call `list_permissions` first to confirm the person currently has access and show the user before removing.
+
+---
+
+### `make_public`
+Make a file accessible to anyone with the link.
+
+**Parameters:**
+- `file_id` (required) — The file ID
+- `role` (optional, default `viewer`) — `viewer` or `commenter`
+
+**Returns:** Confirmation with the public shareable link.
+
+**Use when:** The user explicitly asks to make a file public or share it with "anyone with the link". **This is a significant action — always confirm with the user before calling this tool.** Inform them that anyone with the link will be able to access the file.
+
+---
+
+### `move_file`
+Move a file to a different folder.
+
+**Parameters:**
+- `file_id` (required) — The file ID to move
+- `folder_id` (required) — The destination folder ID
+
+**Use when:** The user wants to reorganize files. Use `search_drive` or `list_drive_files` to find the destination folder ID if needed.
+
+---
+
+### `rename_file`
+Rename a file in Google Drive.
+
+**Parameters:**
+- `file_id` (required) — The file ID to rename
+- `new_name` (required) — The new name for the file
+
+**Returns:** Confirmation showing old name → new name.
+
+**Use when:** The user wants to rename a file. Confirm the new name before calling.
+
+---
+
+### `copy_file`
+Make a copy of a file in Google Drive.
+
+**Parameters:**
+- `file_id` (required) — The file ID to copy
+- `new_name` (optional) — Name for the copy (defaults to "Copy of [original name]")
+
+**Returns:** New file ID, name, and link.
+
+**Use when:** The user wants to duplicate a file, create a template copy, or make a backup.
+
+---
+
+### `create_folder`
+Create a new folder in Google Drive.
+
+**Parameters:**
+- `name` (required) — Folder name
+- `parent_folder_id` (optional) — Parent folder ID (defaults to Drive root)
+
+**Returns:** Folder ID and link.
+
+**Use when:** The user wants to create a new folder for organization. Confirm the name and location before creating.
+
+---
+
+### `update_document`
+Append or replace content in an existing Google Doc.
+
+**Parameters:**
+- `document_id` (required) — The Google Doc document ID
+- `content` (required) — Text content to insert
+- `mode` (optional, default `append`) — `append` to add to end, `replace` to overwrite all content
+
+**Returns:** Confirmation with a link to the updated document.
+
+**Use when:** The user wants to add content to an existing doc (append) or rewrite it entirely (replace).
+
+**Important:**
+- `append` mode is safe — it only adds content at the end
+- `replace` mode **destroys all existing content** — always confirm with the user before using replace mode
+- Use `read_file_content` first if you need to see the current content before updating
+
+---
+
 ## Decision Rules
 
 **Finding files:**
@@ -139,6 +271,25 @@ Create a new Google Slides presentation.
 - If a file isn't found, suggest trying different search terms
 - If `read_file_content` fails on a binary file, explain the limitation and provide the file link
 - 403 errors usually mean the Drive API isn't enabled or the user needs to reconnect the plugin
+
+**File deletion:**
+- **Cannot delete files** (security policy — deletion is irreversible and not supported).
+- If the user asks to delete a file, respond: "I can't delete files for security reasons. I can move it to a different folder, or remove your access to it instead — would either of those work?"
+
+**Sharing files:**
+- **Always confirm who you're sharing with and what role before calling `share_file`** — sharing is hard to undo and may expose sensitive data
+- Call `list_permissions` before `update_permission` or `remove_sharing` to confirm the current state and show the user
+- `make_public` is a significant action — **always confirm with the user before doing it** and explain that anyone with the link will be able to access the file
+
+**Organizing files:**
+- Use `search_drive` to find the destination folder ID before calling `move_file`
+- `rename_file` is safe and reversible — confirm the new name with the user
+- `copy_file` creates a new independent copy — changes to the copy won't affect the original
+
+**Updating documents:**
+- `update_document` with `append` mode is safe — it only adds content at the end
+- `update_document` with `replace` mode **destroys all existing content** — always confirm with the user before using replace mode
+- Use `read_file_content` first if you need to see the current content before updating
 
 ---
 
@@ -168,4 +319,49 @@ Create a new Google Slides presentation.
 ```
 1. list_drive_files folder_id="root"
 2. List files with names and types, grouped by type if helpful
+```
+
+**"Share the Q4 report with alice@example.com as an editor"**
+```
+1. search_drive query="Q4 report" → get file_id
+2. Confirm: "I'll share [file name] with alice@example.com as an editor. Proceed?"
+3. share_file file_id="..." email="alice@example.com" role="editor"
+4. "Shared! Alice now has editor access."
+```
+
+**"Who has access to this file?"**
+```
+1. list_permissions file_id="..."
+2. List each person with their name, email, and role
+```
+
+**"Remove Bob's access to the budget spreadsheet"**
+```
+1. search_drive query="budget spreadsheet" → get file_id
+2. list_permissions file_id="..." → confirm Bob has access, show current state
+3. Confirm: "I'll remove bob@example.com's access. Proceed?"
+4. remove_sharing file_id="..." email="bob@example.com"
+5. "Done. Bob no longer has access."
+```
+
+**"Make this doc public"**
+```
+1. Confirm: "This will make the file accessible to anyone with the link. Are you sure?"
+2. make_public file_id="..." role="viewer"
+3. "Done! Anyone with this link can now view it: [link]"
+```
+
+**"Move the report to the Archive folder"**
+```
+1. search_drive query="Archive" → find the Archive folder ID
+2. Confirm: "I'll move [file name] to the Archive folder. Proceed?"
+3. move_file file_id="..." folder_id="..."
+4. "Moved successfully."
+```
+
+**"Add notes to my meeting doc"**
+```
+1. search_drive query="meeting notes" → get file_id (document_id)
+2. update_document document_id="..." content="\n\n[new notes]" mode="append"
+3. "Added your notes to the document. Here's the link: [link]"
 ```

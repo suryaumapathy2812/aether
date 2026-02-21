@@ -3,6 +3,14 @@
 Uses the Google Drive API v3 and Google Docs/Sheets/Slides APIs.
 Each plugin manages its own OAuth tokens independently.
 Credentials arrive via ``self._context`` at call time.
+
+New tools (v0.3.0):
+- Share files with specific people
+- List, update, and remove file permissions
+- Make files public
+- Move, rename, and copy files
+- Create folders
+- Update (append/replace) content in existing Google Docs
 """
 
 from __future__ import annotations
@@ -679,4 +687,875 @@ class CreatePresentationTool(_DriveTool):
             )
         except Exception as e:
             logger.error(f"Error creating presentation: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+# ── New Drive Tools (v0.3.0) ──────────────────────────────────
+
+
+class ShareFileTool(_DriveTool):
+    """Share a file with one or more email addresses."""
+
+    name = "share_file"
+    description = "Share a file with specific people by email address"
+    status_text = "Sharing file..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to share",
+            required=True,
+        ),
+        ToolParam(
+            name="email",
+            type="string",
+            description="Email address(es) to share with, comma-separated for multiple",
+            required=True,
+        ),
+        ToolParam(
+            name="role",
+            type="string",
+            description="Access role: 'viewer', 'commenter', or 'editor' (default: 'viewer')",
+            required=False,
+            default="viewer",
+        ),
+        ToolParam(
+            name="send_notification",
+            type="boolean",
+            description="Send email notification to recipients (default: true)",
+            required=False,
+            default=True,
+        ),
+    ]
+
+    async def execute(
+        self,
+        file_id: str,
+        email: str,
+        role: str = "viewer",
+        send_notification: bool = True,
+        **_,
+    ) -> ToolResult:
+        """Create a permission for each email address on the file."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        # Validate role
+        valid_roles = {"viewer", "commenter", "editor"}
+        if role not in valid_roles:
+            return ToolResult.fail(
+                f"Invalid role '{role}'. Must be one of: viewer, commenter, editor."
+            )
+
+        try:
+            headers = self._auth_headers()
+            emails = [e.strip() for e in email.split(",") if e.strip()]
+            shared = []
+
+            async with httpx.AsyncClient() as client:
+                # First get the file's web link to include in the response
+                meta_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={"fields": "name,webViewLink", "supportsAllDrives": "true"},
+                )
+                meta_resp.raise_for_status()
+                meta = meta_resp.json()
+                file_name = meta.get("name", file_id)
+                web_link = meta.get("webViewLink", "")
+
+                # Share with each email address
+                for addr in emails:
+                    perm_resp = await client.post(
+                        f"{DRIVE_API}/files/{file_id}/permissions",
+                        headers=headers,
+                        params={
+                            "sendNotificationEmail": str(send_notification).lower(),
+                            "supportsAllDrives": "true",
+                        },
+                        json={
+                            "type": "user",
+                            "role": role,
+                            "emailAddress": addr,
+                        },
+                    )
+                    perm_resp.raise_for_status()
+                    shared.append(addr)
+
+            output = f"**{file_name}** shared successfully.\n"
+            output += f"   Shared with: {', '.join(shared)}\n"
+            output += f"   Role: {role}\n"
+            if web_link:
+                output += f"   Link: {web_link}"
+
+            return ToolResult.success(
+                output, file_id=file_id, shared_with=shared, role=role
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error sharing file: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class ListPermissionsTool(_DriveTool):
+    """List all people who have access to a file."""
+
+    name = "list_permissions"
+    description = "List all people who have access to a file"
+    status_text = "Fetching permissions..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to list permissions for",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, file_id: str, **_) -> ToolResult:
+        """Fetch the permissions list for a Drive file."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}/permissions",
+                    headers=self._auth_headers(),
+                    params={
+                        "fields": "permissions(id,emailAddress,role,type,displayName)",
+                        "supportsAllDrives": "true",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            permissions = data.get("permissions", [])
+            if not permissions:
+                return ToolResult.success("No permissions found for this file.")
+
+            output = "**File Permissions:**\n"
+            for perm in permissions:
+                ptype = perm.get("type", "")
+                role = perm.get("role", "")
+                display = perm.get("displayName", "")
+                email = perm.get("emailAddress", "")
+                perm_id = perm.get("id", "")
+
+                if ptype == "anyone":
+                    output += f"\n- **Anyone with the link** — {role}"
+                else:
+                    name_part = f"{display} " if display else ""
+                    email_part = f"<{email}>" if email else ""
+                    output += (
+                        f"\n- **{name_part}{email_part}** — {role} (ID: `{perm_id}`)"
+                    )
+
+            return ToolResult.success(output, count=len(permissions))
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error listing permissions: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class UpdatePermissionTool(_DriveTool):
+    """Change a person's access level on a file."""
+
+    name = "update_permission"
+    description = "Change someone's access level on a file (viewer/commenter/editor)"
+    status_text = "Updating permission..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID",
+            required=True,
+        ),
+        ToolParam(
+            name="email",
+            type="string",
+            description="Email address of the person whose access to change",
+            required=True,
+        ),
+        ToolParam(
+            name="role",
+            type="string",
+            description="New access role: 'viewer', 'commenter', or 'editor'",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, file_id: str, email: str, role: str, **_) -> ToolResult:
+        """Find the permission ID for the email, then update the role."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        valid_roles = {"viewer", "commenter", "editor"}
+        if role not in valid_roles:
+            return ToolResult.fail(
+                f"Invalid role '{role}'. Must be one of: viewer, commenter, editor."
+            )
+
+        try:
+            headers = self._auth_headers()
+
+            # Step 1: List permissions to find the permission ID for this email
+            async with httpx.AsyncClient() as client:
+                list_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}/permissions",
+                    headers=headers,
+                    params={
+                        "fields": "permissions(id,emailAddress,role)",
+                        "supportsAllDrives": "true",
+                    },
+                )
+                list_resp.raise_for_status()
+                perms_data = list_resp.json()
+
+            permissions = perms_data.get("permissions", [])
+            perm_id = next(
+                (
+                    p["id"]
+                    for p in permissions
+                    if p.get("emailAddress", "").lower() == email.lower()
+                ),
+                None,
+            )
+
+            if not perm_id:
+                return ToolResult.fail(
+                    f"'{email}' does not have access to this file. "
+                    "Use list_permissions to see who has access."
+                )
+
+            # Step 2: Update the permission role
+            async with httpx.AsyncClient() as client:
+                patch_resp = await client.patch(
+                    f"{DRIVE_API}/files/{file_id}/permissions/{perm_id}",
+                    headers=headers,
+                    params={"supportsAllDrives": "true"},
+                    json={"role": role},
+                )
+                patch_resp.raise_for_status()
+
+            return ToolResult.success(
+                f"Updated {email}'s access to '{role}' on file {file_id}.",
+                file_id=file_id,
+                email=email,
+                role=role,
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error updating permission: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class RemoveSharingTool(_DriveTool):
+    """Revoke a person's access to a file."""
+
+    name = "remove_sharing"
+    description = "Revoke someone's access to a file"
+    status_text = "Removing access..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID",
+            required=True,
+        ),
+        ToolParam(
+            name="email",
+            type="string",
+            description="Email address of the person to remove",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, file_id: str, email: str, **_) -> ToolResult:
+        """Find the permission ID for the email, then delete it."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+
+            # Step 1: List permissions to find the permission ID for this email
+            async with httpx.AsyncClient() as client:
+                list_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}/permissions",
+                    headers=headers,
+                    params={
+                        "fields": "permissions(id,emailAddress)",
+                        "supportsAllDrives": "true",
+                    },
+                )
+                list_resp.raise_for_status()
+                perms_data = list_resp.json()
+
+            permissions = perms_data.get("permissions", [])
+            perm_id = next(
+                (
+                    p["id"]
+                    for p in permissions
+                    if p.get("emailAddress", "").lower() == email.lower()
+                ),
+                None,
+            )
+
+            if not perm_id:
+                return ToolResult.fail(
+                    f"'{email}' does not have access to this file. "
+                    "Use list_permissions to see who has access."
+                )
+
+            # Step 2: Delete the permission
+            async with httpx.AsyncClient() as client:
+                del_resp = await client.delete(
+                    f"{DRIVE_API}/files/{file_id}/permissions/{perm_id}",
+                    headers=headers,
+                    params={"supportsAllDrives": "true"},
+                )
+                del_resp.raise_for_status()
+
+            return ToolResult.success(
+                f"Removed {email}'s access to file {file_id}.",
+                file_id=file_id,
+                email=email,
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error removing sharing: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class MakePublicTool(_DriveTool):
+    """Make a file accessible to anyone with the link."""
+
+    name = "make_public"
+    description = "Make a file accessible to anyone with the link"
+    status_text = "Making file public..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to make public",
+            required=True,
+        ),
+        ToolParam(
+            name="role",
+            type="string",
+            description="Access role for public: 'viewer' or 'commenter' (default: 'viewer')",
+            required=False,
+            default="viewer",
+        ),
+    ]
+
+    async def execute(self, file_id: str, role: str = "viewer", **_) -> ToolResult:
+        """Set an 'anyone' permission on the file."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        valid_roles = {"viewer", "commenter"}
+        if role not in valid_roles:
+            return ToolResult.fail(
+                f"Invalid role '{role}'. For public access, must be 'viewer' or 'commenter'."
+            )
+
+        try:
+            headers = self._auth_headers()
+
+            async with httpx.AsyncClient() as client:
+                # Get file name and link for the response
+                meta_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={"fields": "name,webViewLink", "supportsAllDrives": "true"},
+                )
+                meta_resp.raise_for_status()
+                meta = meta_resp.json()
+                file_name = meta.get("name", file_id)
+                web_link = meta.get("webViewLink", "")
+
+                # Create the 'anyone' permission
+                perm_resp = await client.post(
+                    f"{DRIVE_API}/files/{file_id}/permissions",
+                    headers=headers,
+                    params={"supportsAllDrives": "true"},
+                    json={"type": "anyone", "role": role},
+                )
+                perm_resp.raise_for_status()
+
+            output = f"**{file_name}** is now public ({role}).\n"
+            if web_link:
+                output += f"   Anyone with this link can view: {web_link}"
+
+            return ToolResult.success(output, file_id=file_id, role=role, link=web_link)
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error making file public: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class MoveFileTool(_DriveTool):
+    """Move a file to a different folder in Google Drive."""
+
+    name = "move_file"
+    description = "Move a file to a different folder"
+    status_text = "Moving file..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to move",
+            required=True,
+        ),
+        ToolParam(
+            name="folder_id",
+            type="string",
+            description="The destination folder ID",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, file_id: str, folder_id: str, **_) -> ToolResult:
+        """Get current parents, then move the file to the new folder."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+
+            # Step 1: Get current parents
+            async with httpx.AsyncClient() as client:
+                meta_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={"fields": "name,parents", "supportsAllDrives": "true"},
+                )
+                meta_resp.raise_for_status()
+                meta = meta_resp.json()
+
+            file_name = meta.get("name", file_id)
+            current_parents = meta.get("parents", [])
+            remove_parents = ",".join(current_parents)
+
+            # Step 2: Move to new folder by updating parents
+            async with httpx.AsyncClient() as client:
+                move_resp = await client.patch(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={
+                        "addParents": folder_id,
+                        "removeParents": remove_parents,
+                        "fields": "id,name,parents",
+                        "supportsAllDrives": "true",
+                    },
+                )
+                move_resp.raise_for_status()
+
+            return ToolResult.success(
+                f"**{file_name}** moved to folder `{folder_id}` successfully.",
+                file_id=file_id,
+                folder_id=folder_id,
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error moving file: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class RenameFileTool(_DriveTool):
+    """Rename a file in Google Drive."""
+
+    name = "rename_file"
+    description = "Rename a file in Google Drive"
+    status_text = "Renaming file..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to rename",
+            required=True,
+        ),
+        ToolParam(
+            name="new_name",
+            type="string",
+            description="The new name for the file",
+            required=True,
+        ),
+    ]
+
+    async def execute(self, file_id: str, new_name: str, **_) -> ToolResult:
+        """Patch the file's name metadata."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+
+            # Get the current name for the confirmation message
+            async with httpx.AsyncClient() as client:
+                meta_resp = await client.get(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={"fields": "name", "supportsAllDrives": "true"},
+                )
+                meta_resp.raise_for_status()
+                old_name = meta_resp.json().get("name", file_id)
+
+                # Rename the file
+                rename_resp = await client.patch(
+                    f"{DRIVE_API}/files/{file_id}",
+                    headers=headers,
+                    params={"fields": "id,name", "supportsAllDrives": "true"},
+                    json={"name": new_name},
+                )
+                rename_resp.raise_for_status()
+
+            return ToolResult.success(
+                f"Renamed: **{old_name}** → **{new_name}**",
+                file_id=file_id,
+                old_name=old_name,
+                new_name=new_name,
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error renaming file: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class CopyFileTool(_DriveTool):
+    """Duplicate a file in Google Drive."""
+
+    name = "copy_file"
+    description = "Make a copy of a file in Google Drive"
+    status_text = "Copying file..."
+    parameters = [
+        ToolParam(
+            name="file_id",
+            type="string",
+            description="The file ID to copy",
+            required=True,
+        ),
+        ToolParam(
+            name="new_name",
+            type="string",
+            description="Name for the copy (optional — defaults to 'Copy of [original name]')",
+            required=False,
+            default="",
+        ),
+    ]
+
+    async def execute(self, file_id: str, new_name: str = "", **_) -> ToolResult:
+        """Copy a file, optionally with a new name."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+
+            # Build the copy request body
+            body: dict = {}
+            if new_name:
+                body["name"] = new_name
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{DRIVE_API}/files/{file_id}/copy",
+                    headers=headers,
+                    params={
+                        "fields": "id,name,webViewLink",
+                        "supportsAllDrives": "true",
+                    },
+                    json=body,
+                )
+                resp.raise_for_status()
+                copy = resp.json()
+
+            copy_id = copy.get("id", "")
+            copy_name = copy.get("name", "")
+            copy_link = copy.get("webViewLink", "")
+
+            output = f"**File copied successfully.**\n"
+            output += f"   New file: **{copy_name}**\n"
+            output += f"   ID: `{copy_id}`\n"
+            if copy_link:
+                output += f"   Link: {copy_link}"
+
+            return ToolResult.success(
+                output, new_file_id=copy_id, new_name=copy_name, link=copy_link
+            )
+
+        except httpx.HTTPStatusError as e:
+            body_text = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body_text}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body_text}"
+            )
+        except Exception as e:
+            logger.error(f"Error copying file: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class CreateFolderTool(_DriveTool):
+    """Create a new folder in Google Drive."""
+
+    name = "create_folder"
+    description = "Create a new folder in Google Drive"
+    status_text = "Creating folder..."
+    parameters = [
+        ToolParam(
+            name="name",
+            type="string",
+            description="Folder name",
+            required=True,
+        ),
+        ToolParam(
+            name="parent_folder_id",
+            type="string",
+            description="Parent folder ID (optional — defaults to Drive root)",
+            required=False,
+            default="",
+        ),
+    ]
+
+    async def execute(self, name: str, parent_folder_id: str = "", **_) -> ToolResult:
+        """Create a folder using the Drive files.create API."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        try:
+            headers = self._auth_headers()
+
+            # Use provided parent or fall back to root
+            parent = parent_folder_id.strip() if parent_folder_id else "root"
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{DRIVE_API}/files",
+                    headers=headers,
+                    params={
+                        "fields": "id,name,webViewLink",
+                        "supportsAllDrives": "true",
+                    },
+                    json={
+                        "name": name,
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "parents": [parent],
+                    },
+                )
+                resp.raise_for_status()
+                folder = resp.json()
+
+            folder_id = folder.get("id", "")
+            folder_link = folder.get("webViewLink", "")
+
+            output = f"**Folder created:** {name}\n"
+            output += f"   ID: `{folder_id}`\n"
+            if folder_link:
+                output += f"   Link: {folder_link}"
+
+            return ToolResult.success(
+                output, folder_id=folder_id, name=name, link=folder_link
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Drive API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(
+                f"Drive API error ({e.response.status_code}): {body}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating folder: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: {e}")
+
+
+class UpdateDocumentTool(_DriveTool):
+    """Append or replace content in an existing Google Doc."""
+
+    name = "update_document"
+    description = "Append or replace content in an existing Google Doc"
+    status_text = "Updating document..."
+    parameters = [
+        ToolParam(
+            name="document_id",
+            type="string",
+            description="The Google Doc document ID",
+            required=True,
+        ),
+        ToolParam(
+            name="content",
+            type="string",
+            description="Text content to insert",
+            required=True,
+        ),
+        ToolParam(
+            name="mode",
+            type="string",
+            description="'append' to add to end, 'replace' to overwrite all content (default: 'append')",
+            required=False,
+            default="append",
+        ),
+    ]
+
+    async def execute(
+        self, document_id: str, content: str, mode: str = "append", **_
+    ) -> ToolResult:
+        """Use the Docs API batchUpdate to append or replace document content."""
+        if not self._get_token():
+            return ToolResult.fail("Google Drive not connected — missing access token.")
+
+        valid_modes = {"append", "replace"}
+        if mode not in valid_modes:
+            return ToolResult.fail(
+                f"Invalid mode '{mode}'. Must be 'append' or 'replace'."
+            )
+
+        try:
+            headers = self._auth_headers()
+            headers["Content-Type"] = "application/json"
+
+            # Step 1: Get the document to find the end index
+            async with httpx.AsyncClient() as client:
+                doc_resp = await client.get(
+                    f"{DOCS_API}/documents/{document_id}",
+                    headers=headers,
+                    params={"fields": "body.content,title"},
+                )
+                doc_resp.raise_for_status()
+                doc = doc_resp.json()
+
+            doc_title = doc.get("title", document_id)
+            body_content = doc.get("body", {}).get("content", [])
+
+            # Find the last endIndex in the document body
+            end_index = 1  # Minimum safe index
+            for element in body_content:
+                ei = element.get("endIndex")
+                if ei is not None:
+                    end_index = ei
+
+            # Build the batchUpdate requests
+            requests: list[dict] = []
+
+            if mode == "replace":
+                # Delete all existing content (if doc has more than just the final newline)
+                if end_index > 2:
+                    requests.append(
+                        {
+                            "deleteContentRange": {
+                                "range": {
+                                    "startIndex": 1,
+                                    "endIndex": end_index - 1,
+                                }
+                            }
+                        }
+                    )
+                # After deletion, insert at index 1
+                requests.append(
+                    {
+                        "insertText": {
+                            "location": {"index": 1},
+                            "text": content,
+                        }
+                    }
+                )
+            else:
+                # Append: insert before the final newline (endIndex - 1)
+                insert_index = max(1, end_index - 1)
+                requests.append(
+                    {
+                        "insertText": {
+                            "location": {"index": insert_index},
+                            "text": content,
+                        }
+                    }
+                )
+
+            # Step 2: Apply the batchUpdate
+            async with httpx.AsyncClient() as client:
+                update_resp = await client.post(
+                    f"{DOCS_API}/documents/{document_id}:batchUpdate",
+                    headers=headers,
+                    json={"requests": requests},
+                )
+                update_resp.raise_for_status()
+
+            doc_url = f"https://docs.google.com/document/d/{document_id}/edit"
+            action = "appended to" if mode == "append" else "replaced content in"
+            output = f"**{doc_title}** — content {action} successfully.\n"
+            output += f"   Link: {doc_url}"
+
+            return ToolResult.success(
+                output, document_id=document_id, mode=mode, url=doc_url
+            )
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                f"Docs API error {e.response.status_code}: {body}", exc_info=True
+            )
+            return ToolResult.fail(f"Docs API error ({e.response.status_code}): {body}")
+        except Exception as e:
+            logger.error(f"Error updating document: {e}", exc_info=True)
             return ToolResult.fail(f"Error: {e}")

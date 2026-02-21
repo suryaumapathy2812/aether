@@ -1,7 +1,7 @@
 name: gmail
 display_name: Gmail
 description: Monitor and respond to Gmail emails
-version: 0.2.0
+version: 0.3.0
 
 auth:
   type: oauth2
@@ -28,3 +28,12 @@ tools:
   - class: SendReplyTool
   - class: CreateDraftTool
   - class: ArchiveEmailTool
+  - class: SearchEmailTool
+  - class: ReplyAllTool
+  - class: GetThreadTool
+  - class: TrashEmailTool
+  - class: MarkReadTool
+  - class: MarkUnreadTool
+  - class: ListLabelsTool
+  - class: AddLabelTool
+  - class: RemoveLabelTool

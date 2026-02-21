@@ -1,7 +1,7 @@
 name: google-drive
 display_name: Google Drive
 description: Search, browse, read, and create files in Google Drive
-version: 0.2.0
+version: 0.3.0
 
 auth:
   type: oauth2
@@ -16,3 +16,13 @@ tools:
   - class: CreateDocumentTool
   - class: CreateSpreadsheetTool
   - class: CreatePresentationTool
+  - class: ShareFileTool
+  - class: ListPermissionsTool
+  - class: UpdatePermissionTool
+  - class: RemoveSharingTool
+  - class: MakePublicTool
+  - class: MoveFileTool
+  - class: RenameFileTool
+  - class: CopyFileTool
+  - class: CreateFolderTool
+  - class: UpdateDocumentTool
