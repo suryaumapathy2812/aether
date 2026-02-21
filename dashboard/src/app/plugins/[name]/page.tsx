@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import {
   listPlugins,
+  installPlugin,
   getPluginConfig,
   savePluginConfig,
   enablePlugin,
@@ -19,13 +20,24 @@ import {
 } from "@/lib/api";
 
 /**
- * Plugin detail/config page.
- * 
- * Shows:
- * - Plugin description
- * - OAuth connect (for oauth2 plugins)
- * - Config form (for api_key plugins)
- * - Enable/Disable with validation
+ * Plugin detail / setup page.
+ *
+ * UX intent — no "installed but not configured" limbo:
+ *
+ *   auth_type = "oauth2"
+ *     Not installed → show "Connect with <provider>" button.
+ *     Clicking it silently installs then redirects to OAuth.
+ *     After OAuth callback → plugin is installed + connected + enabled.
+ *
+ *   auth_type = "api_key"
+ *     Not installed → show config form immediately.
+ *     Saving silently installs then saves config in one shot.
+ *     Auto-enable fires server-side when all required fields are present.
+ *
+ *   auth_type = "none"
+ *     Not installed → silently install + enable on page load.
+ *
+ * The user only ever sees "set up" or "active" — never "installed, disabled".
  */
 export default function PluginDetailPage() {
   const router = useRouter();
@@ -42,6 +54,7 @@ export default function PluginDetailPage() {
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   // Show success message after OAuth redirect
   const justConnected = searchParams.get("connected") === "true";
@@ -72,6 +85,15 @@ export default function PluginDetailPage() {
         setConfig(cfg);
         setFormValues(cfg);
       }
+
+      // Auto-install + enable no-auth plugins on first visit
+      if (!found.installed && found.auth_type === "none") {
+        await installPlugin(pluginName);
+        // Reload to get updated state
+        const refreshed = await listPlugins();
+        const updated = refreshed.find((p) => p.name === pluginName);
+        if (updated) setPlugin(updated);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load plugin");
     } finally {
@@ -79,14 +101,13 @@ export default function PluginDetailPage() {
     }
   }
 
-  // Check if all required config fields are filled
   function hasRequiredConfig(): boolean {
     if (!plugin?.config_fields) return true;
-    const required = plugin.config_fields.filter((f) => f.required);
-    return required.every((f) => formValues[f.key]?.trim());
+    return plugin.config_fields
+      .filter((f) => f.required)
+      .every((f) => formValues[f.key]?.trim());
   }
 
-  // Get missing required fields
   function getMissingFields(): string[] {
     if (!plugin?.config_fields) return [];
     return plugin.config_fields
@@ -94,17 +115,38 @@ export default function PluginDetailPage() {
       .map((f) => f.label);
   }
 
+  /** OAuth2: install silently then redirect to provider */
+  async function handleConnect() {
+    if (!plugin) return;
+    setConnecting(true);
+    setError("");
+    try {
+      if (!plugin.installed) {
+        await installPlugin(pluginName);
+      }
+      window.location.href = getOAuthStartUrl(pluginName);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to connect");
+      setConnecting(false);
+    }
+  }
+
+  /** api_key: install (if needed) + save config in one shot */
   async function handleSave() {
     if (!plugin) return;
     setSaving(true);
     setError("");
     setSuccess("");
     try {
+      if (!plugin.installed) {
+        await installPlugin(pluginName);
+        setPlugin({ ...plugin, installed: true });
+      }
       const result = await savePluginConfig(pluginName, formValues);
       setConfig(formValues);
       if (result.auto_enabled) {
-        setPlugin({ ...plugin, enabled: true, connected: true });
-        setSuccess("Configuration saved and plugin enabled");
+        setPlugin((p) => p ? { ...p, installed: true, enabled: true, connected: true } : p);
+        setSuccess("Configuration saved — plugin enabled");
       } else {
         setSuccess("Configuration saved");
       }
@@ -147,14 +189,11 @@ export default function PluginDetailPage() {
     }
   }
 
-  function handleConnect() {
-    window.location.href = getOAuthStartUrl(pluginName);
-  }
-
   if (isPending || !session) return null;
 
   const missingFields = getMissingFields();
-  const canEnable = plugin?.auth_type === "none" || 
+  const canEnable =
+    plugin?.auth_type === "none" ||
     (plugin?.auth_type === "oauth2" && plugin.connected) ||
     (plugin?.auth_type === "api_key" && hasRequiredConfig());
 
@@ -171,53 +210,44 @@ export default function PluginDetailPage() {
       ) : error && !plugin ? (
         <div>
           <p className="text-muted-foreground text-xs mb-4">{error}</p>
-          <Button
-            variant="aether"
-            size="aether"
-            onClick={loadPluginData}
-          >
+          <Button variant="aether" size="aether" onClick={loadPluginData}>
             retry
           </Button>
         </div>
       ) : !plugin ? (
-        <p className="text-muted-foreground text-xs">
-          plugin not found
-        </p>
+        <p className="text-muted-foreground text-xs">plugin not found</p>
       ) : (
         <div className="space-y-6">
-          {/* Plugin description */}
+          {/* Description */}
           <div>
             <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[78ch]">
               {plugin.description}
             </p>
           </div>
 
-          {/* Success message */}
+          {/* Feedback messages */}
           {success && (
             <div className="py-3 text-[12px] text-green-400 tracking-wider animate-[fade-in_0.3s_ease]">
               {success}
             </div>
           )}
-
-          {/* Just connected success message */}
           {justConnected && !success && (
             <div className="py-3 text-[12px] text-green-400 tracking-wider animate-[fade-in_0.3s_ease]">
               connected successfully
             </div>
           )}
-
-          {/* Error message */}
           {error && (
             <div className="py-3 text-[12px] text-red-400 tracking-wider">
               {error}
             </div>
           )}
 
-          {/* OAuth2 connect / connected status */}
-          {plugin.auth_type === "oauth2" && plugin.installed && (
+          {/* ── OAuth2 ── */}
+          {plugin.auth_type === "oauth2" && (
             <div className="py-4">
               {plugin.connected ? (
                 <div className="space-y-3">
+                  {/* Connected row */}
                   <div className="flex items-center justify-between">
                     <span className="text-[14px] text-secondary-foreground font-light">
                       {config.account_email
@@ -228,11 +258,14 @@ export default function PluginDetailPage() {
                       variant="aether-link"
                       size="aether-link"
                       onClick={handleConnect}
+                      disabled={connecting}
                       className="text-[11px] tracking-wider"
                     >
-                      reconnect
+                      {connecting ? "..." : "reconnect"}
                     </Button>
                   </div>
+
+                  {/* Needs reconnect warning */}
                   {plugin.needs_reconnect && (
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
                       <span className="text-[12px] text-amber-400 tracking-wide">
@@ -242,28 +275,31 @@ export default function PluginDetailPage() {
                         variant="aether"
                         size="aether"
                         onClick={handleConnect}
+                        disabled={connecting}
                         className="shrink-0 self-start sm:self-auto"
                       >
-                        reconnect
+                        {connecting ? "..." : "reconnect"}
                       </Button>
                     </div>
                   )}
                 </div>
               ) : (
+                /* Not yet connected — primary CTA */
                 <Button
                   variant="aether"
                   size="aether"
                   onClick={handleConnect}
+                  disabled={connecting}
                 >
-                  connect with {plugin.auth_provider}
+                  {connecting ? "connecting..." : `Connect with ${plugin.auth_provider}`}
                 </Button>
               )}
               <Separator className="mt-4" />
             </div>
           )}
 
-          {/* Config form (for api_key type plugins) */}
-          {plugin.auth_type === "api_key" && plugin.installed && (
+          {/* ── API key config ── */}
+          {plugin.auth_type === "api_key" && (
             <div className="space-y-4">
               <h2 className="text-xs tracking-widest text-muted-foreground uppercase font-normal">
                 Configuration
@@ -282,22 +318,20 @@ export default function PluginDetailPage() {
                   />
                 ))}
               </div>
-
               <Button
                 variant="aether"
                 size="aether"
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || !hasRequiredConfig()}
               >
-                {saving ? "..." : "save configuration"}
+                {saving ? "..." : plugin.installed ? "save configuration" : "save & activate"}
               </Button>
-
-              <Separator className="mt-4" />
+              {plugin.installed && <Separator className="mt-4" />}
             </div>
           )}
 
-          {/* Enable/Disable section */}
-          {plugin.installed && (
+          {/* ── Enable / Disable (only shown once installed) ── */}
+          {plugin.installed && plugin.auth_type !== "none" && (
             <div className="py-2">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
                 <div className="flex flex-col">
@@ -306,16 +340,18 @@ export default function PluginDetailPage() {
                   </span>
                   {!canEnable && !plugin.enabled && (
                     <span className="text-[10px] text-red-400/80 mt-1">
-                      {missingFields.length > 0 
+                      {missingFields.length > 0
                         ? `Missing: ${missingFields.join(", ")}`
                         : "Configuration required"}
                     </span>
                   )}
                 </div>
                 <div className="flex items-center gap-3 self-start sm:self-auto">
-                  <span className={`text-[12px] tracking-wider ${
-                    plugin.enabled ? "text-green-400" : "text-muted-foreground"
-                  }`}>
+                  <span
+                    className={`text-[12px] tracking-wider ${
+                      plugin.enabled ? "text-green-400" : "text-muted-foreground"
+                    }`}
+                  >
                     {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
                   </span>
                   {plugin.enabled ? (
@@ -343,8 +379,8 @@ export default function PluginDetailPage() {
             </div>
           )}
 
-          {/* Not installed message */}
-          {!plugin.installed && (
+          {/* Not available in catalogue */}
+          {!plugin.installed && plugin.auth_type !== "oauth2" && plugin.auth_type !== "api_key" && plugin.auth_type !== "none" && (
             <div className="text-[12px] text-muted-foreground">
               Install this plugin from the{" "}
               <Link href="/plugins" className="text-secondary-foreground hover:underline">

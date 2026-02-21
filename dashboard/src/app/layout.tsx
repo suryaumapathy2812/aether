@@ -14,6 +14,12 @@ const jakarta = Plus_Jakarta_Sans({
 export const metadata: Metadata = {
   title: "aether",
   description: "Your AI companion",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Aether",
+  },
 };
 
 export default function RootLayout({
@@ -25,6 +31,11 @@ export default function RootLayout({
     <html lang="en" className={jakarta.variable}>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* PWA / home screen */}
+        <meta name="theme-color" content="#0f1512" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+        <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
       </head>
       <body className="font-sans">
         <TooltipProvider>
