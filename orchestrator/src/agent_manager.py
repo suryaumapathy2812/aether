@@ -35,6 +35,13 @@ AGENT_NETWORK = os.getenv("AGENT_NETWORK", "core-ai_default")
 IDLE_TIMEOUT_MINUTES = int(os.getenv("AGENT_IDLE_TIMEOUT", "30"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
+# GCP / Pub/Sub — forwarded into agent containers so watch tools can register
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
+GMAIL_PUBSUB_TOPIC = os.getenv(
+    "GMAIL_PUBSUB_TOPIC",
+    f"projects/{GCP_PROJECT_ID}/topics/aether-gmail-events" if GCP_PROJECT_ID else "",
+)
+
 # Dev: host path to app/ directory for hot-reload mounts into agent containers.
 # When set, agent containers get source + plugin mounts with --reload.
 # Example: /Users/you/code/core-ai/app
@@ -407,6 +414,12 @@ def _build_agent_environment(
         env["AETHER_AGENT_HOST"] = "host.docker.internal"
     if AGENT_SECRET:
         env["AGENT_SECRET"] = AGENT_SECRET
+
+    # GCP / Pub/Sub — needed by SetupGmailWatchTool in the agent
+    if GCP_PROJECT_ID:
+        env["GCP_PROJECT_ID"] = GCP_PROJECT_ID
+    if GMAIL_PUBSUB_TOPIC:
+        env["GMAIL_PUBSUB_TOPIC"] = GMAIL_PUBSUB_TOPIC
 
     return env
 
