@@ -5,9 +5,20 @@ WORKDIR /app
 # Install UV
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# System deps for numpy/aiosqlite + aiortc/av (WebRTC)
+# ── System packages ────────────────────────────────────────────────────────────
+# Keep this lean — only packages that are always needed and have no good
+# runtime alternative. Everything else (ffmpeg, imagemagick, editors, etc.)
+# can be installed on demand via: apt-get install <pkg>
+#
+# Build deps — required for Python C-extensions + aiortc/av (WebRTC)
+# Shell essentials — baseline every AI agent runtime ships (curl, git, jq, rg…)
+# Scripting utils — make, sqlite3 (inspect agent DB), file, procps
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    \
+    # Build / C-extension deps \
     gcc \
+    build-essential \
+    pkg-config \
     libavcodec-dev \
     libavformat-dev \
     libavdevice-dev \
@@ -16,7 +27,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswresample-dev \
     libopus-dev \
     libvpx-dev \
-    pkg-config \
+    \
+    # Shell / text essentials \
+    ca-certificates \
+    curl \
+    wget \
+    git \
+    jq \
+    ripgrep \
+    unzip \
+    zip \
+    less \
+    procps \
+    file \
+    make \
+    sqlite3 \
+    \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (cache layer)

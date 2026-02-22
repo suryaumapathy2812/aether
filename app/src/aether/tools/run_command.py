@@ -8,8 +8,12 @@ import shlex
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
 
-# Safety: only allow these commands
+# Safety: only allow these commands.
+# apt-get and apt-cache are included for read-only discovery (search, show,
+# list --installed). Actual package *installation* goes through InstallPackageTool
+# which validates package names and restricts to `apt-get install` only.
 ALLOWED_COMMANDS = {
+    # File system
     "ls",
     "cat",
     "head",
@@ -23,30 +27,56 @@ ALLOWED_COMMANDS = {
     "cp",
     "mv",
     "touch",
-    "date",
-    "pwd",
-    "whoami",
-    "python",
-    "python3",
-    "pip",
-    "node",
-    "npm",
-    "npx",
-    "git",
-    "curl",
-    "wget",
-    "jq",
-    "sort",
-    "uniq",
-    "tr",
-    "cut",
     "du",
     "df",
     "tree",
     "file",
     "which",
+    # Text processing
+    "jq",
+    "sort",
+    "uniq",
+    "tr",
+    "cut",
+    "sed",
+    "awk",
+    # System info
+    "date",
+    "pwd",
+    "whoami",
     "env",
     "uname",
+    "ps",
+    # Scripting runtimes
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "node",
+    "npm",
+    "npx",
+    # Version control
+    "git",
+    # Network (read-only fetching)
+    "curl",
+    "wget",
+    # Package discovery (read-only — install goes through InstallPackageTool)
+    "apt-get",
+    "apt-cache",
+    "apt",
+    # Data / DB
+    "sqlite3",
+    "jq",
+    # Compression
+    "zip",
+    "unzip",
+    "tar",
+    "gzip",
+    "gunzip",
+    # Misc
+    "make",
+    "ripgrep",
+    "rg",
 }
 
 MAX_OUTPUT = 50_000  # 50KB output limit

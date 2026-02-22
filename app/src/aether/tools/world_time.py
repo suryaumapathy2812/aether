@@ -1,7 +1,7 @@
 """World time built-in tool.
 
 Returns the current date and time for any timezone or city.
-Uses the WorldTimeAPI (worldtimeapi.org) — completely free, no auth required.
+Uses Python's stdlib zoneinfo module — no network call, no external dependency.
 
 Built-in tool — always available, no plugin enable/disable needed.
 """
@@ -9,15 +9,12 @@ Built-in tool — always available, no plugin enable/disable needed.
 from __future__ import annotations
 
 import logging
-import urllib.parse
-
-import httpx
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aether.tools.base import AetherTool, ToolParam, ToolResult
 
 logger = logging.getLogger(__name__)
-
-WORLDTIME_API = "https://worldtimeapi.org/api/timezone"
 
 
 class WorldTimeTool(AetherTool):
@@ -129,6 +126,16 @@ class WorldTimeTool(AetherTool):
         "johannesburg": "Africa/Johannesburg",
     }
 
+    DAY_NAMES = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ]
+
     async def execute(self, timezone: str, **_) -> ToolResult:
         tz_input = timezone.strip()
         tz_upper = tz_input.upper()
@@ -142,62 +149,36 @@ class WorldTimeTool(AetherTool):
         )
 
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"{WORLDTIME_API}/{urllib.parse.quote(resolved_tz)}",
-                    timeout=10,
-                )
-
-                if resp.status_code == 404:
-                    return ToolResult.fail(
-                        f"Timezone '{timezone}' not recognised. "
-                        "Try an IANA timezone name like 'Asia/Kolkata', 'America/New_York', "
-                        "or 'Europe/London', or a city name like 'Mumbai', 'Tokyo', 'London'."
-                    )
-
-                resp.raise_for_status()
-                data = resp.json()
-
-            datetime_str = data.get("datetime", "")
-            utc_offset = data.get("utc_offset", "")
-            day_of_week = data.get("day_of_week", "")
-            abbreviation = data.get("abbreviation", "")
-
-            if not datetime_str:
-                return ToolResult.fail(f"Could not retrieve time for: {timezone}")
-
-            # Format: 2026-02-21T14:30:00.123456+05:30 → "2026-02-21 14:30:00"
-            dt_clean = datetime_str[:19].replace("T", " ")
-            day_names = [
-                "Monday",
-                "Tuesday",
-                "Wednesday",
-                "Thursday",
-                "Friday",
-                "Saturday",
-                "Sunday",
-            ]
-            day_name = (
-                day_names[day_of_week]
-                if isinstance(day_of_week, int) and 0 <= day_of_week <= 6
-                else ""
+            tz = ZoneInfo(resolved_tz)
+        except ZoneInfoNotFoundError:
+            return ToolResult.fail(
+                f"Timezone '{timezone}' not recognised. "
+                "Try an IANA timezone name like 'Asia/Kolkata', 'America/New_York', "
+                "or 'Europe/London', or a city name like 'Mumbai', 'Tokyo', 'London'."
             )
-
-            tz_label = abbreviation or resolved_tz
-            output = f"**Current time in {tz_input}** ({tz_label})\n"
-            output += f"🕐 **{dt_clean}**"
-            if day_name:
-                output += f" — {day_name}"
-            if utc_offset:
-                output += f"\nUTC offset: {utc_offset}"
-
-            return ToolResult.success(
-                output, timezone=resolved_tz, datetime=datetime_str
-            )
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"WorldTimeAPI HTTP error: {e.response.status_code}")
-            return ToolResult.fail(f"World Time API error: {e.response.status_code}")
         except Exception as e:
-            logger.error(f"WorldTimeTool error: {e}", exc_info=True)
-            return ToolResult.fail(f"Time lookup failed: {e}")
+            logger.error("ZoneInfo error for '%s': %s", resolved_tz, e)
+            return ToolResult.fail(f"Could not load timezone '{timezone}': {e}")
+
+        now = datetime.now(tz)
+
+        dt_clean = now.strftime("%Y-%m-%d %H:%M:%S")
+        day_name = self.DAY_NAMES[now.weekday()]
+        utc_offset = now.strftime("%z")  # e.g. "+0530"
+        # Format as "+05:30"
+        if utc_offset and len(utc_offset) == 5:
+            utc_offset = f"{utc_offset[:3]}:{utc_offset[3:]}"
+
+        # Use the tzname from the datetime (e.g. "IST", "EST", "UTC")
+        tz_label = now.strftime("%Z") or resolved_tz
+
+        output = f"**Current time in {tz_input}** ({tz_label})\n"
+        output += f"🕐 **{dt_clean}** — {day_name}"
+        if utc_offset:
+            output += f"\nUTC offset: {utc_offset}"
+
+        return ToolResult.success(
+            output,
+            timezone=resolved_tz,
+            datetime=now.isoformat(),
+        )

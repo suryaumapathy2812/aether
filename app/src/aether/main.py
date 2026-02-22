@@ -45,6 +45,10 @@ from aether.tools.save_memory import SaveMemoryTool
 from aether.tools.search_memory import SearchMemoryTool
 from aether.tools.search_skill import SearchSkillTool
 from aether.tools.read_skill import ReadSkillTool
+from aether.tools.create_skill import CreateSkillTool
+from aether.tools.install_skill import InstallSkillTool
+from aether.tools.search_marketplace import SearchMarketplaceTool
+from aether.tools.install_package import InstallPackageTool
 from aether.skills.loader import Skill, SkillLoader
 from aether.agents.task_runner import TaskRunner
 from aether.plugins.loader import PluginLoader
@@ -139,6 +143,7 @@ APP_ROOT = Path(__file__).parent.parent.parent
 SKILLS_DIRS = [
     str(APP_ROOT / "skills"),
     str(APP_ROOT / ".agents" / "skills"),
+    str(APP_ROOT / ".skills"),  # user-installed / marketplace skills (gitignored)
 ]
 skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
@@ -146,6 +151,10 @@ skill_loader.discover()
 # Skill tools — registered after skill_loader is ready
 tool_registry.register(SearchSkillTool(skill_loader=skill_loader))
 tool_registry.register(ReadSkillTool(skill_loader=skill_loader))
+tool_registry.register(CreateSkillTool(skill_loader=skill_loader))
+tool_registry.register(InstallSkillTool(skill_loader=skill_loader))
+tool_registry.register(SearchMarketplaceTool())
+tool_registry.register(InstallPackageTool())
 
 # --- Background Task Runner ---
 # TaskRunner is created after SubAgentManager (below) since it now delegates to it.
