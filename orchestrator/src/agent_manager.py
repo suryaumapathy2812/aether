@@ -41,6 +41,10 @@ GMAIL_PUBSUB_TOPIC = os.getenv(
     "GMAIL_PUBSUB_TOPIC",
     f"projects/{GCP_PROJECT_ID}/topics/aether-gmail-events" if GCP_PROJECT_ID else "",
 )
+# PUBLIC_HOOK_URL: public HTTPS base URL of the orchestrator.
+# Required for Google Calendar HTTP push (Google rejects non-HTTPS webhook URLs).
+# Example: https://api.yourdomain.com
+PUBLIC_HOOK_URL = os.getenv("PUBLIC_HOOK_URL", "")
 
 # Dev: host path to app/ directory for hot-reload mounts into agent containers.
 # When set, agent containers get source + plugin mounts with --reload.
@@ -420,6 +424,10 @@ def _build_agent_environment(
         env["GCP_PROJECT_ID"] = GCP_PROJECT_ID
     if GMAIL_PUBSUB_TOPIC:
         env["GMAIL_PUBSUB_TOPIC"] = GMAIL_PUBSUB_TOPIC
+
+    # Public HTTPS URL — needed by SetupCalendarWatchTool (Google rejects HTTP)
+    if PUBLIC_HOOK_URL:
+        env["PUBLIC_HOOK_URL"] = PUBLIC_HOOK_URL
 
     return env
 

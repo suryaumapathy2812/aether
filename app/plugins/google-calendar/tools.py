@@ -22,6 +22,11 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 
 _ORCHESTRATOR_URL_W = _os.getenv("ORCHESTRATOR_URL", "")
 _AGENT_USER_ID_W = _os.getenv("AETHER_USER_ID", "")
+# PUBLIC_HOOK_URL: the public HTTPS base URL of the orchestrator, used as the
+# Google Calendar push webhook address. Google requires HTTPS.
+# Example: https://api.yourdomain.com
+# Falls back to ORCHESTRATOR_URL if not set (will fail for HTTP-only setups).
+_PUBLIC_HOOK_URL = _os.getenv("PUBLIC_HOOK_URL", "") or _ORCHESTRATOR_URL_W
 
 
 class _CalendarTool(AetherTool):
@@ -386,14 +391,22 @@ class SetupCalendarWatchTool(BaseWatchTool):
                 "Ensure Google Calendar is connected and the token is valid."
             )
 
-        if not _ORCHESTRATOR_URL_W or not _AGENT_USER_ID_W:
+        if not _PUBLIC_HOOK_URL or not _AGENT_USER_ID_W:
             return ToolResult.fail(
-                "Cannot set up Calendar watch: ORCHESTRATOR_URL or AETHER_USER_ID not configured."
+                "Cannot set up Calendar watch: PUBLIC_HOOK_URL (or ORCHESTRATOR_URL) "
+                "and AETHER_USER_ID must be configured."
+            )
+
+        if not _PUBLIC_HOOK_URL.startswith("https://"):
+            return ToolResult.fail(
+                f"Cannot set up Calendar watch: Google requires an HTTPS webhook URL. "
+                f"Set PUBLIC_HOOK_URL to your public HTTPS orchestrator URL "
+                f"(current value starts with '{_PUBLIC_HOOK_URL[:10]}...')."
             )
 
         # The push endpoint the orchestrator exposes for HTTP-push plugins
         hook_url = (
-            f"{_ORCHESTRATOR_URL_W}/api/hooks/http/google-calendar/{_AGENT_USER_ID_W}"
+            f"{_PUBLIC_HOOK_URL}/api/hooks/http/google-calendar/{_AGENT_USER_ID_W}"
         )
 
         import uuid as _uuid

@@ -1144,12 +1144,22 @@ class RefreshGmailTokenTool(RefreshOAuthTokenTool):
 
 import os as _os
 
-_GCP_PROJECT_ID = _os.getenv("GCP_PROJECT_ID", "")
-_PUBSUB_TOPIC = _os.getenv(
-    "GMAIL_PUBSUB_TOPIC", f"projects/{_GCP_PROJECT_ID}/topics/aether-gmail-events"
-)
 _ORCHESTRATOR_URL_W = _os.getenv("ORCHESTRATOR_URL", "")
 _AGENT_USER_ID_W = _os.getenv("AETHER_USER_ID", "")
+
+
+def _get_gcp_project_id() -> str:
+    """Read GCP_PROJECT_ID lazily so hot-reloaded env vars are picked up."""
+    return _os.getenv("GCP_PROJECT_ID", "")
+
+
+def _get_pubsub_topic() -> str:
+    """Derive Pub/Sub topic name lazily from env at call time."""
+    explicit = _os.getenv("GMAIL_PUBSUB_TOPIC", "")
+    if explicit:
+        return explicit
+    project = _get_gcp_project_id()
+    return f"projects/{project}/topics/aether-gmail-events" if project else ""
 
 
 class SetupGmailWatchTool(BaseWatchTool):
@@ -1180,13 +1190,14 @@ class SetupGmailWatchTool(BaseWatchTool):
                 "Ensure Gmail is connected and the token is valid."
             )
 
-        if not _GCP_PROJECT_ID:
+        gcp_project_id = _get_gcp_project_id()
+        if not gcp_project_id:
             return ToolResult.fail(
                 "Cannot set up Gmail watch: GCP_PROJECT_ID environment variable not set. "
                 "Set it to your Google Cloud project ID."
             )
 
-        topic_name = _PUBSUB_TOPIC
+        topic_name = _get_pubsub_topic()
         # Build the Pub/Sub push endpoint URL
         # Format: /api/hooks/pubsub/gmail/{user_id}
         if not _ORCHESTRATOR_URL_W or not _AGENT_USER_ID_W:
