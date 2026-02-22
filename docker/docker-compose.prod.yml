@@ -81,6 +81,12 @@ services:
       # Spotify OAuth2
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
+      # GCP / Pub/Sub — forwarded into agent containers for Gmail push notifications
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
+      - GMAIL_PUBSUB_TOPIC=${GMAIL_PUBSUB_TOPIC:-}
+      # Public HTTPS URL of the orchestrator — forwarded into agent containers
+      # for Google Calendar HTTP push webhooks (Google requires HTTPS)
+      - PUBLIC_HOOK_URL=${PUBLIC_HOOK_URL:-}
     depends_on:
       - postgres
     volumes:

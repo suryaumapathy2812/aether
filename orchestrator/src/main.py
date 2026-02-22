@@ -3062,8 +3062,8 @@ async def register_watch(request: Request):
     await pool.execute(
         """
         INSERT INTO watch_registrations
-            (user_id, plugin_name, protocol, watch_id, resource_id, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (id, user_id, plugin_name, protocol, watch_id, resource_id, expires_at)
+        VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6)
         ON CONFLICT (user_id, plugin_name)
         DO UPDATE SET
             protocol    = EXCLUDED.protocol,
