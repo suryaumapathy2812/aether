@@ -43,6 +43,8 @@ from aether.tools.schedule_reminder import ScheduleReminderTool
 from aether.tools.run_task import RunTaskTool
 from aether.tools.save_memory import SaveMemoryTool
 from aether.tools.search_memory import SearchMemoryTool
+from aether.tools.search_skill import SearchSkillTool
+from aether.tools.read_skill import ReadSkillTool
 from aether.skills.loader import Skill, SkillLoader
 from aether.agents.task_runner import TaskRunner
 from aether.plugins.loader import PluginLoader
@@ -132,11 +134,7 @@ tool_registry.register(ScheduleReminderTool())
 tool_registry.register(SaveMemoryTool(memory_store=memory_store))
 tool_registry.register(SearchMemoryTool(memory_store=memory_store))
 
-# --- Background Task Runner ---
-# TaskRunner is created after SubAgentManager (below) since it now delegates to it.
-# The RunTaskTool registration is also deferred.
-
-# --- Skill Loader ---
+# --- Skill Loader --- (must come before skill tools registration below)
 APP_ROOT = Path(__file__).parent.parent.parent
 SKILLS_DIRS = [
     str(APP_ROOT / "skills"),
@@ -144,6 +142,14 @@ SKILLS_DIRS = [
 ]
 skill_loader = SkillLoader(skills_dirs=SKILLS_DIRS)
 skill_loader.discover()
+
+# Skill tools — registered after skill_loader is ready
+tool_registry.register(SearchSkillTool(skill_loader=skill_loader))
+tool_registry.register(ReadSkillTool(skill_loader=skill_loader))
+
+# --- Background Task Runner ---
+# TaskRunner is created after SubAgentManager (below) since it now delegates to it.
+# The RunTaskTool registration is also deferred.
 
 # --- Plugin Loader ---
 PLUGINS_DIR = str(APP_ROOT / "plugins")

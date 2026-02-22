@@ -44,7 +44,9 @@ tsconfig.tsbuildinfo
 .agent/
 .claude/
 .cursor/
-app/skills/
+# app/skills/ is now tracked — built-in skills live here
+# Third-party/marketplace skills go in app/.skills/ (gitignored)
+app/.skills/
 
 # Database
 *.db

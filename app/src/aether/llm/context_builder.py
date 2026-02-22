@@ -32,24 +32,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _load_soul() -> str:
-    """Load Aether's personality and behavioral constitution from SOUL.md.
+def _load_prompt() -> str:
+    """Load Aether's lean base prompt from PROMPT.md.
 
-    The file lives at app/src/aether/SOUL.md — two directories above this
-    module (llm/context_builder.py → llm/ → aether/ → SOUL.md).
+    The file lives at app/src/aether/PROMPT.md — one directory above this
+    module (llm/context_builder.py → llm/ → aether/ → PROMPT.md).
 
-    Falls back to a minimal inline prompt if the file is missing so the
-    system degrades gracefully rather than crashing at startup.
+    PROMPT.md is the always-injected meta-prompt: who Aether is (briefly),
+    core loop, defaults, and instructions on how to use skills on demand.
+
+    Full identity/behavioral detail lives in app/skills/soul/SKILL.md and
+    is loaded by the LLM via read_skill(name="soul") when needed.
+
+    Falls back to a minimal inline prompt if the file is missing.
     """
-    soul_path = Path(__file__).parent.parent / "SOUL.md"
-    if soul_path.exists():
-        return soul_path.read_text(encoding="utf-8").strip()
+    prompt_path = Path(__file__).parent.parent / "PROMPT.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8").strip()
     # Fallback if file missing
     return "You are Aether, a warm and helpful personal assistant."
 
 
-# Base system prompt — loaded from SOUL.md at startup
-SYSTEM_PROMPT_BASE = _load_soul()
+# Base system prompt — loaded from PROMPT.md at startup
+SYSTEM_PROMPT_BASE = _load_prompt()
 
 # Voice-specific system prompt additions — appended when mode == "voice"
 VOICE_PROMPT_ADDON = """
@@ -200,26 +205,15 @@ class ContextBuilder:
                 f"\n\nUser's custom instructions (always follow these):\n{instructions}"
             )
 
-        # Skill injection
+        # Skill listing — names + descriptions only, so the LLM knows what's
+        # available and can call search_skill / read_skill to load content on demand.
+        # Full skill bodies are NOT injected here — the LLM fetches them via tools.
         if self.skill_loader:
-            # List available skills (plugin skills filtered by enabled_plugins)
             skills_section = self.skill_loader.get_system_prompt_section(
                 enabled_plugins=enabled_plugins
             )
             if skills_section:
                 parts.append("\n\n" + skills_section)
-
-            # If a skill matches the query, inject its full instructions
-            # (skip plugin skills whose plugin is not enabled)
-            enabled_set = set(enabled_plugins)
-            matched = self.skill_loader.match(user_message)
-            if matched:
-                skill = matched[0]  # Best match
-                if skill.plugin_name is None or skill.plugin_name in enabled_set:
-                    logger.info(f"Skill: {skill.name}")
-                    parts.append(
-                        f"\n\n--- Active Skill: {skill.name} ---\n{skill.content}"
-                    )
 
         # Plugin instructions (from SKILL.md)
         plugin_instructions = self._get_plugin_instructions(enabled_plugins)
