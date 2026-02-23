@@ -27,3 +27,4 @@ tools:
   - class: SendPhotoTool
   - class: GetChatInfoTool
   - class: HandleTelegramEventTool
+  - class: SendTypingIndicatorTool
