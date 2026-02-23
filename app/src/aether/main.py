@@ -488,6 +488,8 @@ async def _fetch_plugin_configs() -> None:
                     # Initialize telephony transport for telephony plugins
                     if plugin_name == "vobiz":
                         await _init_vobiz_telephony(config_data)
+                    elif plugin_name == "telegram":
+                        await _init_telegram(config_data)
                 else:
                     logger.warning(
                         "Failed to fetch config for plugin %s (status=%d, body=%s)",
@@ -556,6 +558,35 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
         logger.info("Vobiz telephony transport initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize Vobiz telephony: {e}")
+
+
+async def _init_telegram(config_data: dict) -> None:
+    """Initialize the Telegram plugin routes with agent and config."""
+    if not config_data.get("bot_token"):
+        logger.debug("Telegram plugin not fully configured — skipping init")
+        return
+
+    import sys
+
+    routes_module = sys.modules.get("aether_plugin_telegram_routes")
+    if routes_module:
+        set_agent_fn = getattr(routes_module, "set_agent", None)
+        set_config_fn = getattr(routes_module, "set_config", None)
+
+        if set_agent_fn and set_config_fn:
+            set_agent_fn(agent_core)
+            set_config_fn(config_data)
+            logger.info("Telegram plugin initialized (bot_token configured)")
+        else:
+            logger.warning(
+                "Telegram routes module missing set_agent/set_config — "
+                "webhook will not be functional"
+            )
+    else:
+        logger.warning(
+            "Telegram routes module not found in sys.modules — "
+            "routes will not receive agent/config"
+        )
 
 
 # ── Startup / Shutdown ─────────────────────────────────────────
