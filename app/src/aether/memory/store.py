@@ -7,6 +7,9 @@ v0.07: Four-tier memory:
 2. facts — extracted knowledge ("user's name is Surya", "user prefers Python")
 3. actions — tool calls and results ("created hello-world/main.py at 3pm Tuesday")
 4. sessions — session summaries for cross-session continuity
+v0.08: Six-tier memory (three-bucket model per Requirements.md §7.1):
+5. memories — episodic, behavioral, emotional context
+6. decisions — learned rules about agent behavior (preferences, notifications, workflows)
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 import numpy as np
@@ -26,6 +30,9 @@ import aether.core.config as config_module
 
 logger = logging.getLogger(__name__)
 
+# DEPRECATED: This prompt is only used by the legacy _extract_facts() method below.
+# New extraction goes through MemoryService.extract_facts() which uses the
+# three-bucket prompt (facts + memories + decisions) in memory_service.py.
 FACT_EXTRACTION_PROMPT = """You are Aether's long-term memory extractor.
 
 Goal: store only facts that improve future assistance for a "Jarvis/second-brain" assistant.
@@ -122,6 +129,66 @@ class MemoryStore:
                 tools_used TEXT
             )
         """)
+
+        # v0.08: Memories table — episodic, behavioral, emotional context
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory TEXT NOT NULL,
+                memory_key TEXT,
+                category TEXT NOT NULL DEFAULT 'episodic',
+                embedding TEXT NOT NULL,
+                source_conversation_id INTEGER,
+                created_at REAL NOT NULL,
+                expires_at REAL,
+                confidence REAL NOT NULL DEFAULT 1.0
+            )
+        """)
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_memory_key_unique ON memories(memory_key)"
+        )
+
+        # v0.08: Decisions table — learned rules about agent behavior
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                decision TEXT NOT NULL,
+                decision_key TEXT,
+                category TEXT NOT NULL DEFAULT 'preference',
+                embedding TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'extracted',
+                source_conversation_id INTEGER,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0
+            )
+        """)
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_decision_key_unique ON decisions(decision_key)"
+        )
+
+        # v0.09: Notifications table — durable queue for proactive engine
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                delivery_type TEXT NOT NULL DEFAULT 'surface',
+                status TEXT NOT NULL DEFAULT 'pending',
+                source TEXT NOT NULL DEFAULT 'proactive',
+                deliver_at REAL,
+                delivered_at REAL,
+                expires_at REAL,
+                created_at REAL NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            )
+        """)
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_deliver_at ON notifications(deliver_at)"
+        )
 
         await self._db.commit()
 
@@ -393,6 +460,62 @@ class MemoryStore:
                     }
                 )
 
+        # Search memories (episodic/behavioral/emotional — same boost as actions)
+        cursor = await self._db.execute(
+            "SELECT id, memory, category, embedding, confidence, created_at, expires_at FROM memories"
+        )
+        memory_rows = await cursor.fetchall()
+
+        now = time.time()
+        for row in memory_rows:
+            # Skip expired memories
+            if row[6] is not None and row[6] < now:
+                continue
+            stored_vec = np.array(json.loads(row[3]))
+            similarity = float(
+                np.dot(query_vec, stored_vec)
+                / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
+            )
+            # Memories get a +0.05 boost (same as actions)
+            if similarity > config_module.config.memory.similarity_threshold:
+                results.append(
+                    {
+                        "type": "memory",
+                        "memory": row[1],
+                        "category": row[2],
+                        "confidence": row[4],
+                        "similarity": similarity + 0.05,
+                        "timestamp": row[5],
+                    }
+                )
+
+        # Search decisions (most valuable — directly influence behavior, +0.15 boost)
+        cursor = await self._db.execute(
+            "SELECT id, decision, category, source, embedding, confidence, updated_at "
+            "FROM decisions WHERE active = TRUE"
+        )
+        decision_rows = await cursor.fetchall()
+
+        for row in decision_rows:
+            stored_vec = np.array(json.loads(row[4]))
+            similarity = float(
+                np.dot(query_vec, stored_vec)
+                / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec) + 1e-8)
+            )
+            # Decisions get a +0.15 boost — they're the most valuable
+            if similarity > config_module.config.memory.similarity_threshold:
+                results.append(
+                    {
+                        "type": "decision",
+                        "decision": row[1],
+                        "category": row[2],
+                        "source": row[3],
+                        "confidence": row[5],
+                        "similarity": similarity + 0.15,
+                        "timestamp": row[6],
+                    }
+                )
+
         # Search session summaries
         cursor = await self._db.execute(
             "SELECT id, summary, embedding, ended_at FROM sessions"
@@ -428,6 +551,233 @@ class MemoryStore:
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
+
+    # --- Memory storage (v0.08: three-bucket model) ---
+
+    async def store_memory(
+        self,
+        memory: str,
+        category: str = "episodic",
+        conv_id: int = 0,
+        expires_at: float | None = None,
+    ) -> None:
+        """Store a memory with deduplication (same pattern as _store_fact).
+
+        Categories: episodic, behavioral, emotional.
+        """
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        memory = memory.strip()
+        memory_key = self._canonicalize_fact(memory)
+        if not memory_key:
+            return
+
+        now = time.time()
+
+        try:
+            # Check for existing memory with same key — update timestamp if found
+            cursor = await self._db.execute(
+                "SELECT id FROM memories WHERE memory_key = ? LIMIT 1", (memory_key,)
+            )
+            row = await cursor.fetchone()
+
+            if row:
+                await self._db.execute(
+                    """UPDATE memories
+                       SET source_conversation_id = ?, confidence = 1.0
+                       WHERE memory_key = ?""",
+                    (conv_id, memory_key),
+                )
+                await self._db.commit()
+                return
+
+            embedding = await self._embed(memory)
+            await self._db.execute(
+                """INSERT INTO memories
+                   (memory, memory_key, category, embedding, source_conversation_id, created_at, expires_at, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(memory_key) DO UPDATE SET
+                       source_conversation_id=excluded.source_conversation_id,
+                       confidence=1.0""",
+                (
+                    memory,
+                    memory_key,
+                    category,
+                    json.dumps(embedding),
+                    conv_id,
+                    now,
+                    expires_at,
+                    1.0,
+                ),
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.debug(f"Memory store error (may be duplicate): {e}")
+
+    async def store_decision(
+        self,
+        decision: str,
+        category: str = "preference",
+        source: str = "extracted",
+        conv_id: int = 0,
+    ) -> None:
+        """Store a decision with deduplication. Newer decisions supersede older ones on same topic.
+
+        Categories: preference, behavior, notification, workflow.
+        Source: 'extracted' (LLM noticed pattern) or 'explicit' (user said it).
+        """
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        decision = decision.strip()
+        decision_key = self._canonicalize_fact(decision)
+        if not decision_key:
+            return
+
+        now = time.time()
+
+        try:
+            # Check for existing decision with same key — update if found
+            cursor = await self._db.execute(
+                "SELECT id FROM decisions WHERE decision_key = ? LIMIT 1",
+                (decision_key,),
+            )
+            row = await cursor.fetchone()
+
+            if row:
+                # Newer decision supersedes: update text, timestamp, reactivate
+                embedding = await self._embed(decision)
+                await self._db.execute(
+                    """UPDATE decisions
+                       SET decision = ?, embedding = ?, source = ?, source_conversation_id = ?,
+                           active = TRUE, updated_at = ?, confidence = 1.0
+                       WHERE decision_key = ?""",
+                    (
+                        decision,
+                        json.dumps(embedding),
+                        source,
+                        conv_id,
+                        now,
+                        decision_key,
+                    ),
+                )
+                await self._db.commit()
+                return
+
+            embedding = await self._embed(decision)
+            await self._db.execute(
+                """INSERT INTO decisions
+                   (decision, decision_key, category, embedding, source, source_conversation_id,
+                    active, created_at, updated_at, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(decision_key) DO UPDATE SET
+                       decision=excluded.decision, embedding=excluded.embedding,
+                       source=excluded.source, source_conversation_id=excluded.source_conversation_id,
+                       active=TRUE, updated_at=excluded.updated_at, confidence=1.0""",
+                (
+                    decision,
+                    decision_key,
+                    category,
+                    json.dumps(embedding),
+                    source,
+                    conv_id,
+                    True,
+                    now,
+                    now,
+                    1.0,
+                ),
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.debug(f"Decision store error (may be duplicate): {e}")
+
+    async def get_memories(
+        self, category: str | None = None, limit: int = 50
+    ) -> list[dict]:
+        """Get stored memories, optionally filtered by category."""
+        if not self._db:
+            return []
+
+        if category:
+            cursor = await self._db.execute(
+                "SELECT id, memory, category, confidence, created_at, expires_at "
+                "FROM memories WHERE category = ? ORDER BY created_at DESC LIMIT ?",
+                (category, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT id, memory, category, confidence, created_at, expires_at "
+                "FROM memories ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "memory": r[1],
+                "category": r[2],
+                "confidence": r[3],
+                "created_at": r[4],
+                "expires_at": r[5],
+            }
+            for r in rows
+        ]
+
+    async def get_decisions(
+        self, category: str | None = None, active_only: bool = True
+    ) -> list[dict]:
+        """Get stored decisions, optionally filtered by category."""
+        if not self._db:
+            return []
+
+        conditions = []
+        params: list[Any] = []
+
+        if active_only:
+            conditions.append("active = ?")
+            params.append(True)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        cursor = await self._db.execute(
+            f"SELECT id, decision, category, source, active, confidence, created_at, updated_at "
+            f"FROM decisions {where_clause} ORDER BY updated_at DESC",
+            params,
+        )
+
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "decision": r[1],
+                "category": r[2],
+                "source": r[3],
+                "active": bool(r[4]),
+                "confidence": r[5],
+                "created_at": r[6],
+                "updated_at": r[7],
+            }
+            for r in rows
+        ]
+
+    async def deactivate_decision(self, decision_id: int) -> None:
+        """Soft-deactivate a decision (user override)."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            "UPDATE decisions SET active = FALSE, updated_at = ? WHERE id = ?",
+            (time.time(), decision_id),
+        )
+        await self._db.commit()
+        logger.info(f"Deactivated decision {decision_id}")
 
     async def store_preference(self, fact: str) -> None:
         """Store a notification preference as a searchable fact."""
@@ -561,6 +911,142 @@ class MemoryStore:
             }
             for r in rows
         ]
+
+    # --- Notification queue (v0.09: proactive engine) ---
+
+    async def queue_notification(
+        self,
+        text: str,
+        delivery_type: str = "surface",
+        deliver_at: float | None = None,
+        source: str = "proactive",
+        metadata: dict | None = None,
+    ) -> int:
+        """Queue a notification for delivery. Returns the notification ID.
+
+        Args:
+            text: Notification text to deliver to the user.
+            delivery_type: One of suppress/queue/nudge/surface/interrupt.
+            deliver_at: Unix timestamp for scheduled delivery. None = deliver immediately.
+            source: Origin of the notification (proactive/scheduled/user).
+            metadata: Optional JSON-serializable context (source event, etc.).
+
+        Returns:
+            The notification row ID.
+        """
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        now = time.time()
+        # Default expiry: 4 hours from creation
+        expires_at = now + (4 * 3600)
+
+        cursor = await self._db.execute(
+            """INSERT INTO notifications
+               (text, delivery_type, status, source, deliver_at, expires_at, created_at, metadata)
+               VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)""",
+            (
+                text,
+                delivery_type,
+                source,
+                deliver_at,
+                expires_at,
+                now,
+                json.dumps(metadata or {}),
+            ),
+        )
+        await self._db.commit()
+        notification_id = cursor.lastrowid or 0
+        logger.debug("Queued notification %d: %s", notification_id, text[:80])
+        return notification_id
+
+    async def get_pending_notifications(self, now: float | None = None) -> list[dict]:
+        """Get notifications ready for delivery.
+
+        Returns notifications where:
+        - status = 'pending'
+        - deliver_at is NULL (immediate) or deliver_at <= now
+        - not expired (expires_at is NULL or expires_at > now)
+        """
+        if not self._db:
+            return []
+
+        now = now or time.time()
+
+        cursor = await self._db.execute(
+            """SELECT id, text, delivery_type, source, deliver_at, expires_at, created_at, metadata
+               FROM notifications
+               WHERE status = 'pending'
+                 AND (deliver_at IS NULL OR deliver_at <= ?)
+                 AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY created_at ASC""",
+            (now, now),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "text": r[1],
+                "delivery_type": r[2],
+                "source": r[3],
+                "deliver_at": r[4],
+                "expires_at": r[5],
+                "created_at": r[6],
+                "metadata": json.loads(r[7]) if r[7] else {},
+            }
+            for r in rows
+        ]
+
+    async def mark_delivered(self, notification_id: int) -> None:
+        """Mark a notification as delivered."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            "UPDATE notifications SET status = 'delivered', delivered_at = ? WHERE id = ?",
+            (time.time(), notification_id),
+        )
+        await self._db.commit()
+
+    async def mark_dismissed(self, notification_id: int) -> None:
+        """Mark a notification as dismissed (user feedback — feeds into learning loop)."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            "UPDATE notifications SET status = 'dismissed' WHERE id = ?",
+            (notification_id,),
+        )
+        await self._db.commit()
+
+    async def expire_old_notifications(self, max_age_hours: float = 4.0) -> int:
+        """Expire notifications older than max_age_hours. Returns count expired.
+
+        Marks pending notifications as 'expired' if their expires_at has passed
+        or if they are older than max_age_hours (fallback for notifications
+        without an explicit expires_at).
+        """
+        if not self._db:
+            return 0
+
+        now = time.time()
+        cutoff = now - (max_age_hours * 3600)
+
+        cursor = await self._db.execute(
+            """UPDATE notifications
+               SET status = 'expired'
+               WHERE status = 'pending'
+                 AND (
+                     (expires_at IS NOT NULL AND expires_at <= ?)
+                     OR (expires_at IS NULL AND created_at <= ?)
+                 )""",
+            (now, cutoff),
+        )
+        await self._db.commit()
+        count = cursor.rowcount or 0
+        if count:
+            logger.info("Expired %d old notifications", count)
+        return count
 
     # --- Action compaction (v0.07) ---
 

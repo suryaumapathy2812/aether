@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from aether.memory.store import MemoryStore
     from aether.plugins.context import PluginContextStore
     from aether.providers.base import LLMProvider
+    from aether.services.nightly_analysis import NightlyAnalysisService
     from aether.session.ledger import TaskLedger
     from aether.session.store import SessionStore
     from aether.services.notification_service import NotificationDecision
@@ -76,6 +77,7 @@ class AgentCore:
         llm_core: "LLMCore | None" = None,
         context_builder: "ContextBuilder | None" = None,
         task_ledger: "TaskLedger | None" = None,
+        nightly_service: "NightlyAnalysisService | None" = None,
     ) -> None:
         self._scheduler = scheduler
         self._memory_store = memory_store
@@ -88,6 +90,7 @@ class AgentCore:
         self._llm_core = llm_core
         self._context_builder = context_builder
         self._task_ledger = task_ledger
+        self._nightly_service = nightly_service
 
         # In-memory fallback when SessionStore is not provided.
         # When session_store is set, this dict is unused.
@@ -114,6 +117,12 @@ class AgentCore:
 
         # Background memory extraction handler (polls Task Ledger)
         self._memory_extraction_listener: asyncio.Task | None = None
+
+        # Nightly analysis loop task (24-hour timer)
+        self._nightly_analysis_task: asyncio.Task | None = None
+
+        # Notification sweep task (60-second timer)
+        self._notification_sweep_task: asyncio.Task | None = None
 
     # ─── Lifecycle ───────────────────────────────────────────────
 
@@ -145,6 +154,17 @@ class AgentCore:
                 self._process_memory_extractions()
             )
 
+        # Start nightly analysis loop (24-hour timer)
+        if self._nightly_service is not None and self._task_ledger is not None:
+            self._nightly_analysis_task = asyncio.create_task(
+                self._run_nightly_analysis_loop()
+            )
+
+        # Start notification sweep (60-second timer)
+        self._notification_sweep_task = asyncio.create_task(
+            self._sweep_notification_queue()
+        )
+
         logger.info("AgentCore started")
 
     async def stop(self) -> None:
@@ -170,6 +190,24 @@ class AgentCore:
             except asyncio.CancelledError:
                 pass
             self._memory_extraction_listener = None
+
+        # Cancel nightly analysis loop
+        if self._nightly_analysis_task is not None:
+            self._nightly_analysis_task.cancel()
+            try:
+                await self._nightly_analysis_task
+            except asyncio.CancelledError:
+                pass
+            self._nightly_analysis_task = None
+
+        # Cancel notification sweep
+        if self._notification_sweep_task is not None:
+            self._notification_sweep_task.cancel()
+            try:
+                await self._notification_sweep_task
+            except asyncio.CancelledError:
+                pass
+            self._notification_sweep_task = None
 
         await self._scheduler.stop()
         logger.info("AgentCore stopped")
@@ -533,6 +571,154 @@ class AgentCore:
             except Exception as e:
                 logger.error("Memory extraction handler error: %s", e, exc_info=True)
                 await asyncio.sleep(poll_interval)
+
+    # ─── Nightly Analysis Loop ───────────────────────────────────
+
+    async def _run_nightly_analysis_loop(self) -> None:
+        """Run nightly analysis on a 24-hour timer.
+
+        Submits a SCHEDULED task to the Task Ledger, then runs the
+        NightlyAnalysisService. Candidate notifications from the analysis
+        are queued to the notification table for the sweep to deliver.
+
+        Runs every 24 hours from startup (Requirements.md §6.2).
+        """
+        assert self._nightly_service is not None
+        assert self._task_ledger is not None
+
+        interval = 24 * 60 * 60  # 24 hours
+        # Wait 1 minute after startup before first check
+        await asyncio.sleep(60)
+
+        while True:
+            task_id: str | None = None
+            try:
+                # Write a SCHEDULED task to the Task Ledger for audit trail
+                task_id = await self._task_ledger.submit(
+                    session_id="system",
+                    task_type=TaskType.SCHEDULED.value,
+                    payload={"action": "nightly_analysis"},
+                    priority="low",
+                )
+                await self._task_ledger.set_running(task_id)
+
+                # Run the analysis
+                result = await self._nightly_service.run_analysis()
+
+                # Queue candidate notifications for delivery
+                for notif in result.candidate_notifications:
+                    try:
+                        await self._memory_store.queue_notification(
+                            text=notif.get("text", ""),
+                            delivery_type=notif.get("delivery_type", "surface"),
+                            source="proactive",
+                            metadata={"origin": "nightly_analysis"},
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to queue proactive notification: %s", e)
+
+                # Mark the ledger task as complete
+                await self._task_ledger.set_complete(
+                    task_id,
+                    {
+                        "new_decisions": result.new_decisions,
+                        "notifications_queued": len(result.candidate_notifications),
+                        "facts_consolidated": result.facts_consolidated,
+                        "facts_flagged_stale": result.facts_flagged_stale,
+                        "duration_ms": result.duration_ms,
+                    },
+                )
+
+                logger.info(
+                    "Nightly analysis completed (task=%s, duration=%dms)",
+                    task_id,
+                    result.duration_ms,
+                )
+
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate for clean shutdown
+            except Exception as e:
+                logger.error("Nightly analysis failed: %s", e, exc_info=True)
+                # Try to mark the ledger task as errored if we have a task_id
+                if task_id is not None:
+                    try:
+                        await self._task_ledger.set_error(task_id, str(e))
+                    except Exception:
+                        pass
+
+            await asyncio.sleep(interval)
+
+    # ─── Notification Sweep ──────────────────────────────────────
+
+    async def _sweep_notification_queue(self) -> None:
+        """Sweep the notification queue every 60 seconds.
+
+        Expires old notifications, then delivers any pending notifications
+        that are ready (deliver_at <= now). Delivery goes through the
+        existing notification subscriber pattern (WS sidecar).
+
+        Runs every 60 seconds (Requirements.md §6.5).
+        """
+        while True:
+            try:
+                # Expire old notifications
+                await self._memory_store.expire_old_notifications()
+
+                # Get pending notifications ready for delivery
+                pending = await self._memory_store.get_pending_notifications()
+                for notif in pending:
+                    try:
+                        await self._deliver_notification(notif)
+                        await self._memory_store.mark_delivered(notif["id"])
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to deliver notification %d: %s",
+                            notif.get("id", 0),
+                            e,
+                        )
+
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate for clean shutdown
+            except Exception as e:
+                logger.error("Notification sweep failed: %s", e, exc_info=True)
+
+            await asyncio.sleep(60)
+
+    async def _deliver_notification(self, notif: dict) -> None:
+        """Deliver a single notification through the subscriber pattern.
+
+        Maps delivery_type to the appropriate delivery mechanism:
+        - suppress: skip delivery entirely
+        - queue: store only (already in DB), don't push
+        - nudge: broadcast to WS sidecar (low priority)
+        - surface: broadcast to WS sidecar (normal priority)
+        - interrupt: speak through voice + broadcast to WS sidecar
+        """
+        delivery_type = notif.get("delivery_type", "surface")
+        text = notif.get("text", "")
+
+        if not text or delivery_type == "suppress":
+            return
+
+        if delivery_type == "queue":
+            # Already persisted in the notification table — no push needed
+            return
+
+        if delivery_type == "interrupt":
+            # Deliver through voice if available, always broadcast to WS
+            await self.speak_notification(text)
+        else:
+            # nudge or surface — broadcast to WS sidecar
+            level = "nudge" if delivery_type == "nudge" else "speak"
+            await self.broadcast_notification(
+                {
+                    "type": "proactive",
+                    "level": level,
+                    "text": text,
+                    "source": notif.get("source", "proactive"),
+                    "notification_id": notif.get("id"),
+                }
+            )
 
     # ─── Greeting ────────────────────────────────────────────────
 

@@ -61,6 +61,7 @@ from aether.agent import AgentCore
 from aether.kernel.scheduler import KernelScheduler, ServiceRouter
 from aether.services.reply_service import ReplyService
 from aether.services.memory_service import MemoryService
+from aether.services.nightly_analysis import NightlyAnalysisService
 from aether.services.notification_service import NotificationService
 from aether.services.tool_service import ToolService
 from aether.llm.core import LLMCore
@@ -217,6 +218,7 @@ context_builder = ContextBuilder(
 reply_service = ReplyService(llm_core, context_builder, memory_store)
 memory_service = MemoryService(llm_core, memory_store)
 notification_service = NotificationService(llm_core, memory_store)
+nightly_service = NightlyAnalysisService(llm_core, memory_store)
 tool_service = ToolService(tool_orchestrator)
 
 # ServiceRouter → KernelScheduler
@@ -249,6 +251,7 @@ agent_core = AgentCore(
     llm_core=llm_core,
     context_builder=context_builder,
     task_ledger=task_ledger,
+    nightly_service=nightly_service,
 )
 
 # --- Sub-Agent Manager ---

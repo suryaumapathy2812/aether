@@ -2,7 +2,8 @@
 Memory Service — background memory operations through LLMCore.
 
 Handles memory_* job kinds:
-- memory_fact_extract: Extract facts from conversation turns
+- memory_fact_extract: Extract facts, memories, and decisions from conversation turns
+  (three-bucket model per Requirements.md §7.1)
 - memory_session_summary: Summarize a session for cross-session continuity
 - memory_action_compact: Compact old tool actions into summaries
 
@@ -48,38 +49,32 @@ Conversation:
 
 Summary:"""
 
-FACT_EXTRACTION_PROMPT = """You are Aether's long-term memory extractor.
+MEMORY_EXTRACTION_PROMPT = """You are Aether's memory extractor. After each conversation turn, extract three types of information:
 
-Goal: store only facts that improve future assistance for a "Jarvis/second-brain" assistant.
+## Facts
+Objective, stable information about the user. Things that are true and unlikely to change.
+Examples: "User's name is Surya", "User works at Acme Corp", "User's timezone is Asia/Kolkata"
 
-Extract ONLY durable, user-specific, decision-relevant facts from this turn:
-- Identity and profile: name, role, location, timezone, recurring schedule
-- Durable preferences: communication style, coding/workflow/tool preferences
-- Ongoing projects, goals, commitments, deadlines
-- Stable constraints: budget, device/platform limits, security/privacy boundaries
-- Important relationships and recurring contacts (only when clearly stated)
+## Memories
+Contextual, episodic information — what happened, what was discussed, behavioral patterns.
+Examples: "User was stressed about Q3 deadline", "User dismissed 3 notifications in a row"
 
-Do NOT extract:
-- Small talk, greetings, jokes, filler
-- Temporary mood unless it implies a stable preference
-- Assistant claims or advice as facts
-- One-off details with no future value
-- Duplicates or near-duplicates of existing memory wording
+## Decisions
+Rules about how the agent should behave for this user. Learned from patterns or explicit feedback.
+Examples: "Don't notify about calendar after 9pm", "User prefers bullet points over paragraphs"
 
-Write strict concise fact strings:
-- One fact per string
-- Third-person style, starting with "User ..." or "User's ..."
-- Canonical and specific (avoid vague language)
-- Keep each fact short (about 6-18 words)
+Rules:
+- Write concise strings, third-person ("User ...")
+- Only extract genuinely useful information — skip small talk
+- Facts: stable, durable info. Memories: episodic, time-bound. Decisions: behavioral rules.
+- If nothing valuable, return empty arrays
 
-Return ONLY a JSON array of strings.
-If no high-value durable facts are present, return [] exactly.
+Return ONLY a JSON object:
+{{"facts": ["..."], "memories": ["..."], "decisions": ["..."]}}
 
 Conversation:
 User: {user_message}
-Assistant: {assistant_message}
-
-Facts (JSON array):"""
+Assistant: {assistant_message}"""
 
 
 class MemoryService:
@@ -105,7 +100,11 @@ class MemoryService:
         conversation_id: int | None = None,
     ) -> list[str]:
         """
-        Extract facts from a conversation turn using LLMCore.
+        Extract facts, memories, and decisions from a conversation turn using LLMCore.
+
+        Despite the name (kept for backward compatibility), this now extracts all three
+        bucket types: facts, memories, and decisions. Returns only the facts list for
+        backward compatibility, but stores all three types.
 
         Args:
             user_message: The user's message
@@ -113,12 +112,12 @@ class MemoryService:
             conversation_id: Optional conversation ID for linking
 
         Returns:
-            List of extracted fact strings
+            List of extracted fact strings (for backward compatibility)
         """
         started = time.time()
         metrics.inc("service.memory.extraction.started")
 
-        prompt = FACT_EXTRACTION_PROMPT.format(
+        prompt = MEMORY_EXTRACTION_PROMPT.format(
             user_message=user_message,
             assistant_message=assistant_message,
         )
@@ -127,28 +126,57 @@ class MemoryService:
             kind="memory_fact_extract",
             modality="system",
             messages=[{"role": "user", "content": prompt}],
-            policy={"max_tokens": 200, "temperature": 0.0},
+            policy={"max_tokens": 400, "temperature": 0.0},
         )
 
         # Collect full response
         response_text = await self._collect_response(envelope)
 
-        # Parse JSON array
-        facts = self._parse_facts(response_text)
+        # Parse JSON object with three arrays
+        extracted = self._parse_extraction_response(response_text)
+        facts = extracted.get("facts", [])
+        memories = extracted.get("memories", [])
+        decisions = extracted.get("decisions", [])
 
-        # Store each fact
+        conv_id = conversation_id or 0
+
+        # Store facts (existing path)
         for fact in facts:
             try:
-                await self._memory_store._store_fact(fact, conversation_id or 0)
+                await self._memory_store._store_fact(fact, conv_id)
             except Exception as e:
                 logger.debug(f"Fact store error: {e}")
+
+        # Store memories (new v0.08 path)
+        for memory in memories:
+            try:
+                await self._memory_store.store_memory(
+                    memory, category="episodic", conv_id=conv_id
+                )
+            except Exception as e:
+                logger.debug(f"Memory store error: {e}")
+
+        # Store decisions (new v0.08 path)
+        for decision in decisions:
+            try:
+                await self._memory_store.store_decision(
+                    decision, category="preference", source="extracted", conv_id=conv_id
+                )
+            except Exception as e:
+                logger.debug(f"Decision store error: {e}")
 
         elapsed_ms = round((time.time() - started) * 1000)
         metrics.observe("service.memory.extraction_ms", elapsed_ms)
         metrics.inc("service.memory.facts_extracted", value=len(facts))
+        metrics.inc("service.memory.memories_extracted", value=len(memories))
+        metrics.inc("service.memory.decisions_extracted", value=len(decisions))
 
-        if facts:
-            logger.info(f"Extracted {len(facts)} facts in {elapsed_ms}ms: {facts}")
+        total = len(facts) + len(memories) + len(decisions)
+        if total:
+            logger.info(
+                f"Extracted {len(facts)} facts, {len(memories)} memories, "
+                f"{len(decisions)} decisions in {elapsed_ms}ms"
+            )
 
         return facts
 
@@ -245,7 +273,7 @@ class MemoryService:
         return " ".join(chunks)
 
     def _parse_facts(self, response_text: str) -> list[str]:
-        """Parse a JSON array of facts from LLM response."""
+        """Parse a JSON array of facts from LLM response (legacy helper)."""
         import json
         import re
 
@@ -265,3 +293,57 @@ class MemoryService:
             facts = []
 
         return [f.strip() for f in facts if isinstance(f, str) and f.strip()]
+
+    def _parse_extraction_response(self, response_text: str) -> dict[str, list[str]]:
+        """Parse a JSON object with facts, memories, and decisions arrays.
+
+        Expected format: {"facts": [...], "memories": [...], "decisions": [...]}
+        Falls back to treating the response as a facts-only JSON array for
+        backward compatibility with older model responses.
+        """
+        import json
+        import re
+
+        response_text = response_text.strip()
+        empty: dict[str, list[str]] = {"facts": [], "memories": [], "decisions": []}
+
+        try:
+            # Try parsing as JSON object first
+            if response_text.startswith("{"):
+                parsed = json.loads(response_text)
+            else:
+                # Model may wrap in markdown code block
+                match = re.search(r"\{.*\}", response_text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group())
+                else:
+                    # Fallback: try as JSON array (old format → treat as facts only)
+                    facts = self._parse_facts(response_text)
+                    return {"facts": facts, "memories": [], "decisions": []}
+
+            if not isinstance(parsed, dict):
+                logger.debug(f"Extraction response is not a dict: {type(parsed)}")
+                return empty
+
+            # Validate and clean each bucket
+            result: dict[str, list[str]] = {}
+            for key in ("facts", "memories", "decisions"):
+                raw = parsed.get(key, [])
+                if not isinstance(raw, list):
+                    result[key] = []
+                    continue
+                result[key] = [
+                    item.strip()
+                    for item in raw
+                    if isinstance(item, str) and item.strip()
+                ]
+
+            return result
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(
+                f"Could not parse extraction response: {e} — {response_text[:100]}"
+            )
+            # Last resort: try legacy array parse
+            facts = self._parse_facts(response_text)
+            return {"facts": facts, "memories": [], "decisions": []}

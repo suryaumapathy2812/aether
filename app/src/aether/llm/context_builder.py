@@ -5,9 +5,10 @@ This is where the magic happens:
 1. Build system prompt from base_style + custom_instructions
 2. Inject matched skills (keyword-based)
 3. Inject plugin instructions (from SKILL.md)
-4. Add memory context (retrieved facts, actions, sessions)
-5. Build tool schemas (built-in + plugin tools)
-6. Build plugin context (OAuth tokens, configs — NOT in prompt)
+4. Inject active decisions (ALL of them — behavioral rules for this user)
+5. Add memory context (retrieved facts, memories, actions, sessions)
+6. Build tool schemas (built-in + plugin tools)
+7. Build plugin context (OAuth tokens, configs — NOT in prompt)
 
 The ContextBuilder ensures consistent prompt construction across all
 LLM consumers (ReplyService, MemoryService, NotificationService).
@@ -98,10 +99,11 @@ class ContextBuilder:
     1. Base system prompt (from config.personality.base_style)
     2. Injected skills (matched by keyword overlap with user_message)
     3. Plugin instructions (from plugin SKILL.md files)
-    4. Memory context (retrieved facts, actions, sessions)
-    5. Conversation history
-    6. Tool schemas (from tool_registry + plugin tools)
-    7. Plugin context (OAuth tokens, configs - NOT in prompt, for tool execution)
+    4. Active decisions (ALL of them — behavioral rules learned for this user)
+    5. Memory context (search-filtered facts, memories, actions, sessions)
+    6. Conversation history
+    7. Tool schemas (from tool_registry + plugin tools)
+    8. Plugin context (OAuth tokens, configs - NOT in prompt, for tool execution)
     """
 
     def __init__(
@@ -143,6 +145,10 @@ class ContextBuilder:
         if pending_memory is None and self.memory_store is not None:
             pending_memory = await self._retrieve_memory(user_message)
 
+        # Retrieve ALL active decisions (not search-filtered — these are
+        # behavioral rules that always apply regardless of query relevance)
+        decisions_section = await self._retrieve_decisions()
+
         # 1. Build system prompt
         system_prompt = self._build_system_prompt(
             user_message=user_message,
@@ -157,6 +163,7 @@ class ContextBuilder:
             user_message=user_message,
             pending_memory=pending_memory,
             pending_vision=pending_vision,
+            decisions_section=decisions_section,
         )
 
         # 3. Build tool schemas
@@ -259,14 +266,34 @@ class ContextBuilder:
         user_message: str,
         pending_memory: str | None,
         pending_vision: dict[str, Any] | None,
+        decisions_section: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the messages list for the LLM call."""
+        """Build the messages list for the LLM call.
+
+        Injection order within messages:
+        1. System prompt (base + skills + plugins)
+        2. Active decisions (ALL behavioral rules — always injected)
+        3. Relevant memory (search-filtered facts, memories, actions, sessions)
+        4. Conversation history
+        5. User message (with optional vision)
+        """
         messages: list[dict[str, Any]] = []
 
         # System prompt
         messages.append({"role": "system", "content": system_prompt})
 
-        # Memory context
+        # Active decisions — injected as a separate, prominent section BEFORE
+        # general memory. These are behavioral rules that directly influence
+        # the LLM's behavior, not search-dependent context.
+        if decisions_section:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": decisions_section,
+                }
+            )
+
+        # Search-filtered memory context (facts, memories, actions, sessions)
         if pending_memory:
             messages.append(
                 {
@@ -352,6 +379,12 @@ class ContextBuilder:
     async def _retrieve_memory(self, user_message: str) -> str | None:
         """Retrieve relevant memory context for the user message.
 
+        Returns search-filtered results from all memory tiers: facts,
+        memories, actions, sessions, and conversations. Decisions found
+        via search are included here too (they also appear in the
+        dedicated decisions section, but search-relevant ones get extra
+        visibility in the memory block).
+
         Mirrors the logic from MemoryRetrieverProcessor but returns a
         formatted string instead of a Frame.
         """
@@ -367,6 +400,13 @@ class ContextBuilder:
             for r in results:
                 if r.get("type") == "fact":
                     lines.append(f"[Known fact] {r['fact']}")
+                elif r.get("type") == "memory":
+                    category = r.get("category", "episodic")
+                    lines.append(f"[Memory ({category})] {r['memory']}")
+                elif r.get("type") == "decision":
+                    category = r.get("category", "preference")
+                    source = r.get("source", "extracted")
+                    lines.append(f"[Decision ({category})] {r['decision']}")
                 elif r.get("type") == "action":
                     args = r.get("arguments", "{}")
                     output_preview = r.get("output", "")[:100]
@@ -394,4 +434,38 @@ class ContextBuilder:
                 return "\n".join(lines)
         except Exception as e:
             logger.error(f"Memory retrieval error: {e}", exc_info=True)
+        return None
+
+    async def _retrieve_decisions(self) -> str | None:
+        """Retrieve ALL active decisions as a dedicated prompt section.
+
+        Unlike search-filtered memory, decisions are always injected in
+        full — they're behavioral rules that the LLM must follow regardless
+        of the current query's semantic similarity.
+
+        Returns None if no active decisions exist (new user), so the
+        section is simply omitted from the prompt.
+        """
+        if self.memory_store is None:
+            return None
+
+        try:
+            decisions = await self.memory_store.get_decisions(active_only=True)
+            if not decisions:
+                return None
+
+            # Format each decision as a bullet point
+            lines: list[str] = []
+            for d in decisions:
+                lines.append(f"- {d['decision']}")
+
+            logger.info(f"Decisions: injecting {len(lines)} active rules")
+
+            return (
+                "## Your learned rules for this user\n"
+                "These are behavioral rules you've learned. "
+                "Follow them unless the user explicitly overrides.\n" + "\n".join(lines)
+            )
+        except Exception as e:
+            logger.error(f"Decision retrieval error: {e}", exc_info=True)
         return None
