@@ -35,6 +35,7 @@ from aether.kernel.contracts import (
     KernelEvent,
     KernelRequest,
 )
+from aether.session.models import TaskType
 
 if TYPE_CHECKING:
     from aether.kernel.event_bus import EventBus
@@ -111,6 +112,9 @@ class AgentCore:
         self._task_completed_listener: asyncio.Task | None = None
         self._task_completed_queue: asyncio.Queue | None = None
 
+        # Background memory extraction handler (polls Task Ledger)
+        self._memory_extraction_listener: asyncio.Task | None = None
+
     # ─── Lifecycle ───────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -135,6 +139,12 @@ class AgentCore:
                 self._listen_task_completed()
             )
 
+        # Start background memory extraction handler
+        if self._task_ledger is not None:
+            self._memory_extraction_listener = asyncio.create_task(
+                self._process_memory_extractions()
+            )
+
         logger.info("AgentCore started")
 
     async def stop(self) -> None:
@@ -151,6 +161,15 @@ class AgentCore:
         if self._event_bus is not None and self._task_completed_queue is not None:
             self._event_bus.unsubscribe("task.completed", self._task_completed_queue)
             self._task_completed_queue = None
+
+        # Cancel memory extraction handler
+        if self._memory_extraction_listener is not None:
+            self._memory_extraction_listener.cancel()
+            try:
+                await self._memory_extraction_listener
+            except asyncio.CancelledError:
+                pass
+            self._memory_extraction_listener = None
 
         await self._scheduler.stop()
         logger.info("AgentCore stopped")
@@ -405,27 +424,115 @@ class AgentCore:
     async def _submit_memory_extraction(
         self, user_text: str, assistant_text: str, session_id: str
     ) -> None:
-        """Submit fact extraction to E-Cores (background, non-blocking)."""
+        """Submit fact extraction via Task Ledger (background, non-blocking).
+
+        Writes a MEMORY_EXTRACT task to the Task Ledger. The background
+        memory extraction handler (_process_memory_extractions) picks it
+        up and dispatches to the KernelScheduler for actual extraction.
+
+        Single extraction path — the inline extraction in MemoryStore.add()
+        has been removed to avoid duplicate fact extraction.
+        """
         if not user_text or not assistant_text:
             return
 
-        try:
-            await self._scheduler.submit(
-                KernelRequest(
-                    kind=JobKind.MEMORY_FACT_EXTRACT.value,
-                    modality=JobModality.SYSTEM.value,
-                    user_id=os.getenv("AETHER_USER_ID", ""),
-                    session_id=session_id,
-                    payload={
-                        "user_message": user_text,
-                        "assistant_message": assistant_text,
-                    },
-                    priority=JobPriority.BACKGROUND.value,
+        if self._task_ledger is None:
+            # Fallback: submit directly to scheduler if no ledger
+            try:
+                await self._scheduler.submit(
+                    KernelRequest(
+                        kind=JobKind.MEMORY_FACT_EXTRACT.value,
+                        modality=JobModality.SYSTEM.value,
+                        user_id=os.getenv("AETHER_USER_ID", ""),
+                        session_id=session_id,
+                        payload={
+                            "user_message": user_text,
+                            "assistant_message": assistant_text,
+                        },
+                        priority=JobPriority.BACKGROUND.value,
+                    )
                 )
+            except Exception as e:
+                logger.warning("Failed to submit memory extraction: %s", e)
+            return
+
+        try:
+            await self._task_ledger.submit(
+                session_id=session_id,
+                task_type=TaskType.MEMORY_EXTRACT.value,
+                payload={
+                    "user_message": user_text,
+                    "assistant_message": assistant_text,
+                },
+                priority="low",
             )
         except Exception as e:
             # Background job — don't fail the reply
-            logger.warning("Failed to submit memory extraction: %s", e)
+            logger.warning("Failed to submit memory extraction to ledger: %s", e)
+
+    async def _process_memory_extractions(self) -> None:
+        """Background handler: poll Task Ledger for MEMORY_EXTRACT tasks.
+
+        Picks up pending MEMORY_EXTRACT tasks from the ledger and dispatches
+        them to the KernelScheduler for actual extraction via MemoryService.
+        Updates the ledger status on completion or failure.
+
+        This bridges the Task Ledger (persistent record) with the
+        KernelScheduler (execution engine). The ledger tracks status,
+        the scheduler does the work.
+        """
+        assert self._task_ledger is not None
+        poll_interval = 2.0  # seconds
+
+        while True:
+            try:
+                task = await self._task_ledger.pick_next(
+                    task_type=TaskType.MEMORY_EXTRACT.value,
+                )
+                if task is None:
+                    await asyncio.sleep(poll_interval)
+                    continue
+
+                # Mark as running in the ledger
+                await self._task_ledger.set_running(task.task_id)
+
+                # Dispatch to KernelScheduler for actual extraction
+                try:
+                    job_id = await self._scheduler.submit(
+                        KernelRequest(
+                            kind=JobKind.MEMORY_FACT_EXTRACT.value,
+                            modality=JobModality.SYSTEM.value,
+                            user_id=os.getenv("AETHER_USER_ID", ""),
+                            session_id=task.session_id,
+                            payload=task.payload,
+                            priority=JobPriority.BACKGROUND.value,
+                        )
+                    )
+
+                    # Wait for the scheduler job to complete
+                    async for _event in self._scheduler.stream(job_id):
+                        pass  # Consume events — we just need completion
+
+                    await self._task_ledger.set_complete(
+                        task.task_id,
+                        {
+                            "extracted": True,
+                        },
+                    )
+
+                except Exception as e:
+                    await self._task_ledger.set_error(task.task_id, str(e))
+                    logger.warning(
+                        "Memory extraction task %s failed: %s",
+                        task.task_id,
+                        e,
+                    )
+
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate for clean shutdown
+            except Exception as e:
+                logger.error("Memory extraction handler error: %s", e, exc_info=True)
+                await asyncio.sleep(poll_interval)
 
     # ─── Greeting ────────────────────────────────────────────────
 

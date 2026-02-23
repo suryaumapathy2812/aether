@@ -278,6 +278,7 @@ session_router = create_session_router(
     session_store=session_store,
     event_bus=event_bus,
     sub_agent_manager=sub_agent_manager,
+    task_ledger=task_ledger,
 )
 app.include_router(session_router)
 

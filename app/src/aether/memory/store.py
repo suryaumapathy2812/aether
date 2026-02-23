@@ -138,7 +138,12 @@ class MemoryStore:
             self._db = None
 
     async def add(self, user_message: str, assistant_message: str) -> None:
-        """Store a conversation turn and extract facts."""
+        """Store a conversation turn (raw storage only).
+
+        Fact extraction is handled separately via the Task Ledger
+        (MEMORY_EXTRACT task type) to avoid duplicate extraction paths.
+        See AgentCore._submit_memory_extraction().
+        """
         if not self._db:
             raise RuntimeError("Memory store not started")
 
@@ -150,15 +155,8 @@ class MemoryStore:
             "INSERT INTO conversations (user_message, assistant_message, embedding, timestamp) VALUES (?, ?, ?, ?)",
             (user_message, assistant_message, json.dumps(embedding), time.time()),
         )
-        conv_id = int(cursor.lastrowid or 0)
         await self._db.commit()
         logger.debug(f"Stored conversation: {user_message[:50]}...")
-
-        # Extract and store facts (fire and forget — don't block the pipeline)
-        try:
-            await self._extract_facts(user_message, assistant_message, conv_id)
-        except Exception as e:
-            logger.error(f"Fact extraction failed: {e}")
 
     async def _extract_facts(
         self, user_message: str, assistant_message: str, conv_id: int
