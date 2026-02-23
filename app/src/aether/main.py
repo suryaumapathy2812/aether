@@ -70,6 +70,7 @@ from aether.http.openai_compat import create_router as create_openai_router
 from aether.http.sessions import create_session_router
 from aether.kernel.event_bus import EventBus
 from aether.session.store import SessionStore
+from aether.session.ledger import TaskLedger
 from aether.agents.manager import SubAgentManager
 from aether.tools.spawn_task import SpawnTaskTool
 from aether.tools.check_task import CheckTaskTool
@@ -119,6 +120,7 @@ if STATIC_DIR.exists():
 # --- Shared state (created once, shared across connections) ---
 memory_store = MemoryStore()
 session_store = SessionStore()
+task_ledger = TaskLedger(session_store)
 event_bus = EventBus()
 stt_provider = get_stt_provider()
 llm_provider = get_llm_provider()
@@ -246,6 +248,7 @@ agent_core = AgentCore(
     event_bus=event_bus,
     llm_core=llm_core,
     context_builder=context_builder,
+    task_ledger=task_ledger,
 )
 
 # --- Sub-Agent Manager ---
@@ -254,6 +257,7 @@ sub_agent_manager = SubAgentManager(
     llm_core=llm_core,
     context_builder=context_builder,
     event_bus=event_bus,
+    task_ledger=task_ledger,
 )
 
 # --- Background Task Runner (delegates to SubAgentManager) ---
@@ -262,7 +266,7 @@ tool_registry.register(RunTaskTool(task_runner))
 
 # Register spawn_task and check_task tools
 tool_registry.register(SpawnTaskTool(sub_agent_manager))
-tool_registry.register(CheckTaskTool(sub_agent_manager))
+tool_registry.register(CheckTaskTool(sub_agent_manager, task_ledger=task_ledger))
 
 # --- Mount OpenAI-compatible HTTP API ---
 openai_router = create_openai_router(agent_core)

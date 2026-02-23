@@ -5,6 +5,13 @@ Sub-agents are independent SessionLoop instances running as asyncio.Tasks.
 Each gets its own session (child of the parent), its own message history,
 and its own tool access (with recursive spawning disabled).
 
+When a TaskLedger is provided, all sub-agent work is tracked persistently:
+- spawn() writes a 'sub_agent' task to the ledger
+- Completion/failure updates the ledger entry
+- Tasks survive restarts and are queryable by the LLM
+
+Without a TaskLedger, behavior is unchanged (in-memory tracking only).
+
 Usage:
     manager = SubAgentManager(session_store, llm_core, context_builder, ...)
     child_id = await manager.spawn("Analyze the codebase", parent_session_id="sess-1")
@@ -21,12 +28,13 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from aether.agents.agent_types import get_agent_type
-from aether.session.models import SessionStatus
+from aether.session.models import SessionStatus, TaskType
 
 if TYPE_CHECKING:
     from aether.kernel.event_bus import EventBus
     from aether.llm.context_builder import ContextBuilder
     from aether.llm.core import LLMCore
+    from aether.session.ledger import TaskLedger
     from aether.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -42,6 +50,9 @@ class SubAgentManager:
 
     Sub-agents run as background asyncio.Tasks with their own SessionLoop.
     The parent agent continues immediately after spawning — no blocking.
+
+    When a TaskLedger is provided, all sub-agent work is tracked in SQLite
+    for persistence, restart recovery, and LLM introspection.
     """
 
     def __init__(
@@ -50,6 +61,7 @@ class SubAgentManager:
         llm_core: "LLMCore",
         context_builder: "ContextBuilder",
         event_bus: "EventBus | None" = None,
+        task_ledger: "TaskLedger | None" = None,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         max_duration: float = DEFAULT_MAX_DURATION,
     ) -> None:
@@ -57,6 +69,7 @@ class SubAgentManager:
         self._llm_core = llm_core
         self._context_builder = context_builder
         self._event_bus = event_bus
+        self._task_ledger = task_ledger
         self._max_iterations = max_iterations
         self._max_duration = max_duration
 
@@ -64,6 +77,8 @@ class SubAgentManager:
         self._tasks: dict[str, asyncio.Task] = {}
         # Abort events: child_session_id → asyncio.Event
         self._aborts: dict[str, asyncio.Event] = {}
+        # Map child_session_id → ledger task_id (for updating ledger on completion)
+        self._ledger_task_ids: dict[str, str] = {}
 
     async def spawn(
         self,
@@ -77,6 +92,9 @@ class SubAgentManager:
 
         The sub-agent runs in the background as an asyncio.Task.
         The parent can check status and retrieve results later.
+
+        If a TaskLedger is available, a 'sub_agent' task is written
+        to the ledger for persistent tracking and restart recovery.
         """
         from aether.session.loop import SessionLoop
 
@@ -91,6 +109,20 @@ class SubAgentManager:
 
         # Add the user prompt as the first message
         await self._session_store.append_user_message(child_id, prompt)
+
+        # Write to Task Ledger if available
+        if self._task_ledger is not None:
+            ledger_task_id = await self._task_ledger.submit(
+                session_id=parent_session_id,
+                task_type=TaskType.SUB_AGENT.value,
+                payload={
+                    "child_session_id": child_id,
+                    "agent_type": agent_type,
+                    "prompt": prompt[:500],  # Truncate for storage
+                },
+                priority="normal",
+            )
+            self._ledger_task_ids[child_id] = ledger_task_id
 
         # Resolve agent-type limits (agent type may override defaults)
         agent_def = get_agent_type(agent_type)
@@ -110,6 +142,10 @@ class SubAgentManager:
 
         abort = asyncio.Event()
         self._aborts[child_id] = abort
+
+        # Set ledger task to running before starting the loop
+        if self._task_ledger is not None and child_id in self._ledger_task_ids:
+            await self._task_ledger.set_running(self._ledger_task_ids[child_id])
 
         task = asyncio.create_task(
             loop.run(child_id, abort=abort, enabled_plugins=enabled_plugins or [])
@@ -199,27 +235,72 @@ class SubAgentManager:
         return canceled
 
     def _on_complete(self, session_id: str) -> None:
-        """Callback when a sub-agent task finishes."""
+        """Callback when a sub-agent task finishes.
+
+        Updates the Task Ledger (if available) and publishes a
+        completion event to the EventBus.
+        """
         task = self._tasks.get(session_id)
+        had_error = False
+        error_msg = ""
+
         if task and task.done():
             try:
                 exc = task.exception()
                 if exc:
                     logger.error("Sub-agent %s failed: %s", session_id, exc)
+                    had_error = True
+                    error_msg = str(exc)
             except asyncio.CancelledError:
                 logger.info("Sub-agent %s was canceled", session_id)
+                had_error = True
+                error_msg = "canceled"
+
+        # Update Task Ledger if available
+        ledger_task_id = self._ledger_task_ids.pop(session_id, None)
+        if self._task_ledger is not None and ledger_task_id is not None:
+            try:
+                loop = asyncio.get_event_loop()
+                if had_error:
+                    loop.call_soon(
+                        asyncio.ensure_future,
+                        self._task_ledger.set_error(ledger_task_id, error_msg),
+                    )
+                else:
+                    loop.call_soon(
+                        asyncio.ensure_future,
+                        self._update_ledger_complete(ledger_task_id, session_id),
+                    )
+            except RuntimeError:
+                # Event loop closed — can't update ledger during shutdown
+                pass
 
         # Publish completion event
         if self._event_bus:
-            asyncio.get_event_loop().call_soon(
-                asyncio.ensure_future,
-                self._event_bus.publish(
-                    "task.completed",
-                    {"session_id": session_id},
-                ),
-            )
+            try:
+                asyncio.get_event_loop().call_soon(
+                    asyncio.ensure_future,
+                    self._event_bus.publish(
+                        "task.completed",
+                        {"session_id": session_id},
+                    ),
+                )
+            except RuntimeError:
+                pass
 
         # Clean up abort event
         self._aborts.pop(session_id, None)
 
         logger.info("Sub-agent %s completed", session_id)
+
+    async def _update_ledger_complete(
+        self, ledger_task_id: str, session_id: str
+    ) -> None:
+        """Update the ledger with the sub-agent's result text."""
+        if self._task_ledger is None:
+            return
+        result_text = await self._session_store.get_last_assistant_text(session_id)
+        await self._task_ledger.set_complete(
+            ledger_task_id,
+            result={"result": result_text or "(no output)"},
+        )

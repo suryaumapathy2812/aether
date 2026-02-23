@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from aether.memory.store import MemoryStore
     from aether.plugins.context import PluginContextStore
     from aether.providers.base import LLMProvider
+    from aether.session.ledger import TaskLedger
     from aether.session.store import SessionStore
     from aether.services.notification_service import NotificationDecision
     from aether.skills.loader import SkillLoader
@@ -73,6 +74,7 @@ class AgentCore:
         event_bus: "EventBus | None" = None,
         llm_core: "LLMCore | None" = None,
         context_builder: "ContextBuilder | None" = None,
+        task_ledger: "TaskLedger | None" = None,
     ) -> None:
         self._scheduler = scheduler
         self._memory_store = memory_store
@@ -84,6 +86,7 @@ class AgentCore:
         self._event_bus = event_bus
         self._llm_core = llm_core
         self._context_builder = context_builder
+        self._task_ledger = task_ledger
 
         # In-memory fallback when SessionStore is not provided.
         # When session_store is set, this dict is unused.
@@ -113,6 +116,17 @@ class AgentCore:
     async def start(self) -> None:
         """Start the scheduler (worker pools) and event subscriptions."""
         await self._scheduler.start()
+
+        # Resume interrupted tasks from the Task Ledger (restart recovery)
+        if self._task_ledger is not None:
+            try:
+                resumed = await self._task_ledger.resume_interrupted()
+                if resumed > 0:
+                    logger.info(
+                        "Resumed %d interrupted tasks from Task Ledger", resumed
+                    )
+            except Exception as e:
+                logger.warning("Failed to resume interrupted tasks: %s", e)
 
         # Subscribe to task.completed events from SubAgentManager
         if self._event_bus is not None:

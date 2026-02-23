@@ -33,6 +33,8 @@ from aether.session.models import (
     PartType,
     Session,
     SessionStatus,
+    Task,
+    TaskStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,37 @@ class SessionStore:
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_parts_message
             ON message_parts(message_id, sequence)
+        """)
+
+        # ─── Task Ledger table ────────────────────────────────────
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority TEXT NOT NULL DEFAULT 'normal',
+                payload TEXT NOT NULL DEFAULT '{}',
+                result TEXT,
+                error TEXT,
+                submitted_at REAL NOT NULL,
+                started_at REAL,
+                completed_at REAL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_session
+            ON tasks(session_id)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_status
+            ON tasks(status)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_type_status
+            ON tasks(type, status)
         """)
 
         await self._db.commit()
@@ -571,3 +604,187 @@ class SessionStore:
                 content = json.loads(row[0])
                 return content if isinstance(content, str) else None
         return None
+
+    # ─── Task Ledger CRUD ─────────────────────────────────────────
+
+    async def create_task(
+        self,
+        session_id: str,
+        task_type: str,
+        payload: dict[str, Any] | None = None,
+        priority: str = "normal",
+        task_id: str | None = None,
+    ) -> Task:
+        """Create a new task in the ledger. Returns the Task object."""
+        assert self._db is not None, "SessionStore not started"
+
+        task_id = task_id or str(uuid.uuid4())
+        now = time.time()
+        payload = payload or {}
+
+        await self._db.execute(
+            """
+            INSERT INTO tasks
+                (task_id, session_id, type, status, priority, payload, submitted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                session_id,
+                task_type,
+                TaskStatus.PENDING.value,
+                priority,
+                json.dumps(payload),
+                now,
+            ),
+        )
+        await self._db.commit()
+
+        return Task(
+            task_id=task_id,
+            session_id=session_id,
+            type=task_type,
+            status=TaskStatus.PENDING.value,
+            priority=priority,
+            payload=payload,
+            submitted_at=now,
+        )
+
+    async def get_task(self, task_id: str) -> Task | None:
+        """Get a task by ID. Returns None if not found."""
+        assert self._db is not None, "SessionStore not started"
+
+        async with self._db.execute(
+            "SELECT task_id, session_id, type, status, priority, payload, "
+            "result, error, submitted_at, started_at, completed_at "
+            "FROM tasks WHERE task_id = ?",
+            (task_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_task(row)
+
+    async def get_tasks(
+        self,
+        session_id: str | None = None,
+        status: str | None = None,
+        task_type: str | None = None,
+        limit: int = 100,
+    ) -> list[Task]:
+        """Query tasks with optional filters."""
+        assert self._db is not None, "SessionStore not started"
+
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if session_id is not None:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        if task_type is not None:
+            conditions.append("type = ?")
+            params.append(task_type)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = (
+            f"SELECT task_id, session_id, type, status, priority, payload, "
+            f"result, error, submitted_at, started_at, completed_at "
+            f"FROM tasks {where} ORDER BY submitted_at DESC LIMIT ?"
+        )
+        params.append(limit)
+
+        tasks: list[Task] = []
+        async with self._db.execute(query, tuple(params)) as cursor:
+            async for row in cursor:
+                tasks.append(self._row_to_task(row))
+        return tasks
+
+    async def update_task_status(
+        self,
+        task_id: str,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Update a task's status and optionally its result or error.
+
+        Enforces valid transitions: pending→running, running→complete|error.
+        """
+        assert self._db is not None, "SessionStore not started"
+
+        now = time.time()
+
+        if status == TaskStatus.RUNNING.value:
+            await self._db.execute(
+                "UPDATE tasks SET status = ?, started_at = ? "
+                "WHERE task_id = ? AND status = ?",
+                (status, now, task_id, TaskStatus.PENDING.value),
+            )
+        elif status == TaskStatus.COMPLETE.value:
+            result_json = json.dumps(result) if result is not None else None
+            await self._db.execute(
+                "UPDATE tasks SET status = ?, result = ?, completed_at = ? "
+                "WHERE task_id = ? AND status = ?",
+                (status, result_json, now, task_id, TaskStatus.RUNNING.value),
+            )
+        elif status == TaskStatus.ERROR.value:
+            await self._db.execute(
+                "UPDATE tasks SET status = ?, error = ?, completed_at = ? "
+                "WHERE task_id = ? AND status = ?",
+                (status, error, now, task_id, TaskStatus.RUNNING.value),
+            )
+        else:
+            logger.warning(
+                "Invalid task status transition to '%s' for %s", status, task_id
+            )
+            return
+
+        await self._db.commit()
+
+    async def get_interrupted_tasks(self) -> list[Task]:
+        """Get tasks that were running when the agent died.
+
+        These need to be re-queued as pending on restart.
+        """
+        assert self._db is not None, "SessionStore not started"
+
+        tasks: list[Task] = []
+        async with self._db.execute(
+            "SELECT task_id, session_id, type, status, priority, payload, "
+            "result, error, submitted_at, started_at, completed_at "
+            "FROM tasks WHERE status = ?",
+            (TaskStatus.RUNNING.value,),
+        ) as cursor:
+            async for row in cursor:
+                tasks.append(self._row_to_task(row))
+        return tasks
+
+    async def requeue_task(self, task_id: str) -> None:
+        """Reset a running task back to pending (for restart recovery)."""
+        assert self._db is not None, "SessionStore not started"
+
+        await self._db.execute(
+            "UPDATE tasks SET status = ?, started_at = NULL "
+            "WHERE task_id = ? AND status = ?",
+            (TaskStatus.PENDING.value, task_id, TaskStatus.RUNNING.value),
+        )
+        await self._db.commit()
+
+    def _row_to_task(self, row: Any) -> Task:
+        """Convert a database row to a Task object."""
+        return Task(
+            task_id=row[0],
+            session_id=row[1],
+            type=row[2],
+            status=row[3],
+            priority=row[4],
+            payload=json.loads(row[5]) if row[5] else {},
+            result=json.loads(row[6]) if row[6] else None,
+            error=row[7],
+            submitted_at=row[8],
+            started_at=row[9],
+            completed_at=row[10],
+        )

@@ -4,10 +4,14 @@ Session Models — data structures for persistent session state.
 These models represent the three-level hierarchy:
   Session → Message → MessagePart
 
+Plus the Task Ledger model:
+  Task — persistent P↔E communication record
+
 Sessions can be nested (parent_session_id) for sub-agent delegation.
 Messages track the conversation turns.
 MessageParts track individual pieces within a message (text chunks,
 tool calls, tool results) for fine-grained status tracking.
+Tasks track work items delegated from P Worker to E Worker.
 
 All models are frozen dataclasses — create new instances for modifications.
 """
@@ -134,3 +138,58 @@ class MessagePart:
     status: str = PartStatus.COMPLETED.value
     sequence: int = 0
     created_at: float = field(default_factory=time.time)
+
+
+# ─── Task Ledger Models ──────────────────────────────────────────
+
+
+class TaskStatus(str, Enum):
+    """Lifecycle status of a task in the Task Ledger.
+
+    Transitions: pending → running → complete | error
+    No other transitions are valid. A failed task is retried by
+    creating a new task, not by resetting status.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    ERROR = "error"
+
+
+class TaskType(str, Enum):
+    """Type of work represented by a task."""
+
+    TOOL_CALL = "tool_call"  # LLM-initiated tool execution
+    MEMORY_EXTRACT = "memory_extract"  # Post-turn memory extraction
+    SUB_AGENT = "sub_agent"  # Delegated sub-agent work
+    SCHEDULED = "scheduled"  # Cron / scheduled work
+    PROACTIVE_CHECK = "proactive_check"  # Proactive engine check
+
+
+@dataclass(frozen=True)
+class Task:
+    """
+    A work item in the Task Ledger — the P↔E communication record.
+
+    The Task Ledger is the single communication channel between the
+    P Worker and E Worker (Requirements.md §2.2.1):
+    - P Worker creates tasks (pending), reads status/result
+    - E Worker picks up pending tasks, sets running, sets complete/error
+    - LLM reads the ledger via the check_task tool
+
+    Tasks are never deleted. They form a complete audit trail of all
+    work the agent has done.
+    """
+
+    task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str = ""  # Which session spawned this task
+    type: str = TaskType.SUB_AGENT.value
+    status: str = TaskStatus.PENDING.value
+    priority: str = "normal"  # high / normal / low
+    payload: dict[str, Any] = field(default_factory=dict)
+    result: dict[str, Any] | None = None  # NULL until complete
+    error: str | None = None  # NULL unless status is error
+    submitted_at: float = field(default_factory=time.time)
+    started_at: float | None = None  # NULL until running
+    completed_at: float | None = None  # NULL until complete/error
