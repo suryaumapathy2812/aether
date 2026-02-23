@@ -429,8 +429,23 @@ class SessionStore:
         session_id: str,
         sequence: int,
     ) -> int:
-        """Delete messages with sequence < given value. Used for compaction."""
+        """Delete messages with sequence < given value. Used for compaction.
+
+        Also deletes any associated message_parts (the FK has no CASCADE).
+        """
         assert self._db is not None, "SessionStore not started"
+
+        # Delete associated message_parts first (FK constraint)
+        await self._db.execute(
+            """
+            DELETE FROM message_parts
+            WHERE message_id IN (
+                SELECT message_id FROM messages
+                WHERE session_id = ? AND sequence < ?
+            )
+            """,
+            (session_id, sequence),
+        )
 
         async with self._db.execute(
             "DELETE FROM messages WHERE session_id = ? AND sequence < ?",
@@ -440,6 +455,70 @@ class SessionStore:
 
         await self._db.commit()
         return deleted or 0
+
+    async def insert_message_at_sequence(
+        self,
+        session_id: str,
+        role: str,
+        content: Any = None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        tool_call_id: str | None = None,
+        sequence: int = 0,
+        message_id: str | None = None,
+    ) -> Message:
+        """Insert a message at a specific sequence number.
+
+        Unlike add_message (which auto-increments), this places the
+        message at the exact sequence given. Used by compaction to
+        insert the summary message BEFORE the preserved messages.
+
+        The caller is responsible for ensuring the sequence number
+        doesn't collide with existing messages.
+        """
+        assert self._db is not None, "SessionStore not started"
+
+        message_id = message_id or str(uuid.uuid4())
+        now = time.time()
+
+        content_json = json.dumps(content) if content is not None else None
+        tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+
+        await self._db.execute(
+            """
+            INSERT INTO messages
+                (message_id, session_id, role, content, tool_calls, tool_call_id, sequence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                session_id,
+                role,
+                content_json,
+                tool_calls_json,
+                tool_call_id,
+                sequence,
+                now,
+            ),
+        )
+        await self._db.commit()
+
+        # Update session timestamp
+        await self._db.execute(
+            "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
+            (now, session_id),
+        )
+        await self._db.commit()
+
+        return Message(
+            message_id=message_id,
+            session_id=session_id,
+            role=role,
+            content=content,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            sequence=sequence,
+            created_at=now,
+        )
 
     # ─── Message Parts CRUD ───────────────────────────────────────
 
