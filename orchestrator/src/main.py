@@ -1360,6 +1360,30 @@ async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
 # ── WebRTC Signaling Proxy ─────────────────────────────────
 
 
+@app.get("/api/agent/ready")
+async def agent_ready(user_id: str = Depends(get_user_id)):
+    """Return whether a user agent is ready by probing its health endpoint."""
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        return {"ready": False}
+
+    # Actually probe the agent to confirm it's reachable and healthy.
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"http://{agent['host']}:{agent['port']}/health",
+            )
+            if resp.status_code == 200:
+                return {"ready": True}
+            log.warning(
+                "Agent health check returned %d for user %s", resp.status_code, user_id
+            )
+            return {"ready": False}
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        log.warning("Agent unreachable for user %s: %s", user_id, exc)
+        return {"ready": False}
+
+
 @app.post("/api/webrtc/offer")
 async def proxy_webrtc_offer(request: Request):
     """Proxy WebRTC SDP offer to the user's agent."""
@@ -1374,18 +1398,27 @@ async def proxy_webrtc_offer(request: Request):
     if device_id:
         body["device_id"] = device_id
 
-    import httpx
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"http://{agent['host']}:{agent['port']}/webrtc/offer",
-            json=body,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(
-                resp.status_code, resp.json().get("error", "Offer failed")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"http://{agent['host']}:{agent['port']}/webrtc/offer",
+                json=body,
             )
-        return resp.json()
+            if resp.status_code != 200:
+                try:
+                    detail = resp.json().get("error", "Offer failed")
+                except Exception:
+                    detail = resp.text[:200]
+                raise HTTPException(resp.status_code, detail)
+            return resp.json()
+    except HTTPException:
+        raise
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        log.warning("Agent unreachable for WebRTC offer (user=%s): %s", user_id, exc)
+        raise HTTPException(
+            503,
+            "Agent is not reachable. It may still be starting — please retry in a few seconds.",
+        )
 
 
 @app.patch("/api/webrtc/ice")
@@ -1397,18 +1430,24 @@ async def proxy_webrtc_ice(request: Request, user_id: str = Depends(get_user_id)
 
     body = await request.json()
 
-    import httpx
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.patch(
-            f"http://{agent['host']}:{agent['port']}/webrtc/ice",
-            json=body,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(
-                resp.status_code, resp.json().get("error", "ICE failed")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.patch(
+                f"http://{agent['host']}:{agent['port']}/webrtc/ice",
+                json=body,
             )
-        return resp.json()
+            if resp.status_code != 200:
+                try:
+                    detail = resp.json().get("error", "ICE failed")
+                except Exception:
+                    detail = resp.text[:200]
+                raise HTTPException(resp.status_code, detail)
+            return resp.json()
+    except HTTPException:
+        raise
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        log.warning("Agent unreachable for ICE candidate (user=%s): %s", user_id, exc)
+        raise HTTPException(503, "Agent is not reachable for ICE trickle.")
 
 
 # ── Chat Streaming Proxy (Vercel AI SDK) ───────────────────
