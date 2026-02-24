@@ -1360,139 +1360,57 @@ async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
 # ── WebRTC Signaling Proxy ─────────────────────────────────
 
 
-# Guard against concurrent provisioning per user from rapid /ready polls.
-_provisioning_locks: dict[str, asyncio.Lock] = {}
-_provisioning_in_progress: set[str] = set()
-
-
 @app.get("/api/agent/ready")
 async def agent_ready(user_id: str = Depends(get_user_id)):
-    """Return agent readiness with actionable status for the dashboard.
+    """Return agent readiness, provisioning if needed.
+
+    Uses the same _get_agent_for_user path as every other endpoint so
+    provisioning actually happens synchronously before we return.
 
     Returns:
         ready: bool — true only when agent is reachable and healthy
-        status: "running" | "starting" | "provisioning" | "unreachable" | "not_provisioned" | "failed"
+        status: "running" | "starting" | "unreachable" | "not_provisioned"
         message: human-readable description
     """
-    pool = await get_pool()
-
-    # ── Fast path: local agent override ──
-    local_target = _local_agent_target()
-    if local_target:
-        ok = await _probe_agent_health(local_target)
-        if ok:
-            return {"ready": True, "status": "running", "message": "Agent is ready"}
-        log.warning(
-            "Local agent unreachable for user %s (target=%s)", user_id, local_target
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        # _get_agent_for_user already tried provisioning and waited.
+        # Check if there's a row in starting state.
+        pool = await get_pool()
+        row = await pool.fetchrow(
+            "SELECT status FROM agents WHERE user_id = $1", user_id
         )
+        if row and row["status"] == "starting":
+            return {
+                "ready": False,
+                "status": "starting",
+                "message": "Agent is starting up…",
+            }
         return {
             "ready": False,
-            "status": "unreachable",
-            "message": "Local agent is not reachable. Is it running?",
+            "status": "not_provisioned",
+            "message": "Agent could not be provisioned. Check orchestrator logs.",
         }
 
-    # ── Check DB for existing agent row ──
-    row = await pool.fetchrow(
-        "SELECT host, port, status FROM agents WHERE user_id = $1", user_id
-    )
-
-    if row and row["status"] == "running":
-        agent = {"host": row["host"], "port": row["port"]}
-        ok = await _probe_agent_health(agent)
-        if ok:
-            return {"ready": True, "status": "running", "message": "Agent is ready"}
-        # DB says running but agent is unreachable — mark stale
-        container_status = await get_agent_status(user_id)
-        if container_status not in {"running", None, "unknown"}:
-            await pool.execute(
-                "UPDATE agents SET status = 'stopped' WHERE user_id = $1", user_id
-            )
-            log.warning(
-                "Agent stale for user %s (container=%s); marked stopped",
-                user_id,
-                container_status,
-            )
-        return {
-            "ready": False,
-            "status": "unreachable",
-            "message": "Agent registered but not responding. It may be restarting.",
-        }
-
-    if row and row["status"] == "starting":
-        return {
-            "ready": False,
-            "status": "starting",
-            "message": "Agent is starting up…",
-        }
-
-    # ── No running/starting agent — trigger provisioning (once) ──
-    if user_id in _provisioning_in_progress:
-        log.debug("Provision already in progress for user %s", user_id)
-        return {
-            "ready": False,
-            "status": "provisioning",
-            "message": "Agent is being provisioned…",
-        }
-
-    # Provision in background so this request returns immediately
-    lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
-    if lock.locked():
-        log.debug("Provision lock held for user %s", user_id)
-        return {
-            "ready": False,
-            "status": "provisioning",
-            "message": "Agent is being provisioned…",
-        }
-
-    log.info(
-        "No agent for user %s (row=%s) — triggering background provisioning",
-        user_id,
-        dict(row) if row else None,
-    )
-    asyncio.create_task(
-        _background_provision(user_id),
-        name=f"provision-{user_id}",
-    )
-    return {
-        "ready": False,
-        "status": "provisioning",
-        "message": "Agent provisioning started. This may take 15–30 seconds.",
-    }
-
-
-async def _background_provision(user_id: str) -> None:
-    """Run _ensure_agent in background with dedup guard."""
-    lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
-    if lock.locked():
-        log.info("Provision lock already held for user %s — skipping", user_id)
-        return
-    async with lock:
-        _provisioning_in_progress.add(user_id)
-        log.info("Background provisioning started for user %s", user_id)
-        try:
-            await _ensure_agent(user_id)
-            log.info("Background provisioning completed for user %s", user_id)
-        except Exception as exc:
-            log.error(
-                "Background provisioning failed for user %s: %s",
-                user_id,
-                exc,
-                exc_info=True,
-            )
-        finally:
-            _provisioning_in_progress.discard(user_id)
-
-
-async def _probe_agent_health(agent: dict) -> bool:
-    """Ping agent /health and return True if 200."""
+    # Agent row found — probe health to confirm it's actually reachable.
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
                 f"http://{agent['host']}:{agent['port']}/health",
             )
-            return resp.status_code == 200
-    except (httpx.ConnectError, httpx.TimeoutException):
-        return False
+            if resp.status_code == 200:
+                return {"ready": True, "status": "running", "message": "Agent is ready"}
+            log.warning(
+                "Agent health returned %d for user %s", resp.status_code, user_id
+            )
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        log.warning("Agent unreachable for user %s: %s", user_id, exc)
+
+    return {
+        "ready": False,
+        "status": "unreachable",
+        "message": "Agent registered but not responding. It may still be starting.",
+    }
 
 
 @app.post("/api/webrtc/offer")
