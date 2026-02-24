@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from aether.core.metrics import metrics
 from aether.session.models import TaskType
 
 if TYPE_CHECKING:
@@ -105,6 +107,7 @@ class DelegationBridge:
         delegation_session_id: str,
         prompt: str,
     ) -> None:
+        started = time.time()
         try:
             await self._task_ledger.set_running(ledger_task_id)
             result = await self._agent_core.run_session(
@@ -119,8 +122,14 @@ class DelegationBridge:
                     "result": result or "",
                 },
             )
+            metrics.observe(
+                "service.delegation.duration_ms",
+                max(0.0, (time.time() - started) * 1000.0),
+            )
+            metrics.inc("service.delegation.completed")
         except Exception as exc:
             logger.exception("Delegated session failed: %s", delegation_session_id)
+            metrics.inc("service.delegation.failed")
             try:
                 await self._task_ledger.set_error(ledger_task_id, str(exc))
             except Exception:

@@ -29,6 +29,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
+from aether.core.metrics import metrics
 from aether.kernel.contracts import (
     JobKind,
     JobModality,
@@ -752,6 +753,11 @@ class AgentCore:
         if delivery_type == "interrupt":
             # Deliver through voice if available, always broadcast to WS
             await self.speak_notification(text)
+            self._record_notification_delivery_metric(
+                notif,
+                delivery_type=delivery_type,
+                channel="voice_and_ws",
+            )
         else:
             # nudge or surface — broadcast to WS sidecar
             level = "nudge" if delivery_type == "nudge" else "speak"
@@ -764,6 +770,37 @@ class AgentCore:
                     "notification_id": notif.get("id"),
                 }
             )
+            self._record_notification_delivery_metric(
+                notif,
+                delivery_type=delivery_type,
+                channel="ws",
+            )
+
+    @staticmethod
+    def _delivery_latency_ms(
+        created_at: Any,
+        *,
+        now_ts: float | None = None,
+    ) -> float | None:
+        if not isinstance(created_at, (int, float)):
+            return None
+        now = now_ts if now_ts is not None else time.time()
+        return max(0.0, (now - float(created_at)) * 1000.0)
+
+    def _record_notification_delivery_metric(
+        self,
+        notif: dict,
+        *,
+        delivery_type: str,
+        channel: str,
+    ) -> None:
+        latency_ms = self._delivery_latency_ms(notif.get("created_at"))
+        labels = {"delivery_type": delivery_type, "channel": channel}
+        if latency_ms is not None:
+            metrics.observe(
+                "service.notification.delivery_ms", latency_ms, labels=labels
+            )
+        metrics.inc("service.notification.delivered", labels=labels)
 
     # ─── Greeting ────────────────────────────────────────────────
 

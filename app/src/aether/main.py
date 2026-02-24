@@ -1226,8 +1226,14 @@ async def latency_metrics() -> JSONResponse:
                 "notification_decision_p95_ms": metrics.percentile(
                     "service.notification.decision_ms", 95
                 ),
+                "notification_delivery_p95_ms": metrics.percentile(
+                    "service.notification.delivery_ms", 95
+                ),
                 "tool_execution_p95_ms": metrics.percentile(
                     "service.tool.duration_ms", 95
+                ),
+                "delegation_duration_p95_ms": metrics.percentile(
+                    "service.delegation.duration_ms", 95
                 ),
                 "memory_extraction_p95_ms": metrics.percentile(
                     "service.memory.extraction_ms", 95
@@ -1423,6 +1429,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
 
     notification_text = (decision.notification or event.summary or "").strip()
     notification_id = None
+    queued_at = time.time()
     if notification_text:
         notification_id = await memory_store.queue_notification(
             text=notification_text,
@@ -1456,6 +1463,21 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
 
         if notification_id is not None:
             await memory_store.mark_delivered(notification_id)
+            metrics.observe(
+                "service.notification.delivery_ms",
+                max(0.0, (time.time() - queued_at) * 1000.0),
+                labels={
+                    "delivery_type": delivery_type,
+                    "channel": "plugin_event_immediate",
+                },
+            )
+            metrics.inc(
+                "service.notification.delivered",
+                labels={
+                    "delivery_type": delivery_type,
+                    "channel": "plugin_event_immediate",
+                },
+            )
 
     # Report decision back to orchestrator
     if ORCHESTRATOR_URL and body.get("event_id"):

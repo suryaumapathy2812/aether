@@ -71,3 +71,15 @@ def test_interrupt_ignores_quiet_hour_deferral() -> None:
     )
 
     assert deliver_at is None
+
+
+def test_delivery_latency_ms_from_created_timestamp() -> None:
+    now_ts = _ts(2026, 2, 24, 10, 0)
+    created_at = now_ts - 2.5
+
+    latency_ms = AgentCore._delivery_latency_ms(created_at, now_ts=now_ts)
+    assert latency_ms == 2500.0
+
+
+def test_delivery_latency_ms_handles_invalid_created_at() -> None:
+    assert AgentCore._delivery_latency_ms("not-a-timestamp", now_ts=0) is None
