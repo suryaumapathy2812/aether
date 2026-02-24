@@ -1382,6 +1382,9 @@ async def agent_ready(user_id: str = Depends(get_user_id)):
         ok = await _probe_agent_health(local_target)
         if ok:
             return {"ready": True, "status": "running", "message": "Agent is ready"}
+        log.warning(
+            "Local agent unreachable for user %s (target=%s)", user_id, local_target
+        )
         return {
             "ready": False,
             "status": "unreachable",
@@ -1424,6 +1427,7 @@ async def agent_ready(user_id: str = Depends(get_user_id)):
 
     # ── No running/starting agent — trigger provisioning (once) ──
     if user_id in _provisioning_in_progress:
+        log.debug("Provision already in progress for user %s", user_id)
         return {
             "ready": False,
             "status": "provisioning",
@@ -1433,12 +1437,18 @@ async def agent_ready(user_id: str = Depends(get_user_id)):
     # Provision in background so this request returns immediately
     lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
     if lock.locked():
+        log.debug("Provision lock held for user %s", user_id)
         return {
             "ready": False,
             "status": "provisioning",
             "message": "Agent is being provisioned…",
         }
 
+    log.info(
+        "No agent for user %s (row=%s) — triggering background provisioning",
+        user_id,
+        dict(row) if row else None,
+    )
     asyncio.create_task(
         _background_provision(user_id),
         name=f"provision-{user_id}",
@@ -1454,13 +1464,21 @@ async def _background_provision(user_id: str) -> None:
     """Run _ensure_agent in background with dedup guard."""
     lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
     if lock.locked():
+        log.info("Provision lock already held for user %s — skipping", user_id)
         return
     async with lock:
         _provisioning_in_progress.add(user_id)
+        log.info("Background provisioning started for user %s", user_id)
         try:
             await _ensure_agent(user_id)
+            log.info("Background provisioning completed for user %s", user_id)
         except Exception as exc:
-            log.error("Background provisioning failed for user %s: %s", user_id, exc)
+            log.error(
+                "Background provisioning failed for user %s: %s",
+                user_id,
+                exc,
+                exc_info=True,
+            )
         finally:
             _provisioning_in_progress.discard(user_id)
 
