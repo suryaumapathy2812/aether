@@ -215,6 +215,9 @@ class VoiceSession:
 
         if event.type == RealtimeEventType.TEXT_DONE:
             await self._text_output.push_text("", final=True)
+            await self._sync_transcript_best_effort(event)
+            self._assistant_parts.clear()
+            self._pending_user_text = ""
             return
 
         if event.type == RealtimeEventType.INPUT_SPEECH_STARTED:

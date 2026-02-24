@@ -99,6 +99,10 @@ class GeminiRealtimeModel(RealtimeModel):
             "response_modalities": self._config.response_modalities,
             "input_audio_transcription": genai_types.AudioTranscriptionConfig(),
             "output_audio_transcription": genai_types.AudioTranscriptionConfig(),
+            "thinking_config": genai_types.ThinkingConfig(
+                thinking_budget=0,
+                include_thoughts=False,
+            ),
         }
 
         if instructions:

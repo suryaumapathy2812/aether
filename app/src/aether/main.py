@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1191,65 +1191,6 @@ async def webrtc_ice(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"WebRTC ICE error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ── Legacy /chat endpoint (backward compat) ───────────────────
-
-
-@app.post("/chat")
-async def chat_endpoint(request: Request):
-    """
-    Legacy HTTP streaming chat endpoint for dashboard text chat.
-
-    Streams plain text chunks via the P-worker text session path. For OpenAI-compatible
-    format, use /v1/chat/completions instead.
-    """
-    body = await request.json()
-    incoming_messages = body.get("messages", [])
-    user_id = body.get("user_id", "")
-
-    if not incoming_messages:
-        return JSONResponse({"error": "No messages"}, status_code=400)
-
-    # Extract the latest user message (AI SDK + legacy format)
-    last_user_msg = None
-    for m in reversed(incoming_messages):
-        if m.get("role") == "user":
-            parts = m.get("parts", [])
-            if parts:
-                last_user_msg = " ".join(
-                    p.get("text", "") for p in parts if p.get("type") == "text"
-                )
-            else:
-                last_user_msg = m.get("content", "")
-            break
-
-    if not last_user_msg:
-        return JSONResponse({"error": "No user message found"}, status_code=400)
-
-    session_id = f"http-{user_id or 'anon'}"
-
-    async def generate():
-        try:
-            async for event in agent_core.generate_text_reply_session(
-                text=last_user_msg,
-                session_id=session_id,
-            ):
-                if event.stream_type == "text_chunk":
-                    chunk = event.payload.get("text", "")
-                    yield chunk
-        except Exception as e:
-            logger.error(f"Chat stream error: {e}", exc_info=True)
-            yield f"\n[error] {e}\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
 
 
 # ── REST endpoints ─────────────────────────────────────────────

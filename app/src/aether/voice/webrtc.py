@@ -88,6 +88,31 @@ class WebRTCConnection:
     offer_epoch: int = 0
 
 
+def _resolve_session_key(user_id: str, device_id: str, pc_id: str) -> str:
+    """Resolve a stable session key for reconnect persistence.
+
+    Priority:
+    1) user_id (best cross-device identity)
+    2) device_id (stable per client installation/tab)
+    3) pc_id (fallback when client sends no identity)
+    """
+    user_key = user_id.strip()
+    if user_key:
+        return user_key
+
+    device_key = device_id.strip()
+    if device_key:
+        return device_key
+
+    return pc_id
+
+
+def _session_store_id(session_key: str) -> str:
+    """Return a stable UUID-based session id for voice transcripts."""
+    stable_uuid = uuid.uuid5(uuid.NAMESPACE_URL, session_key)
+    return f"webrtc-{stable_uuid}"
+
+
 class WebRTCAudioInput(AudioInput):
     """Queue-backed AudioInput for WebRTC inbound PCM frames."""
 
@@ -232,8 +257,8 @@ class WebRTCVoiceTransport:
         """Handle SDP offer → create peer connection + VoiceSession → return answer."""
 
         pc_id = pc_id or f"pc-{uuid.uuid4().hex[:12]}"
-        session_key = user_id or pc_id
         owner_device_id = device_id or f"anonymous:{pc_id}"
+        session_key = _resolve_session_key(user_id, owner_device_id, pc_id)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
         async with lock:
@@ -274,8 +299,9 @@ class WebRTCVoiceTransport:
             else:
                 if self.realtime_model is None:
                     raise RuntimeError("Realtime model is not configured for WebRTC")
+                voice_session_id = _session_store_id(session_key)
                 voice_session = VoiceSession(
-                    session_id=f"webrtc-{pc_id}",
+                    session_id=voice_session_id,
                     realtime_model=self.realtime_model,
                     on_function_call=self.on_function_call,
                     instructions=self.instructions,
@@ -590,31 +616,33 @@ class WebRTCVoiceTransport:
                 if conn.voice_session.is_streaming:
                     # Already streaming — ignore duplicate start
                     pass
-                elif conn.is_reconnect:
-                    # Reconnect: resume existing session (no greeting, keep history)
-                    # only when it wasn't fully stopped before.
-                    if getattr(conn.voice_session, "_stopped", False):
-                        logger.info(
-                            "stream_start on reconnect (%s): session marked stopped, starting fresh",
-                            conn.pc_id,
-                        )
-                        await conn.voice_session.start()
-                    else:
-                        logger.info(
-                            "stream_start on reconnect (%s): resuming session",
-                            conn.pc_id,
-                        )
-                        await conn.voice_session.resume()
-                else:
-                    # First connect: full start with greeting
+                elif conn.voice_session._stopped:
+                    # Fully stopped (stream_end or first ever connect) — fresh start
+                    logger.info(
+                        "stream_start (%s): starting fresh session",
+                        conn.pc_id,
+                    )
                     await conn.voice_session.start()
+                else:
+                    # Paused (stream_stop or reconnect) — resume with context
+                    logger.info(
+                        "stream_start (%s): resuming paused session",
+                        conn.pc_id,
+                    )
+                    await conn.voice_session.resume()
 
             elif msg_type == "stream_stop":
-                # Explicit stop from client — fully tear down
+                # Pause the session — preserves Gemini conversational context
+                # so the next stream_start resumes with full history.
+                # The session is only fully destroyed on WebRTC disconnect
+                # (connection closed/failed) or TTL expiry.
+                await conn.voice_session.pause()
+
+            elif msg_type == "stream_end":
+                # Explicit full teardown — only sent when user wants a
+                # completely fresh session (e.g. "new conversation" button).
                 await conn.voice_session.stop()
-                # Remove from persistent sessions so next connect starts fresh
                 self._sessions.pop(conn.session_key, None)
-                # If no sessions remain, clear the orchestrator keep_alive flag
                 if not self._sessions and self.on_sessions_empty:
                     asyncio.create_task(self.on_sessions_empty())
 

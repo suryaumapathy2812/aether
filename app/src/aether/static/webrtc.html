@@ -334,15 +334,27 @@
                 }
             };
 
-            // 6. ICE candidate gathering
-            const iceCandidates = [];
+            // 6. ICE candidate gathering — trickle ICE (send candidates as they arrive)
+            let trickleReady = false;  // true once we have pc_id from offer response
+            let tricklePcId = null;
+            const pendingCandidates = [];  // buffer until pc_id is known
+
             pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    iceCandidates.push({
-                        candidate: event.candidate.candidate,
-                        sdpMid: event.candidate.sdpMid,
-                        sdpMLineIndex: event.candidate.sdpMLineIndex,
-                    });
+                if (!event.candidate) return;
+                const c = {
+                    candidate: event.candidate.candidate,
+                    sdpMid: event.candidate.sdpMid,
+                    sdpMLineIndex: event.candidate.sdpMLineIndex,
+                };
+                if (trickleReady && tricklePcId) {
+                    // Send immediately
+                    fetch('/webrtc/ice', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pc_id: tricklePcId, candidates: [c] }),
+                    }).catch(e => logDebug(`ICE trickle error: ${e}`));
+                } else {
+                    pendingCandidates.push(c);
                 }
             };
 
@@ -375,17 +387,7 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            // 8. Wait for ICE gathering to complete (or timeout)
-            await new Promise((resolve) => {
-                if (pc.iceGatheringState === 'complete') { resolve(); return; }
-                const timeout = setTimeout(resolve, 3000);
-                pc.onicegatheringstatechange = () => {
-                    if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
-                };
-            });
-            logDebug(`ICE candidates gathered: ${iceCandidates.length}`);
-
-            // 9. Send offer to server
+            // 8. Send offer immediately — don't wait for ICE gathering (trickle ICE)
             setStatus('signaling...');
             const offerResp = await fetch('/webrtc/offer', {
                 method: 'POST',
@@ -404,6 +406,7 @@
 
             const answer = await offerResp.json();
             pcId = answer.pc_id;
+            tricklePcId = pcId;
             logDebug(`Server pc_id: ${pcId}`);
 
             // 10. Set remote description
@@ -412,14 +415,16 @@
                 type: answer.type,
             }));
 
-            // 11. Send ICE candidates
-            if (iceCandidates.length > 0) {
-                await fetch('/webrtc/ice', {
+            // 11. Flush any ICE candidates gathered while waiting for offer response
+            trickleReady = true;
+            if (pendingCandidates.length > 0) {
+                fetch('/webrtc/ice', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pc_id: pcId, candidates: iceCandidates }),
-                });
-                logDebug(`Sent ${iceCandidates.length} ICE candidates`);
+                    body: JSON.stringify({ pc_id: pcId, candidates: pendingCandidates }),
+                }).catch(e => logDebug(`ICE flush error: ${e}`));
+                logDebug(`Flushed ${pendingCandidates.length} buffered ICE candidates`);
+                pendingCandidates.length = 0;
             }
 
             setStatus('waiting for connection...');

@@ -336,6 +336,28 @@ class GeminiRealtimeSession(RealtimeSession):
 
         server_content = _pick(message, "server_content")
         if server_content:
+            # Gemini may surface transcriptions under server_content in some SDK
+            # versions/model variants.
+            sc_input_transcription = _pick(server_content, "input_transcription")
+            sc_transcript = _pick(sc_input_transcription, "text")
+            if isinstance(sc_transcript, str) and sc_transcript.strip():
+                events.append(
+                    RealtimeEvent(
+                        type=RealtimeEventType.INPUT_SPEECH_TRANSCRIPTION_COMPLETED,
+                        data={"transcript": sc_transcript},
+                    )
+                )
+
+            sc_output_transcription = _pick(server_content, "output_transcription")
+            sc_output_text = _pick(sc_output_transcription, "text")
+            if isinstance(sc_output_text, str) and sc_output_text:
+                events.append(
+                    RealtimeEvent(
+                        type=RealtimeEventType.TEXT_DELTA,
+                        data={"text": sc_output_text},
+                    )
+                )
+
             if _pick(server_content, "interrupted"):
                 events.append(RealtimeEvent(type=RealtimeEventType.INTERRUPTED))
 
@@ -357,6 +379,10 @@ class GeminiRealtimeSession(RealtimeSession):
             if isinstance(parts, list) and parts:
                 events.append(RealtimeEvent(type=RealtimeEventType.TURN_STARTED))
                 for part in parts:
+                    if _pick(part, "thought"):
+                        # Keep chain-of-thought private; do not stream to UI.
+                        continue
+
                     text_part = _pick(part, "text")
                     if isinstance(text_part, str) and text_part:
                         events.append(
@@ -384,6 +410,18 @@ class GeminiRealtimeSession(RealtimeSession):
                 events.append(RealtimeEvent(type=RealtimeEventType.AUDIO_DONE))
                 events.append(RealtimeEvent(type=RealtimeEventType.TEXT_DONE))
                 events.append(RealtimeEvent(type=RealtimeEventType.TURN_DONE))
+
+        # Some responses still emit output transcription at top-level.
+        # Keep this fallback after server_content processing.
+        output_transcription = _pick(message, "output_transcription")
+        output_text = _pick(output_transcription, "text")
+        if isinstance(output_text, str) and output_text:
+            events.append(
+                RealtimeEvent(
+                    type=RealtimeEventType.TEXT_DELTA,
+                    data={"text": output_text},
+                )
+            )
 
         tool_call = _pick(message, "tool_call")
         function_calls = _pick(tool_call, "function_calls") if tool_call else None
