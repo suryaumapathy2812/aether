@@ -56,9 +56,12 @@ export default function ChatPage() {
   const reconnectTimerRef = useRef<number | null>(null);
   const pingTimerRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const connectSeqRef = useRef(0);
+  const connectInFlightRef = useRef(false);
   const mountedRef = useRef(false);
   const currentAssistantIdRef = useRef<string | null>(null);
   const stoppingRef = useRef(false);
+  const replacingConnectionRef = useRef(false);
 
   const isLoading = connState === "thinking";
 
@@ -105,8 +108,7 @@ export default function ChatPage() {
   }
 
   async function postOffer(
-    localDescription: RTCSessionDescriptionInit,
-    previousPcId?: string
+    localDescription: RTCSessionDescriptionInit
   ): Promise<{ sdp: string; type: string; pc_id: string }> {
     const response = await fetch(`${ORCHESTRATOR_URL}/api/webrtc/offer`, {
       method: "POST",
@@ -117,7 +119,6 @@ export default function ChatPage() {
       body: JSON.stringify({
         sdp: localDescription.sdp,
         type: localDescription.type,
-        ...(previousPcId ? { pc_id: previousPcId } : {}),
       }),
     });
 
@@ -148,58 +149,93 @@ export default function ChatPage() {
   }
 
   async function connectPeer(): Promise<void> {
-    await disconnectPeer(false);
-    setConnState("connecting");
-    setErrorText(null);
+    if (connectInFlightRef.current) return;
+    connectInFlightRef.current = true;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    pcRef.current = pc;
+    const connectSeq = ++connectSeqRef.current;
+
+    function isStaleConnection(): boolean {
+      return !mountedRef.current || connectSeqRef.current !== connectSeq;
+    }
+
+    function isClosedPeer(target: RTCPeerConnection): boolean {
+      return (
+        target.signalingState === "closed" || target.connectionState === "closed"
+      );
+    }
+
+    try {
+      replacingConnectionRef.current = true;
+      await disconnectPeer(false);
+      replacingConnectionRef.current = false;
+
+      if (isStaleConnection()) return;
+
+      pcIdRef.current = null;
+      setConnState("connecting");
+      setErrorText(null);
+
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      pcRef.current = pc;
+
+      if (isStaleConnection()) {
+        try {
+          pc.close();
+        } catch {
+          // ignore
+        }
+        return;
+      }
 
     // Request downstream audio from agent even for text-first chat so the
     // SDP includes an audio m-line compatible with server-side WebRTC setup.
     pc.addTransceiver("audio", { direction: "recvonly" });
 
-    const channel = pc.createDataChannel("aether-events");
-    dcRef.current = channel;
+      const channel = pc.createDataChannel("aether-events");
+      dcRef.current = channel;
 
-    channel.onopen = () => {
-      reconnectAttemptsRef.current = 0;
-      setConnState("connected");
-      channel.send(JSON.stringify({ type: "stream_start", data: {} }));
-      if (pingTimerRef.current !== null) {
-        window.clearInterval(pingTimerRef.current);
-      }
-      pingTimerRef.current = window.setInterval(() => {
-        if (channel.readyState === "open") {
-          channel.send(JSON.stringify({ type: "ping", data: {} }));
+      channel.onopen = () => {
+        if (dcRef.current !== channel || pcRef.current !== pc) return;
+        reconnectAttemptsRef.current = 0;
+        setConnState("connected");
+        channel.send(JSON.stringify({ type: "stream_start", data: {} }));
+        if (pingTimerRef.current !== null) {
+          window.clearInterval(pingTimerRef.current);
         }
-      }, 15000);
-    };
+        pingTimerRef.current = window.setInterval(() => {
+          if (channel.readyState === "open") {
+            channel.send(JSON.stringify({ type: "ping", data: {} }));
+          }
+        }, 15000);
+      };
 
-    channel.onclose = () => {
-      if (pingTimerRef.current !== null) {
-        window.clearInterval(pingTimerRef.current);
-        pingTimerRef.current = null;
-      }
-      setConnState("disconnected");
-      scheduleReconnect();
-    };
+      channel.onclose = () => {
+        if (dcRef.current !== channel || pcRef.current !== pc) return;
+        if (pingTimerRef.current !== null) {
+          window.clearInterval(pingTimerRef.current);
+          pingTimerRef.current = null;
+        }
+        setConnState("disconnected");
+        scheduleReconnect();
+      };
 
-    channel.onerror = () => {
-      if (pingTimerRef.current !== null) {
-        window.clearInterval(pingTimerRef.current);
-        pingTimerRef.current = null;
-      }
-      setConnState("disconnected");
-      setErrorText("realtime connection error");
-      scheduleReconnect();
-    };
+      channel.onerror = () => {
+        if (dcRef.current !== channel || pcRef.current !== pc) return;
+        if (pingTimerRef.current !== null) {
+          window.clearInterval(pingTimerRef.current);
+          pingTimerRef.current = null;
+        }
+        setConnState("disconnected");
+        setErrorText("realtime connection error");
+        scheduleReconnect();
+      };
 
-    channel.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(String(event.data));
-        const type = String(payload.type || "");
-        const data = payload.data;
+      channel.onmessage = (event) => {
+        if (dcRef.current !== channel || pcRef.current !== pc) return;
+        try {
+          const payload = JSON.parse(String(event.data));
+          const type = String(payload.type || "");
+          const data = payload.data;
 
         if (type === "text_chunk") {
           setConnState("thinking");
@@ -230,47 +266,93 @@ export default function ChatPage() {
         if (type === "pong") {
           setConnState((prev) => (prev === "thinking" ? prev : "connected"));
         }
-      } catch {
-        // ignore malformed side-channel payloads
-      }
-    };
+        } catch {
+          // ignore malformed side-channel payloads
+        }
+      };
 
-    pc.onconnectionstatechange = () => {
-      const state = pc.connectionState;
-      if (state === "connected") {
-        setConnState((prev) => (prev === "thinking" ? prev : "connected"));
-      } else if (state === "failed" || state === "disconnected" || state === "closed") {
-        setConnState("disconnected");
-        scheduleReconnect();
-      }
-    };
+      pc.onconnectionstatechange = () => {
+        if (pcRef.current !== pc) return;
+        const state = pc.connectionState;
+        if (state === "connected") {
+          setConnState((prev) => (prev === "thinking" ? prev : "connected"));
+        } else if (
+          state === "failed" ||
+          state === "disconnected" ||
+          state === "closed"
+        ) {
+          setConnState("disconnected");
+          scheduleReconnect();
+        }
+      };
 
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      const pcId = pcIdRef.current;
-      if (!pcId) return;
-      void postIce(pcId, event.candidate);
-    };
+      pc.onicecandidate = (event) => {
+        if (pcRef.current !== pc) return;
+        if (!event.candidate) return;
+        const pcId = pcIdRef.current;
+        if (!pcId) return;
+        void postIce(pcId, event.candidate);
+      };
 
     // Receive remote audio track if present; autoplay in hidden element.
-    pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (!stream) return;
-      const audio = new Audio();
-      audio.autoplay = true;
-      audio.srcObject = stream;
-      void audio.play().catch(() => {});
-    };
+      pc.ontrack = (event) => {
+        if (pcRef.current !== pc) return;
+        const [stream] = event.streams;
+        if (!stream) return;
+        const audio = new Audio();
+        audio.autoplay = true;
+        audio.srcObject = stream;
+        void audio.play().catch(() => {});
+      };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const answer = await postOffer(offer, pcIdRef.current ?? undefined);
-    pcIdRef.current = answer.pc_id;
-    await pc.setRemoteDescription({ type: answer.type as RTCSdpType, sdp: answer.sdp });
+      const offer = await pc.createOffer();
+      if (isStaleConnection() || pcRef.current !== pc) {
+        return;
+      }
+
+      if (isClosedPeer(pc)) {
+        return;
+      }
+
+      await pc.setLocalDescription(offer);
+      if (isStaleConnection() || pcRef.current !== pc || isClosedPeer(pc)) {
+        return;
+      }
+
+      const answer = await postOffer(offer);
+      if (isStaleConnection() || pcRef.current !== pc || isClosedPeer(pc)) {
+        return;
+      }
+
+      pcIdRef.current = answer.pc_id;
+
+      try {
+        if (isClosedPeer(pc)) {
+          return;
+        }
+        await pc.setRemoteDescription({
+          type: answer.type as RTCSdpType,
+          sdp: answer.sdp,
+        });
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "InvalidStateError" &&
+          (pcRef.current !== pc || isClosedPeer(pc))
+        ) {
+          return;
+        }
+        throw error;
+      }
+    } finally {
+      connectInFlightRef.current = false;
+    }
   }
 
   function scheduleReconnect(): void {
-    if (!mountedRef.current || stoppingRef.current) return;
+    if (!mountedRef.current || stoppingRef.current || replacingConnectionRef.current) {
+      return;
+    }
     if (reconnectTimerRef.current !== null) return;
 
     const attempt = reconnectAttemptsRef.current + 1;
@@ -300,6 +382,9 @@ export default function ChatPage() {
     const pc = pcRef.current;
     dcRef.current = null;
     pcRef.current = null;
+    if (!sendStop) {
+      pcIdRef.current = null;
+    }
 
     if (sendStop && dc && dc.readyState === "open") {
       try {
