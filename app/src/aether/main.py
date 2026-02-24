@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import aether.core.config as _config_mod
 from aether.core.config import reload_config
@@ -714,8 +715,6 @@ async def _fetch_plugin_configs() -> None:
                     # Initialize telephony transport for telephony plugins
                     if plugin_name == "vobiz":
                         await _init_vobiz_telephony(config_data)
-                    elif plugin_name == "telegram":
-                        await _init_telegram(config_data)
                 else:
                     logger.warning(
                         "Failed to fetch config for plugin %s (status=%d, body=%s)",
@@ -725,6 +724,52 @@ async def _fetch_plugin_configs() -> None:
                     )
     except Exception as e:
         logger.warning("Failed to fetch plugin configs: %s", e)
+
+
+async def _fetch_device_configs() -> None:
+    """Fetch device configs from orchestrator and initialize device transports.
+
+    Currently handles: telegram (initializes Telegram plugin routes + context).
+    """
+    if not ORCHESTRATOR_URL or not AGENT_USER_ID:
+        logger.debug(
+            "Device config fetch skipped: ORCHESTRATOR_URL=%s, AGENT_USER_ID=%s",
+            bool(ORCHESTRATOR_URL),
+            bool(AGENT_USER_ID),
+        )
+        return
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{ORCHESTRATOR_URL}/api/internal/devices",
+                params={"user_id": AGENT_USER_ID},
+                headers=_agent_auth_headers(),
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Failed to fetch device configs (status=%d)", resp.status_code
+                )
+                return
+
+            devices = resp.json().get("devices", [])
+            logger.info("Device configs from orchestrator: %d devices", len(devices))
+
+            for device in devices:
+                device_type = device.get("device_type")
+                config_data = device.get("config", {})
+
+                if device_type == "telegram" and config_data.get("bot_token"):
+                    await _init_telegram(config_data)
+                    plugin_context_store.set("telegram", config_data)
+                    logger.info(
+                        "Telegram device initialized (bot=@%s)",
+                        config_data.get("bot_username", "?"),
+                    )
+    except Exception as e:
+        logger.warning("Failed to fetch device configs: %s", e)
 
 
 async def _init_vobiz_telephony(config_data: dict) -> None:
@@ -835,6 +880,46 @@ async def _init_telegram(config_data: dict) -> None:
         )
 
 
+# ── Device config endpoints ────────────────────────────────────
+
+
+class TelegramDeviceConfig(BaseModel):
+    bot_token: str | None = None
+    secret_token: str | None = None
+    allowed_chat_ids: str | None = None
+    bot_username: str | None = None
+
+
+@app.post("/devices/telegram/config")
+async def update_telegram_device_config(body: TelegramDeviceConfig):
+    """Orchestrator pushes Telegram device config to the agent.
+
+    Called when a user registers/removes a Telegram bot as a device.
+    If bot_token is None/empty, tears down the Telegram plugin state.
+    """
+    config_data = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    if not config_data.get("bot_token"):
+        # Teardown: clear Telegram state
+        import sys
+
+        routes_module = sys.modules.get("aether_plugin_telegram_routes")
+        if routes_module:
+            set_config_fn = getattr(routes_module, "set_config", None)
+            if set_config_fn:
+                set_config_fn({})
+                logger.info("Telegram device config cleared")
+        return {"status": "cleared"}
+
+    # Initialize/update Telegram with new config
+    await _init_telegram(config_data)
+
+    # Also update plugin context store so tools get the credentials
+    plugin_context_store.set("telegram", config_data)
+
+    return {"status": "configured", "bot_username": body.bot_username}
+
+
 # ── Startup / Shutdown ─────────────────────────────────────────
 
 
@@ -943,6 +1028,7 @@ async def startup() -> None:
 
     # Fetch plugin configs
     await _fetch_plugin_configs()
+    await _fetch_device_configs()
 
     # Start providers and stores
     await llm_provider.start()
@@ -1444,6 +1530,7 @@ async def config_reload(request_body: dict | None = None) -> JSONResponse:
 
     new_config = reload_config()
     await _fetch_plugin_configs()
+    await _fetch_device_configs()
 
     # Restart providers to pick up new config
     await llm_provider.stop()

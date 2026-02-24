@@ -15,62 +15,12 @@ import {
 import { useSession } from "@/lib/auth-client";
 import { getPreferences, updatePreferences, type UserPreferences } from "@/lib/api";
 
-// -- Types for config JSONs --
-
-interface STTModel {
-  description: string;
-  streaming: boolean;
-  recommended: boolean;
-  languages: string[];
-}
-
-interface STTProvider {
-  display_name: string;
-  models: Record<string, STTModel>;
-}
-
-interface LLMModel {
-  provider: string;
-  description: string;
-  recommended: boolean;
-}
-
-// Flat model list — all models route through OpenRouter.
-// Provider is display-only (shown as a label in the picker).
-
-interface TTSModel {
-  description: string;
-  streaming: boolean;
-  recommended: boolean;
-  voices: string[];
-}
-
-interface TTSProvider {
-  display_name: string;
-  models: Record<string, TTSModel>;
-}
-
-interface STTConfig {
-  providers: Record<string, STTProvider>;
-}
-
-interface LLMConfig {
-  models: Record<string, LLMModel>;
-}
-
-interface TTSConfig {
-  providers: Record<string, TTSProvider>;
-}
-
 // System defaults
 const DEFAULTS: UserPreferences = {
-  stt_provider: "deepgram",
-  stt_model: "nova-3",
-  stt_language: "en",
-  llm_model: "openai/gpt-4o",
-  tts_provider: "openai",
-  tts_model: "tts-1",
-  tts_voice: "nova",
+  llm_model: null,
+  tts_provider: null,
+  tts_model: null,
+  tts_voice: null,
   base_style: "default",
   custom_instructions: "",
 };
@@ -91,10 +41,6 @@ export default function AgentPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
 
-  const [sttConfig, setSttConfig] = useState<STTConfig | null>(null);
-  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
-  const [ttsConfig, setTtsConfig] = useState<TTSConfig | null>(null);
-
   const [prefs, setPrefs] = useState<UserPreferences>({ ...DEFAULTS });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -105,10 +51,6 @@ export default function AgentPage() {
       router.push("/");
       return;
     }
-
-    fetch("/stt.json").then((r) => r.json()).then(setSttConfig).catch(() => {});
-    fetch("/llm.json").then((r) => r.json()).then(setLlmConfig).catch(() => {});
-    fetch("/tts.json").then((r) => r.json()).then(setTtsConfig).catch(() => {});
 
     getPreferences()
       .then((serverPrefs) => {
@@ -143,53 +85,6 @@ export default function AgentPage() {
   );
 
   if (isPending || !session) return null;
-
-  // -- Derived options from config JSONs --
-
-  const sttProviders = sttConfig
-    ? Object.entries(sttConfig.providers).map(([id, p]) => ({
-        id,
-        label: p.display_name,
-      }))
-    : [];
-
-  const sttModels =
-    sttConfig && prefs.stt_provider
-      ? Object.entries(
-          sttConfig.providers[prefs.stt_provider]?.models || {}
-        ).map(([id, m]) => ({ id, label: id, description: m.description, recommended: m.recommended }))
-      : [];
-
-  // Flat model list — all models route through OpenRouter.
-  // Show "provider · model" as the label for clarity.
-  const llmModels = llmConfig
-    ? Object.entries(llmConfig.models).map(([id, m]) => ({
-        id,
-        label: `${m.provider} · ${id.includes("/") ? id.split("/").pop() : id}`,
-        description: m.description,
-        recommended: m.recommended,
-      }))
-    : [];
-
-  const ttsProviders = ttsConfig
-    ? Object.entries(ttsConfig.providers).map(([id, p]) => ({
-        id,
-        label: p.display_name,
-      }))
-    : [];
-
-  const ttsModels =
-    ttsConfig && prefs.tts_provider
-      ? Object.entries(
-          ttsConfig.providers[prefs.tts_provider]?.models || {}
-        ).map(([id, m]) => ({ id, label: id, description: m.description, recommended: m.recommended }))
-      : [];
-
-  const ttsVoices =
-    ttsConfig && prefs.tts_provider && prefs.tts_model
-      ? ttsConfig.providers[prefs.tts_provider]?.models[prefs.tts_model]
-          ?.voices || []
-      : [];
 
   return (
     <PageShell title="Agent" back="/home">
@@ -237,59 +132,6 @@ export default function AgentPage() {
               saves when you tap outside
             </p>
           </div>
-        </Section>
-
-        <Section title="STT">
-          <Picker
-            label="STT Provider"
-            value={prefs.stt_provider}
-            options={sttProviders}
-            onChange={(v) => save({ stt_provider: v, stt_model: null })}
-          />
-          {sttModels.length > 0 && (
-            <Picker
-              label="STT Model"
-              value={prefs.stt_model}
-              options={sttModels}
-              onChange={(v) => save({ stt_model: v })}
-            />
-          )}
-        </Section>
-
-        <Section title="TTS">
-          <Picker
-            label="TTS Provider"
-            value={prefs.tts_provider}
-            options={ttsProviders}
-            onChange={(v) =>
-              save({ tts_provider: v, tts_model: null, tts_voice: null })
-            }
-          />
-          {ttsModels.length > 0 && (
-            <Picker
-              label="TTS Model"
-              value={prefs.tts_model}
-              options={ttsModels}
-              onChange={(v) => save({ tts_model: v, tts_voice: null })}
-            />
-          )}
-          {ttsVoices.length > 0 && (
-            <Picker
-              label="Voice"
-              value={prefs.tts_voice}
-              options={ttsVoices.map((v) => ({ id: v, label: v }))}
-              onChange={(v) => save({ tts_voice: v })}
-            />
-          )}
-        </Section>
-
-        <Section title="LLM">
-          <Picker
-            label="Model"
-            value={prefs.llm_model}
-            options={llmModels}
-            onChange={(v) => save({ llm_model: v })}
-          />
         </Section>
 
       </div>

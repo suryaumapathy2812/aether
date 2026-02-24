@@ -1,0 +1,7 @@
+:3000 {
+  reverse_proxy dashboard:3000
+}
+
+:3080 {
+  reverse_proxy orchestrator:9000
+}

@@ -83,6 +83,7 @@ model device {
   token      String    @unique
   pairedAt   DateTime  @default(now()) @map("paired_at")
   lastSeen   DateTime? @map("last_seen")
+  config     String?
 
   user user @relation(fields: [userId], references: [id])
 

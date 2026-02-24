@@ -18,7 +18,7 @@ services:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
     volumes:
-      - ../Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../app/src/aether/static:/srv/agent-static:ro
       - caddy_data:/data
       - caddy_config:/config
@@ -58,6 +58,11 @@ services:
       - AGENT_NETWORK=${AGENT_NETWORK:-core-ai_default}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      - AETHER_VOICE_BACKEND=${AETHER_VOICE_BACKEND:-gemini}
+      - AETHER_GEMINI_REALTIME_MODEL=${AETHER_GEMINI_REALTIME_MODEL:-gemini-2.5-flash-native-audio-latest}
+      - AETHER_GEMINI_TEXT_MODEL=${AETHER_GEMINI_TEXT_MODEL:-gemini-2.5-flash}
+      - AETHER_GEMINI_VOICE=${AETHER_GEMINI_VOICE:-Puck}
+      - AETHER_GEMINI_LANGUAGE=${AETHER_GEMINI_LANGUAGE:-en}
       # Shared model cache for all per-user agent containers
       - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-../.cache/models}
       - AGENT_SHARED_MODELS_ORCH_PATH=/shared-models
@@ -81,6 +86,7 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       # System-wide fallback API keys (used when user hasn't set their own)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}

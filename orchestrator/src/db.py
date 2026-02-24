@@ -188,6 +188,7 @@ async def bootstrap_schema():
             ALTER TABLE plugin_events ADD COLUMN IF NOT EXISTS batch_notification TEXT;
             ALTER TABLE agents ADD COLUMN IF NOT EXISTS keep_alive BOOLEAN DEFAULT false;
             ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS llm_base_url TEXT;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS config TEXT;
 
             CREATE INDEX IF NOT EXISTS idx_plugin_events_user
                 ON plugin_events(user_id, created_at DESC);

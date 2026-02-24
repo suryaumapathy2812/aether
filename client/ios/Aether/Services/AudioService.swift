@@ -31,7 +31,7 @@ class AudioService: NSObject, ObservableObject {
 
     private let webrtc = WebRTCService()
     private var token = ""
-    private var baseURL = "https://aether.suryaumapathy.in"
+    private var baseURL = "http://localhost:3080"
 
     /// Reconnection state
     private var reconnectAttempts = 0
@@ -326,23 +326,16 @@ class AudioService: NSObject, ObservableObject {
             print("[AudioService] Status: \(payload)")
             DispatchQueue.main.async {
                 if self.isStreaming {
-                    let normalized = payload.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    switch normalized {
-                    case "listening", "listening...":
+                    switch payload {
+                    case "listening...":
                         self.state = .listening
                         self.statusText = "listening..."
-                    case "thinking", "thinking...":
+                    case "thinking...":
                         self.state = .thinking
                         self.statusText = "thinking..."
-                    case "speaking", "speaking...":
-                        self.state = .speaking
-                        self.statusText = "speaking..."
-                    case "muted", "reconnecting":
+                    case "muted":
                         self.state = .muted
-                        self.statusText = normalized == "reconnecting" ? "reconnecting..." : "muted"
-                    case "recovered":
-                        self.state = .listening
-                        self.statusText = "listening..."
+                        self.statusText = "muted"
                     default:
                         self.statusText = payload
                     }

@@ -689,6 +689,284 @@ async def list_devices(user_id: str = Depends(get_user_id)):
     return [dict(r) for r in rows]
 
 
+# ── Telegram Device Registration ───────────────────────────
+
+
+class TelegramDeviceBody(BaseModel):
+    bot_token: str
+    secret_token: str | None = None
+    allowed_chat_ids: str | None = None
+
+
+@app.post("/devices/telegram")
+@app.post("/api/devices/telegram")
+async def register_telegram_device(
+    body: TelegramDeviceBody,
+    request: Request,
+    user_id: str = Depends(get_user_id),
+):
+    """Register a Telegram bot as a device.
+
+    1. Validates the bot token via Telegram getMe API
+    2. Enforces one Telegram bot per user
+    3. Creates a device row with encrypted config
+    4. Registers the webhook with Telegram
+    5. Pushes config to the user's agent
+    """
+    pool = await get_pool()
+
+    # ── Enforce one Telegram bot per user ────────────────────
+    existing = await pool.fetchrow(
+        "SELECT id FROM devices WHERE user_id = $1 AND device_type = 'telegram'",
+        user_id,
+    )
+    if existing:
+        raise HTTPException(
+            409, "A Telegram bot is already connected. Remove it first."
+        )
+
+    # ── Validate bot token via Telegram API ──────────────────
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"https://api.telegram.org/bot{body.bot_token}/getMe"
+            )
+            if resp.status_code != 200:
+                raise HTTPException(400, "Invalid bot token — Telegram rejected it")
+            bot_info = resp.json().get("result", {})
+            bot_username = bot_info.get("username", "unknown")
+    except httpx.HTTPError:
+        raise HTTPException(400, "Could not reach Telegram API to validate bot token")
+
+    # ── Create device row ────────────────────────────────────
+    device_id = uuid.uuid4().hex[:12]
+    device_token = uuid.uuid4().hex  # Opaque token for auth (same pattern as iOS)
+    secret_token = (
+        body.secret_token or uuid.uuid4().hex
+    )  # Auto-generate if not provided
+
+    config_data = {
+        "bot_token": body.bot_token,
+        "secret_token": secret_token,
+        "allowed_chat_ids": body.allowed_chat_ids or "",
+        "bot_username": bot_username,
+    }
+    encrypted_config = encrypt_value(json.dumps(config_data))
+
+    await pool.execute(
+        "INSERT INTO devices (id, user_id, name, device_type, token, config) VALUES ($1, $2, $3, $4, $5, $6)",
+        device_id,
+        user_id,
+        f"@{bot_username}",
+        "telegram",
+        device_token,
+        encrypted_config,
+    )
+    log.info(
+        "Telegram device registered: %s (@%s) for user %s",
+        device_id,
+        bot_username,
+        user_id,
+    )
+
+    # ── Register webhook with Telegram ───────────────────────
+    public_url = _public_base_url(request)
+    webhook_url = f"{public_url}/api/devices/telegram/webhook?did={device_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{body.bot_token}/setWebhook",
+                json={
+                    "url": webhook_url,
+                    "secret_token": secret_token,
+                    "allowed_updates": [
+                        "message",
+                        "edited_message",
+                        "channel_post",
+                        "callback_query",
+                    ],
+                },
+            )
+            if resp.status_code != 200:
+                log.warning(
+                    "Telegram setWebhook failed (status=%d): %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+    except Exception as e:
+        log.warning("Failed to register Telegram webhook: %s", e)
+
+    # ── Ensure agent + push config ───────────────────────────
+    await _ensure_agent(user_id)
+
+    agent = await _get_agent_for_user(user_id)
+    if agent:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    f"http://{agent['host']}:{agent['port']}/devices/telegram/config",
+                    json=config_data,
+                )
+        except Exception as e:
+            log.warning("Failed to push Telegram config to agent: %s", e)
+
+    return {"device_id": device_id, "bot_username": bot_username}
+
+
+@app.delete("/devices/{device_id}")
+@app.delete("/api/devices/{device_id}")
+async def delete_device(device_id: str, user_id: str = Depends(get_user_id)):
+    """Remove a paired device.
+
+    For Telegram devices: unregisters the webhook with Telegram API.
+    For all devices: deletes the device row and notifies the agent.
+    """
+    pool = await get_pool()
+
+    # Verify device belongs to user
+    device = await pool.fetchrow(
+        "SELECT id, device_type, config FROM devices WHERE id = $1 AND user_id = $2",
+        device_id,
+        user_id,
+    )
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    # ── Telegram cleanup: unregister webhook ─────────────────
+    if device["device_type"] == "telegram" and device["config"]:
+        try:
+            config_data = json.loads(decrypt_value(device["config"]))
+            bot_token = config_data.get("bot_token")
+            if bot_token:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
+                    )
+                log.info("Telegram webhook unregistered for device %s", device_id)
+        except Exception as e:
+            log.warning("Failed to unregister Telegram webhook: %s", e)
+
+        # Notify agent to clear Telegram config
+        agent = await _get_agent_for_user(user_id)
+        if agent:
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(
+                        f"http://{agent['host']}:{agent['port']}/devices/telegram/config",
+                        json={},
+                    )
+            except Exception as e:
+                log.warning("Failed to clear Telegram config on agent: %s", e)
+
+    # ── Delete device row ────────────────────────────────────
+    await pool.execute("DELETE FROM devices WHERE id = $1", device_id)
+    log.info(
+        "Device deleted: %s (type=%s) for user %s",
+        device_id,
+        device["device_type"],
+        user_id,
+    )
+
+    return {"status": "ok"}
+
+
+@app.post("/api/devices/telegram/webhook")
+async def telegram_webhook_proxy(request: Request, did: str = Query(...)):
+    """Proxy incoming Telegram updates to the owning user's agent.
+
+    Telegram calls this URL for every update. The device_id is in the
+    query param `did`. We validate the secret token, look up the user's
+    agent, and proxy the request body.
+
+    Must return 200 quickly — Telegram retries after 5 seconds.
+    """
+    pool = await get_pool()
+
+    # ── Look up device ───────────────────────────────────────
+    device = await pool.fetchrow(
+        "SELECT id, user_id, config FROM devices WHERE id = $1 AND device_type = 'telegram'",
+        did,
+    )
+    if not device or not device["config"]:
+        return JSONResponse({"ok": False, "error": "Unknown device"}, status_code=404)
+
+    # ── Decrypt config and validate secret token ─────────────
+    try:
+        config_data = json.loads(decrypt_value(device["config"]))
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Config error"}, status_code=500)
+
+    expected_secret = config_data.get("secret_token", "")
+    if expected_secret:
+        incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(incoming_secret, expected_secret):
+            log.warning("Telegram webhook: invalid secret for device %s", did)
+            return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+
+    # ── Update last_seen ─────────────────────────────────────
+    await pool.execute("UPDATE devices SET last_seen = now() WHERE id = $1", did)
+
+    # ── Find agent and proxy ─────────────────────────────────
+    user_id = device["user_id"]
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        log.warning("Telegram webhook: no agent for user %s (device %s)", user_id, did)
+        # Return 200 so Telegram doesn't retry
+        return JSONResponse({"ok": True, "warning": "agent not available"})
+
+    # Proxy the raw body to the agent's Telegram webhook handler
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"http://{agent['host']}:{agent['port']}/plugins/telegram/webhook",
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    "X-Telegram-Bot-Api-Secret-Token": expected_secret,
+                },
+            )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        log.error("Telegram webhook proxy failed: %s", e)
+        # Return 200 so Telegram doesn't retry
+        return JSONResponse({"ok": True, "warning": "proxy error"})
+
+
+@app.get(
+    "/api/internal/devices",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def internal_list_devices(user_id: str = Query(...)):
+    """Agent fetches device configs for initialization.
+
+    Returns devices with decrypted configs for device types that need
+    agent-side initialization (currently: telegram).
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT id, device_type, config FROM devices WHERE user_id = $1 AND config IS NOT NULL",
+        user_id,
+    )
+
+    devices = []
+    for row in rows:
+        try:
+            config_data = json.loads(decrypt_value(row["config"]))
+        except Exception:
+            continue
+        devices.append(
+            {
+                "id": row["id"],
+                "device_type": row["device_type"],
+                "config": config_data,
+            }
+        )
+
+    return {"devices": devices}
+
+
 # ── API Key Management ─────────────────────────────────────
 
 

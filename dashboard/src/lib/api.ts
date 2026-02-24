@@ -63,6 +63,26 @@ export async function confirmPairing(code: string) {
   });
 }
 
+export async function addTelegramDevice(config: {
+  bot_token: string;
+  secret_token?: string;
+  allowed_chat_ids?: string;
+}) {
+  return api<{ device_id: string; bot_username: string }>(
+    "/api/devices/telegram",
+    {
+      method: "POST",
+      body: JSON.stringify(config),
+    }
+  );
+}
+
+export async function removeDevice(deviceId: string) {
+  return api<{ status: string }>(`/api/devices/${deviceId}`, {
+    method: "DELETE",
+  });
+}
+
 // ── Services (API keys) ──
 
 export async function listApiKeys() {
@@ -131,9 +151,6 @@ export async function getMemoryConversations(limit = 20) {
 // ── Preferences ──
 
 export interface UserPreferences {
-  stt_provider: string | null;
-  stt_model: string | null;
-  stt_language: string | null;
   llm_model: string | null;
   tts_provider: string | null;
   tts_model: string | null;
