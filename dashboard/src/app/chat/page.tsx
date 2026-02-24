@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport } from "ai";
 import { ChevronLeft } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { getSessionToken } from "@/lib/api";
@@ -14,68 +12,345 @@ import StatusOrb from "@/components/StatusOrb";
 import ChatMessage from "@/components/ChatMessage";
 import type { AgentStatus } from "@/hooks/useAgentStatus";
 
-function statusFromChat(
-  chatStatus: string,
-  error: Error | undefined
-): AgentStatus {
-  if (error) return "disconnected";
-  if (chatStatus === "streaming" || chatStatus === "submitted")
-    return "thinking";
-  return "connected";
+type ChatRole = "user" | "assistant";
+
+interface ChatMessageItem {
+  id: string;
+  role: ChatRole;
+  text: string;
 }
 
-/** Extract plain text from a UIMessage's parts array. */
-function getMessageText(parts: Array<{ type: string; text?: string }>): string {
-  return parts
-    .filter((p) => p.type === "text" && p.text)
-    .map((p) => p.text)
-    .join("");
+type ConnectionState = "connecting" | "connected" | "thinking" | "disconnected";
+
+const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+
+function orbStatus(state: ConnectionState): AgentStatus {
+  if (state === "thinking") return "thinking";
+  if (state === "connected") return "connected";
+  return "disconnected";
 }
 
-const chatTransport = new TextStreamChatTransport({
-  api: "/api/chat",
-  headers: (): Record<string, string> => {
-    const token = getSessionToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  },
-});
+function randomId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export default function ChatPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
   const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<ChatMessageItem[]>([]);
+  const [connState, setConnState] = useState<ConnectionState>("connecting");
+  const [errorText, setErrorText] = useState<string | null>(null);
 
-  const { messages, sendMessage, status, error } = useChat({
-    transport: chatTransport,
-  });
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const pcIdRef = useRef<string | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const pingTimerRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const mountedRef = useRef(false);
+  const currentAssistantIdRef = useRef<string | null>(null);
+  const stoppingRef = useRef(false);
 
-  const isLoading = status === "streaming" || status === "submitted";
+  const isLoading = connState === "thinking";
 
-  // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Auth guard
   useEffect(() => {
-    if (!isPending && !session) {
-      router.push("/");
-    }
+    if (!isPending && !session) router.push("/");
   }, [isPending, session, router]);
 
-  function handleSubmit(e: React.FormEvent) {
+  useEffect(() => {
+    if (isPending || !session) return;
+    mountedRef.current = true;
+    void connectPeer();
+
+    return () => {
+      mountedRef.current = false;
+      void disconnectPeer(true);
+    };
+  }, [isPending, session]);
+
+  function appendMessage(role: ChatRole, text: string): void {
+    setMessages((prev) => [...prev, { id: randomId(role), role, text }]);
+  }
+
+  function upsertAssistantChunk(chunk: string): void {
+    const existingId = currentAssistantIdRef.current;
+    if (!existingId) {
+      const id = randomId("assistant");
+      currentAssistantIdRef.current = id;
+      setMessages((prev) => [...prev, { id, role: "assistant", text: chunk }]);
+      return;
+    }
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === existingId ? { ...m, text: `${m.text}${chunk}` } : m))
+    );
+  }
+
+  function finalizeAssistantTurn(): void {
+    currentAssistantIdRef.current = null;
+    setConnState("connected");
+  }
+
+  async function postOffer(
+    localDescription: RTCSessionDescriptionInit,
+    previousPcId?: string
+  ): Promise<{ sdp: string; type: string; pc_id: string }> {
+    const response = await fetch("/api/webrtc/offer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: JSON.stringify({
+        sdp: localDescription.sdp,
+        type: localDescription.type,
+        ...(previousPcId ? { pc_id: previousPcId } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Offer failed (${response.status})`);
+    }
+    return response.json();
+  }
+
+  async function postIce(pcId: string, candidate: RTCIceCandidate): Promise<void> {
+    await fetch("/api/webrtc/ice", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: JSON.stringify({
+        pc_id: pcId,
+        candidates: [
+          {
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex,
+          },
+        ],
+      }),
+    });
+  }
+
+  async function connectPeer(): Promise<void> {
+    await disconnectPeer(false);
+    setConnState("connecting");
+    setErrorText(null);
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pcRef.current = pc;
+
+    const channel = pc.createDataChannel("aether-events");
+    dcRef.current = channel;
+
+    channel.onopen = () => {
+      reconnectAttemptsRef.current = 0;
+      setConnState("connected");
+      channel.send(JSON.stringify({ type: "stream_start", data: {} }));
+      if (pingTimerRef.current !== null) {
+        window.clearInterval(pingTimerRef.current);
+      }
+      pingTimerRef.current = window.setInterval(() => {
+        if (channel.readyState === "open") {
+          channel.send(JSON.stringify({ type: "ping", data: {} }));
+        }
+      }, 15000);
+    };
+
+    channel.onclose = () => {
+      if (pingTimerRef.current !== null) {
+        window.clearInterval(pingTimerRef.current);
+        pingTimerRef.current = null;
+      }
+      setConnState("disconnected");
+      scheduleReconnect();
+    };
+
+    channel.onerror = () => {
+      if (pingTimerRef.current !== null) {
+        window.clearInterval(pingTimerRef.current);
+        pingTimerRef.current = null;
+      }
+      setConnState("disconnected");
+      setErrorText("realtime connection error");
+      scheduleReconnect();
+    };
+
+    channel.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data));
+        const type = String(payload.type || "");
+        const data = payload.data;
+
+        if (type === "text_chunk") {
+          setConnState("thinking");
+          upsertAssistantChunk(String(data || ""));
+          return;
+        }
+        if (type === "stream_end") {
+          finalizeAssistantTurn();
+          return;
+        }
+        if (type === "status") {
+          const state = String(data || "");
+          if (state === "thinking" || state === "speaking") {
+            setConnState("thinking");
+          } else if (state === "listening" || state === "recovered") {
+            setConnState("connected");
+          } else if (state === "reconnecting") {
+            setConnState("disconnected");
+          }
+          return;
+        }
+        if (type === "error") {
+          setErrorText(String(data || "realtime error"));
+          setConnState("disconnected");
+          scheduleReconnect();
+          return;
+        }
+        if (type === "pong") {
+          setConnState((prev) => (prev === "thinking" ? prev : "connected"));
+        }
+      } catch {
+        // ignore malformed side-channel payloads
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      if (state === "connected") {
+        setConnState((prev) => (prev === "thinking" ? prev : "connected"));
+      } else if (state === "failed" || state === "disconnected" || state === "closed") {
+        setConnState("disconnected");
+        scheduleReconnect();
+      }
+    };
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      const pcId = pcIdRef.current;
+      if (!pcId) return;
+      void postIce(pcId, event.candidate);
+    };
+
+    // Receive remote audio track if present; autoplay in hidden element.
+    pc.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (!stream) return;
+      const audio = new Audio();
+      audio.autoplay = true;
+      audio.srcObject = stream;
+      void audio.play().catch(() => {});
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const answer = await postOffer(offer, pcIdRef.current ?? undefined);
+    pcIdRef.current = answer.pc_id;
+    await pc.setRemoteDescription({ type: answer.type as RTCSdpType, sdp: answer.sdp });
+  }
+
+  function scheduleReconnect(): void {
+    if (!mountedRef.current || stoppingRef.current) return;
+    if (reconnectTimerRef.current !== null) return;
+
+    const attempt = reconnectAttemptsRef.current + 1;
+    reconnectAttemptsRef.current = attempt;
+    const delayMs = Math.min(1000 * 2 ** (attempt - 1), 10000);
+
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void connectPeer().catch((e: unknown) => {
+        setErrorText(e instanceof Error ? e.message : "failed to reconnect");
+        scheduleReconnect();
+      });
+    }, delayMs);
+  }
+
+  async function disconnectPeer(sendStop: boolean): Promise<void> {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (pingTimerRef.current !== null) {
+      window.clearInterval(pingTimerRef.current);
+      pingTimerRef.current = null;
+    }
+
+    const dc = dcRef.current;
+    const pc = pcRef.current;
+    dcRef.current = null;
+    pcRef.current = null;
+
+    if (sendStop && dc && dc.readyState === "open") {
+      try {
+        stoppingRef.current = true;
+        dc.send(JSON.stringify({ type: "stream_stop", data: {} }));
+      } catch {
+        // ignore
+      } finally {
+        stoppingRef.current = false;
+      }
+    }
+
+    try {
+      dc?.close();
+    } catch {
+      // ignore
+    }
+    try {
+      pc?.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleSubmit(e: React.FormEvent): void {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
-    sendMessage({ text: input.trim() });
+    const text = input.trim();
+    if (!text || connState === "thinking") return;
+
+    const dc = dcRef.current;
+    if (!dc || dc.readyState !== "open") {
+      setErrorText("realtime connection is not ready");
+      setConnState("disconnected");
+      scheduleReconnect();
+      return;
+    }
+
+    appendMessage("user", text);
     setInput("");
+    setErrorText(null);
+    setConnState("thinking");
+    currentAssistantIdRef.current = null;
+
+    try {
+      dc.send(JSON.stringify({ type: "text", data: text }));
+    } catch {
+      setErrorText("failed to send message");
+      setConnState("disconnected");
+      scheduleReconnect();
+    }
   }
 
   if (isPending) return null;
 
   return (
     <div className="h-full flex flex-col w-full px-6 sm:px-8">
-      {/* Header */}
       <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
         <Button
           variant="aether-ghost"
@@ -90,44 +365,33 @@ export default function ChatPage() {
           Chat
         </span>
         <div className="w-8 flex items-center justify-center">
-          <StatusOrb status={statusFromChat(status, error)} size={10} />
+          <StatusOrb status={orbStatus(connState)} size={10} />
         </div>
       </header>
 
       <Separator className="shrink-0 w-auto opacity-80" />
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto min-h-0 pt-6">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
-            <p className="text-muted-foreground text-xs">
-              type a message to begin
-            </p>
+            <p className="text-muted-foreground text-xs">type a message to begin</p>
           </div>
         ) : (
           <div className="space-y-6 pb-3">
             {messages.map((m) => (
-              <ChatMessage
-                key={m.id}
-                role={m.role as "user" | "assistant"}
-                text={getMessageText(m.parts as Array<{ type: string; text?: string }>)}
-              />
+              <ChatMessage key={m.id} role={m.role} text={m.text} />
             ))}
             <div ref={messagesEndRef} />
           </div>
         )}
       </div>
 
-      {/* Error display */}
-      {error && (
+      {errorText && (
         <div className="py-2">
-          <p className="text-[11px] text-red-400">
-            Connection error — try again
-          </p>
+          <p className="text-[11px] text-red-400">{errorText}</p>
         </div>
       )}
 
-      {/* Input */}
       <form
         onSubmit={handleSubmit}
         className="flex items-center border border-border rounded-full bg-white/6 pb-safe mt-4 mb-2"
