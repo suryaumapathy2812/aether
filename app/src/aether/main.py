@@ -3,7 +3,7 @@ Aether v0.10 — Clean Transport Architecture.
 
 Three independent transports, one AgentCore facade:
   1. OpenAI-compatible HTTP API (/v1/chat/completions) — text chat
-  2. Simplified WebRTC Voice (/webrtc/offer) — per-session STT, direct audio
+  2. Simplified WebRTC Voice (/webrtc/offer) — per-session voice, direct audio
   3. WS Notification Sidecar (/ws) — push-only for dashboard
 
 All transports call AgentCore. AgentCore wraps the KernelScheduler.
@@ -33,7 +33,7 @@ from aether.core.config import reload_config
 from aether.core.logging import setup_logging
 from aether.core.metrics import metrics
 from aether.memory.store import MemoryStore
-from aether.providers import get_llm_provider, get_stt_provider, get_tts_provider
+from aether.providers import get_llm_provider, get_tts_provider
 from aether.tools.registry import ToolRegistry
 from aether.tools.read_file import ReadFileTool
 from aether.tools.write_file import WriteFileTool
@@ -131,7 +131,6 @@ memory_store = MemoryStore()
 session_store = SessionStore()
 task_ledger = TaskLedger(session_store)
 event_bus = EventBus()
-stt_provider = get_stt_provider()
 llm_provider = get_llm_provider()
 tts_provider = get_tts_provider()
 
@@ -352,9 +351,39 @@ async def _stream_text_via_realtime(
     sequence = 0
     job_id = f"realtime-{session_id}"
     assistant_parts: list[str] = []
+    started_at = time.time()
+    max_turn_seconds = 60.0
+    idle_event_timeout_seconds = 20.0
 
     await text_session.generate_reply(text)
-    async for event in text_session.events():
+    event_stream = text_session.events()
+    while True:
+        elapsed = time.time() - started_at
+        if elapsed >= max_turn_seconds:
+            p_worker_runtime["state"] = "degraded"
+            p_worker_runtime["last_error"] = "Realtime turn timed out"
+            p_worker_runtime["last_error_source"] = "turn_timeout"
+            p_worker_runtime["last_error_at"] = time.time()
+            sequence += 1
+            yield KernelEvent(
+                job_id=job_id,
+                stream_type="error",
+                payload={"message": "Realtime turn timed out"},
+                sequence=sequence,
+            )
+            break
+
+        try:
+            event = await asyncio.wait_for(
+                anext(event_stream),
+                timeout=idle_event_timeout_seconds,
+            )
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            # Keep waiting within max_turn_seconds window.
+            continue
+
         if event.type == RealtimeEventType.TEXT_DELTA:
             chunk = str(event.data.get("text", ""))
             if chunk:
@@ -404,6 +433,9 @@ async def _stream_text_via_realtime(
             continue
 
         if event.type == RealtimeEventType.TURN_DONE:
+            break
+
+        if event.type == RealtimeEventType.TEXT_DONE:
             break
 
     assistant_text = "".join(assistant_parts).strip()
@@ -860,9 +892,6 @@ async def _fetch_user_preferences() -> str:
             # llm_provider and llm_base_url are excluded — OpenRouter is
             # hardcoded in config.py; provider is derived from model name.
             pref_to_env = {
-                "stt_provider": "AETHER_STT_PROVIDER",
-                "stt_model": "AETHER_STT_MODEL",
-                "stt_language": "AETHER_STT_LANGUAGE",
                 "llm_model": "AETHER_LLM_MODEL",
                 "tts_provider": "AETHER_TTS_PROVIDER",
                 "tts_model": "AETHER_TTS_MODEL",
@@ -957,10 +986,9 @@ async def startup() -> None:
         await webrtc_transport.start_session_ttl_sweep()
 
     logger.info(
-        "Aether v0.10 ready (id=%s, providers: STT=%s, LLM=%s, TTS=%s, "
+        "Aether v0.10 ready (id=%s, providers: LLM=%s, TTS=%s, "
         "tools=%s, skills=%s, plugin_ctx=%s, webrtc=%s)",
         AGENT_ID,
-        _config_mod.config.stt.provider,
         _config_mod.config.llm.provider,
         _config_mod.config.tts.provider,
         tool_registry.tool_names(),
@@ -1211,7 +1239,6 @@ async def health() -> JSONResponse:
     agent_health = await agent_core.health_check()
 
     providers = {
-        "stt": await stt_provider.health_check(),
         "llm": await llm_provider.health_check(),
         "tts": await tts_provider.health_check(),
     }
@@ -1392,11 +1419,6 @@ async def get_config() -> JSONResponse:
     cfg = _config_mod.config
     return JSONResponse(
         {
-            "stt": {
-                "provider": cfg.stt.provider,
-                "model": cfg.stt.model,
-                "language": cfg.stt.language,
-            },
             "llm": {
                 "provider": cfg.llm.provider,
                 "model": cfg.llm.model,
@@ -1433,9 +1455,7 @@ async def config_reload(request_body: dict | None = None) -> JSONResponse:
 
     effective_model = _effective_llm_model(new_config.llm.model)
     logger.info(
-        "Config reloaded (STT=%s/%s, LLM=%s/%s, effective_llm=%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
-        new_config.stt.provider,
-        new_config.stt.model,
+        "Config reloaded (LLM=%s/%s, effective_llm=%s, TTS=%s/%s/%s, style=%s, plugin_ctx=%s)",
         new_config.llm.provider,
         new_config.llm.model,
         effective_model,

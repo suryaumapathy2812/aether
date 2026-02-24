@@ -2,15 +2,7 @@
 
 import os
 import pytest
-from aether.core.config import STTConfig, LLMConfig, TTSConfig, AetherConfig
-
-
-def test_stt_defaults():
-    cfg = STTConfig()
-    assert cfg.provider == "deepgram"
-    assert cfg.model == "nova-3"
-    assert cfg.sample_rate == 16000
-    assert cfg.reconnect_attempts == 5
+from aether.core.config import LLMConfig, TTSConfig, AetherConfig
 
 
 def test_llm_defaults():
@@ -69,13 +61,12 @@ def test_llm_provider_inferred_from_model(monkeypatch):
 
 
 def test_config_frozen():
-    cfg = STTConfig()
+    cfg = LLMConfig()
     with pytest.raises(Exception):
         cfg.model = "something-else"  # type: ignore
 
 
 def test_aether_config_composition():
     cfg = AetherConfig()
-    assert cfg.stt.provider == "deepgram"
     assert cfg.llm.provider == "openai"
     assert cfg.tts.provider == "openai"

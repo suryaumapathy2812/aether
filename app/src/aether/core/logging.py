@@ -225,7 +225,6 @@ def setup_logging() -> None:
         "httpcore.connection",
         "openai",
         "openai._base_client",
-        "deepgram",
         "websockets",
         "uvicorn.access",
     ]:

@@ -3,19 +3,12 @@
 import pytest
 import aether.core.config as config_module
 from aether.core.config import reload_config
-from aether.providers.base import STTProvider, LLMProvider, TTSProvider
+from aether.providers.base import LLMProvider, TTSProvider
 from aether.providers.registry import (
-    get_stt_provider,
     get_llm_provider,
     get_tts_provider,
 )
 from aether.providers.openai_llm import _get_model_name
-
-
-def test_stt_provider_is_abstract():
-    """Can't instantiate STTProvider directly."""
-    with pytest.raises(TypeError):
-        STTProvider()  # type: ignore
 
 
 def test_llm_provider_is_abstract():
@@ -26,11 +19,6 @@ def test_llm_provider_is_abstract():
 def test_tts_provider_is_abstract():
     with pytest.raises(TypeError):
         TTSProvider()  # type: ignore
-
-
-def test_get_stt_provider_returns_deepgram():
-    provider = get_stt_provider()
-    assert provider.__class__.__name__ == "DeepgramSTTProvider"
 
 
 def test_get_llm_provider_returns_openai():

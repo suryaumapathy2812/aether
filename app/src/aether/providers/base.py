@@ -1,7 +1,7 @@
 """
-Provider base classes — the three clean boundaries.
+Provider base classes — the two clean boundaries.
 
-These abstract classes define what it means to be an STT, LLM, or TTS provider.
+These abstract classes define what it means to be an LLM or TTS provider.
 Implementations must honor these contracts. That's the whole deal.
 
 v0.05: LLMProvider upgraded to support tool calling via generate_stream_with_tools.
@@ -14,48 +14,10 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 
-class STTProvider(ABC):
-    """Speech-to-text provider interface."""
-
-    @abstractmethod
-    async def start(self) -> None:
-        ...
-
-    @abstractmethod
-    async def stop(self) -> None:
-        ...
-
-    @abstractmethod
-    async def transcribe(self, audio_data: bytes) -> str | None:
-        ...
-
-    @abstractmethod
-    async def connect_stream(self) -> None:
-        ...
-
-    @abstractmethod
-    async def disconnect_stream(self) -> None:
-        ...
-
-    @abstractmethod
-    async def send_audio(self, chunk: bytes) -> None:
-        ...
-
-    @abstractmethod
-    async def stream_events(self) -> AsyncGenerator:
-        yield  # type: ignore
-
-    @abstractmethod
-    async def is_connected(self) -> bool:
-        ...
-
-    async def health_check(self) -> dict:
-        return {"provider": self.__class__.__name__, "status": "unknown"}
-
-
 @dataclass
 class LLMToolCall:
     """A tool call requested by the LLM."""
+
     id: str
     name: str
     arguments: dict
@@ -71,6 +33,7 @@ class LLMStreamEvent:
       - "tool_calls": the LLM wants to call tools (tool_calls is populated)
       - "done": stream is finished
     """
+
     type: str  # "token", "tool_calls", "done"
     content: str = ""
     tool_calls: list[LLMToolCall] = field(default_factory=list)
@@ -80,12 +43,10 @@ class LLMProvider(ABC):
     """Language model provider interface."""
 
     @abstractmethod
-    async def start(self) -> None:
-        ...
+    async def start(self) -> None: ...
 
     @abstractmethod
-    async def stop(self) -> None:
-        ...
+    async def stop(self) -> None: ...
 
     @abstractmethod
     async def generate_stream(
@@ -122,12 +83,10 @@ class TTSProvider(ABC):
     """Text-to-speech provider interface."""
 
     @abstractmethod
-    async def start(self) -> None:
-        ...
+    async def start(self) -> None: ...
 
     @abstractmethod
-    async def stop(self) -> None:
-        ...
+    async def stop(self) -> None: ...
 
     @abstractmethod
     async def synthesize(self, text: str) -> bytes:

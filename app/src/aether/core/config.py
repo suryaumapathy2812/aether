@@ -16,38 +16,6 @@ load_dotenv()
 
 
 @dataclass(frozen=True)
-class STTConfig:
-    """Speech-to-text provider settings."""
-
-    provider: str = "deepgram"
-    api_key: str = ""
-    model: str = "nova-3"
-    language: str = "en"
-    sample_rate: int = 16000
-    encoding: str = "linear16"
-    utterance_end_ms: int = 1200
-    endpointing_ms: int = 300
-    # Reconnection
-    reconnect_attempts: int = 5
-    reconnect_delay: float = 1.0  # seconds, doubles each attempt
-
-    @classmethod
-    def from_env(cls) -> STTConfig:
-        return cls(
-            provider=os.getenv("AETHER_STT_PROVIDER", "deepgram"),
-            api_key=os.getenv("DEEPGRAM_API_KEY", ""),
-            model=os.getenv("AETHER_STT_MODEL", "nova-3"),
-            language=os.getenv("AETHER_STT_LANGUAGE", "en"),
-            sample_rate=int(os.getenv("AETHER_STT_SAMPLE_RATE", "16000")),
-            encoding=os.getenv("AETHER_STT_ENCODING", "linear16"),
-            utterance_end_ms=int(os.getenv("AETHER_STT_UTTERANCE_END_MS", "1200")),
-            endpointing_ms=int(os.getenv("AETHER_STT_ENDPOINTING_MS", "300")),
-            reconnect_attempts=int(os.getenv("AETHER_STT_RECONNECT_ATTEMPTS", "5")),
-            reconnect_delay=float(os.getenv("AETHER_STT_RECONNECT_DELAY", "1.0")),
-        )
-
-
-@dataclass(frozen=True)
 class LLMConfig:
     """Language model provider settings.
 
@@ -152,16 +120,6 @@ class TTSConfig:
     model: str = "tts-1"
     voice: str = "nova"
     timeout: float = 15.0
-    # Sarvam (Bulbul v3)
-    sarvam_api_key: str = ""
-    sarvam_model: str = "bulbul:v3"
-    sarvam_speaker: str = "shubh"
-    sarvam_language: str = "en-IN"
-    sarvam_sample_rate: int = 24000
-    # ElevenLabs
-    elevenlabs_api_key: str = ""
-    elevenlabs_model: str = "eleven_multilingual_v2"
-    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
 
     @classmethod
     def from_env(cls) -> TTSConfig:
@@ -171,20 +129,6 @@ class TTSConfig:
             model=os.getenv("AETHER_TTS_MODEL", "tts-1"),
             voice=os.getenv("AETHER_TTS_VOICE", "nova"),
             timeout=float(os.getenv("AETHER_TTS_TIMEOUT", "15.0")),
-            # Sarvam
-            sarvam_api_key=os.getenv("SARVAM_API_KEY", ""),
-            sarvam_model=os.getenv("AETHER_SARVAM_MODEL", "bulbul:v3"),
-            sarvam_speaker=os.getenv("AETHER_SARVAM_SPEAKER", "shubh"),
-            sarvam_language=os.getenv("AETHER_SARVAM_LANGUAGE", "en-IN"),
-            sarvam_sample_rate=int(os.getenv("AETHER_SARVAM_SAMPLE_RATE", "24000")),
-            # ElevenLabs
-            elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
-            elevenlabs_model=os.getenv(
-                "AETHER_ELEVENLABS_MODEL", "eleven_multilingual_v2"
-            ),
-            elevenlabs_voice_id=os.getenv(
-                "AETHER_ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"
-            ),
         )
 
 
@@ -260,9 +204,6 @@ class VADConfig:
     deactivation_threshold: float = 0.35
     min_speech_duration: float = 0.05
     min_silence_duration: float = 0.55
-    # STT gating — connect STT only when speech detected
-    stt_pre_roll_ms: int = 500  # ring buffer size (ms of audio to keep)
-    stt_idle_disconnect_s: float = 5.0  # seconds of silence before disconnecting STT
 
     @classmethod
     def from_env(cls) -> "VADConfig":
@@ -281,10 +222,6 @@ class VADConfig:
             ),
             min_silence_duration=float(
                 os.getenv("AETHER_VAD_MIN_SILENCE_DURATION", "0.55")
-            ),
-            stt_pre_roll_ms=int(os.getenv("AETHER_STT_PRE_ROLL_MS", "500")),
-            stt_idle_disconnect_s=float(
-                os.getenv("AETHER_STT_IDLE_DISCONNECT_S", "5.0")
             ),
         )
 
@@ -365,50 +302,9 @@ class VoiceBackendConfig:
 
 
 @dataclass(frozen=True)
-class TurnDetectionConfig:
-    """LiveKit turn detector settings."""
-
-    mode: str = "active"  # off | shadow | active
-    model_type: str = "en"  # en | multilingual
-    model_repo: str = "livekit/turn-detector"
-    # v1.2.2-en has model.onnx (float32) — correct on ARM/aarch64.
-    # v0.4.1-intl only has model_q8.onnx (INT8/x86) — broken on ARM.
-    model_revision: str = "v1.2.2-en"
-    model_filename: str = "model.onnx"
-    model_dir: str = "/models/turn-detector"
-    min_endpointing_delay: float = 0.3
-    max_endpointing_delay: float = 3.0
-    inference_timeout_seconds: float = 0.35
-
-    @classmethod
-    def from_env(cls) -> "TurnDetectionConfig":
-        model_type = os.getenv("AETHER_TURN_MODEL_TYPE", "en").lower()
-        default_revision = "v1.2.2-en" if model_type == "en" else "v0.4.1-intl"
-        default_filename = "model.onnx" if model_type == "en" else "model_q8.onnx"
-        return cls(
-            mode=os.getenv("AETHER_TURN_DETECTION_MODE", "active").lower(),
-            model_type=model_type,
-            model_repo=os.getenv("AETHER_TURN_MODEL_REPO", "livekit/turn-detector"),
-            model_revision=os.getenv("AETHER_TURN_MODEL_REVISION", default_revision),
-            model_filename=os.getenv("AETHER_TURN_MODEL_FILENAME", default_filename),
-            model_dir=os.getenv("AETHER_TURN_MODEL_DIR", "/models/turn-detector"),
-            min_endpointing_delay=float(
-                os.getenv("AETHER_TURN_MIN_ENDPOINTING_DELAY", "0.3")
-            ),
-            max_endpointing_delay=float(
-                os.getenv("AETHER_TURN_MAX_ENDPOINTING_DELAY", "3.0")
-            ),
-            inference_timeout_seconds=float(
-                os.getenv("AETHER_TURN_INFERENCE_TIMEOUT_SECONDS", "2.0")
-            ),
-        )
-
-
-@dataclass(frozen=True)
 class AetherConfig:
     """Root configuration — one object to rule them all."""
 
-    stt: STTConfig = field(default_factory=STTConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
@@ -419,12 +315,10 @@ class AetherConfig:
     webrtc: WebRTCConfig = field(default_factory=WebRTCConfig)
     telephony: TelephonyConfig = field(default_factory=TelephonyConfig)
     voice_backend: VoiceBackendConfig = field(default_factory=VoiceBackendConfig)
-    turn_detection: TurnDetectionConfig = field(default_factory=TurnDetectionConfig)
 
     @classmethod
     def from_env(cls) -> AetherConfig:
         return cls(
-            stt=STTConfig.from_env(),
             llm=LLMConfig.from_env(),
             tts=TTSConfig.from_env(),
             memory=MemoryConfig.from_env(),
@@ -435,7 +329,6 @@ class AetherConfig:
             webrtc=WebRTCConfig.from_env(),
             telephony=TelephonyConfig.from_env(),
             voice_backend=VoiceBackendConfig.from_env(),
-            turn_detection=TurnDetectionConfig.from_env(),
         )
 
 
