@@ -129,6 +129,7 @@ AGENT_SHARED_MODELS_HOST_PATH_ABS = _resolve_models_host_path()
 SYSTEM_API_KEYS = {
     "OPENAI_API_KEY": _strip_wrapping_quotes(os.getenv("OPENAI_API_KEY", "")),
     "OPENROUTER_API_KEY": _strip_wrapping_quotes(os.getenv("OPENROUTER_API_KEY", "")),
+    "GEMINI_API_KEY": _strip_wrapping_quotes(os.getenv("GEMINI_API_KEY", "")),
     "DEEPGRAM_API_KEY": _strip_wrapping_quotes(os.getenv("DEEPGRAM_API_KEY", "")),
     "ELEVENLABS_API_KEY": _strip_wrapping_quotes(os.getenv("ELEVENLABS_API_KEY", "")),
     "SARVAM_API_KEY": _strip_wrapping_quotes(os.getenv("SARVAM_API_KEY", "")),
@@ -180,6 +181,7 @@ def _provider_to_env(provider: str) -> str | None:
     mapping = {
         "openai": "OPENAI_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
+        "gemini": "GEMINI_API_KEY",
         "deepgram": "DEEPGRAM_API_KEY",
         "elevenlabs": "ELEVENLABS_API_KEY",
         "sarvam": "SARVAM_API_KEY",

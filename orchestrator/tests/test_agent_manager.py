@@ -18,6 +18,7 @@ class TestProviderToEnv:
         from src.agent_manager import _provider_to_env
 
         assert _provider_to_env("openai") == "OPENAI_API_KEY"
+        assert _provider_to_env("gemini") == "GEMINI_API_KEY"
         assert _provider_to_env("deepgram") == "DEEPGRAM_API_KEY"
         assert _provider_to_env("elevenlabs") == "ELEVENLABS_API_KEY"
         assert _provider_to_env("sarvam") == "SARVAM_API_KEY"
@@ -26,6 +27,7 @@ class TestProviderToEnv:
         from src.agent_manager import _provider_to_env
 
         assert _provider_to_env("OpenAI") == "OPENAI_API_KEY"
+        assert _provider_to_env("GEMINI") == "GEMINI_API_KEY"
         assert _provider_to_env("DEEPGRAM") == "DEEPGRAM_API_KEY"
 
     def test_unknown_provider(self):
@@ -299,15 +301,17 @@ class TestBuildAgentEnvironment:
     def test_user_api_keys_override_system(self):
         """User API keys override system defaults."""
         with patch(
-            "src.agent_manager.SYSTEM_API_KEYS", {"OPENAI_API_KEY": "sk-system"}
+            "src.agent_manager.SYSTEM_API_KEYS",
+            {"OPENAI_API_KEY": "sk-system", "GEMINI_API_KEY": "gm-system"},
         ):
             from src.agent_manager import _build_agent_environment
 
             env = _build_agent_environment(
                 "user-42",
-                user_api_keys={"openai": "sk-user-key"},
+                user_api_keys={"openai": "sk-user-key", "gemini": "gm-user-key"},
             )
         assert env["OPENAI_API_KEY"] == "sk-user-key"
+        assert env["GEMINI_API_KEY"] == "gm-user-key"
 
     def test_vad_and_turn_defaults_present(self):
         """VAD and turn detection defaults are always set."""

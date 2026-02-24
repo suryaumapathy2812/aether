@@ -132,11 +132,17 @@ class AgentCore:
         # Notification sweep task (60-second timer)
         self._notification_sweep_task: asyncio.Task | None = None
 
+        # System session bootstrap flag for scheduled/background ledger tasks.
+        self._system_session_ready = False
+
     # ─── Lifecycle ───────────────────────────────────────────────
 
     async def start(self) -> None:
         """Start the scheduler (worker pools) and event subscriptions."""
         await self._scheduler.start()
+
+        # Ensure the synthetic system session exists for scheduled jobs.
+        await self._ensure_system_session()
 
         # Resume interrupted tasks from the Task Ledger (restart recovery)
         try:
@@ -453,6 +459,20 @@ class AgentCore:
 
     # ─── Background Jobs ─────────────────────────────────────────
 
+    async def _ensure_system_session(self) -> None:
+        """Create the synthetic system session used by scheduled tasks."""
+        if self._system_session_ready:
+            return
+        try:
+            await self._session_store.create_session(
+                session_id="system",
+                agent_type="system",
+                metadata={"kind": "internal"},
+            )
+            self._system_session_ready = True
+        except Exception as e:
+            logger.warning("Failed to ensure system session: %s", e)
+
     async def _submit_memory_extraction(
         self, user_text: str, assistant_text: str, session_id: str
     ) -> None:
@@ -565,6 +585,8 @@ class AgentCore:
         while True:
             task_id: str | None = None
             try:
+                await self._ensure_system_session()
+
                 # Write a SCHEDULED task to the Task Ledger for audit trail
                 task_id = await self._task_ledger.submit(
                     session_id="system",
