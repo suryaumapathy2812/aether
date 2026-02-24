@@ -164,6 +164,12 @@ class WSSidecar:
                 elif action in {"engaged", "opened"}:
                     await self.agent._memory_store.mark_delivered(notification_id)
                     status = "delivered"
+                elif action == "snoozed":
+                    await self.agent._memory_store.mark_snoozed(notification_id)
+                    status = "snoozed"
+                elif action == "muted":
+                    await self.agent._memory_store.mark_muted(notification_id)
+                    status = "muted"
             except Exception as e:
                 logger.warning("Failed to update notification status: %s", e)
 

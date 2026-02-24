@@ -950,6 +950,28 @@ class MemoryStore:
         )
         await self._db.commit()
 
+    async def mark_snoozed(self, notification_id: int) -> None:
+        """Mark a notification as snoozed by the user."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            "UPDATE notifications SET status = 'snoozed' WHERE id = ?",
+            (notification_id,),
+        )
+        await self._db.commit()
+
+    async def mark_muted(self, notification_id: int) -> None:
+        """Mark a notification source as muted for this notification instance."""
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            "UPDATE notifications SET status = 'muted' WHERE id = ?",
+            (notification_id,),
+        )
+        await self._db.commit()
+
     async def expire_old_notifications(self, max_age_hours: float = 4.0) -> int:
         """Expire notifications older than max_age_hours. Returns count expired.
 

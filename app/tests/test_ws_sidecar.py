@@ -91,3 +91,26 @@ async def test_feedback_muted_without_notification_id_still_syncs() -> None:
     assert payload["status"] == "muted"
     assert payload["notification_id"] is None
     assert payload["device_id"] == "dev-3"
+
+
+@pytest.mark.asyncio
+async def test_feedback_snoozed_with_notification_id_updates_store() -> None:
+    agent = _FakeAgent()
+    sidecar = WSSidecar(agent=agent)
+    sidecar.push = AsyncMock()
+
+    await sidecar._handle_feedback(
+        {
+            "action": "snoozed",
+            "plugin": "gmail",
+            "sender": "alerts@example.com",
+            "notification_id": 21,
+            "device_id": "dev-5",
+        }
+    )
+
+    agent._memory_store.mark_snoozed.assert_awaited_once_with(21)
+    event_type, payload = sidecar.push.await_args.args
+    assert event_type == "notification_status"
+    assert payload["status"] == "snoozed"
+    assert payload["notification_id"] == 21

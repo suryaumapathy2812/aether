@@ -477,3 +477,35 @@ class TestActionCompaction:
 
         # LLM should NOT have been called for compaction
         store.openai.chat.completions.create.assert_not_called()
+
+
+class TestNotificationStatusUpdates:
+    @pytest.mark.asyncio
+    async def test_mark_snoozed_updates_notification_status(self, store):
+        notification_id = await store.queue_notification(
+            "Check this", delivery_type="surface"
+        )
+        await store.mark_snoozed(notification_id)
+
+        cursor = await store._db.execute(
+            "SELECT status FROM notifications WHERE id = ?",
+            (notification_id,),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == "snoozed"
+
+    @pytest.mark.asyncio
+    async def test_mark_muted_updates_notification_status(self, store):
+        notification_id = await store.queue_notification(
+            "Check this", delivery_type="surface"
+        )
+        await store.mark_muted(notification_id)
+
+        cursor = await store._db.execute(
+            "SELECT status FROM notifications WHERE id = ?",
+            (notification_id,),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == "muted"
