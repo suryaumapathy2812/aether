@@ -213,6 +213,7 @@ class WebRTCVoiceTransport:
         self._connections: dict[str, WebRTCConnection] = {}
         # Persistent sessions keyed by user_id — survive WebRTC disconnects
         self._sessions: dict[str, VoiceSession] = {}
+        self._session_locks: dict[str, asyncio.Lock] = {}
         # Monotonic offer epoch per logical session key.
         # Used to make handoff ordering explicit and deterministic.
         self._offer_epoch: dict[str, int] = {}
@@ -231,122 +232,129 @@ class WebRTCVoiceTransport:
         """Handle SDP offer → create peer connection + VoiceSession → return answer."""
 
         pc_id = pc_id or f"pc-{uuid.uuid4().hex[:12]}"
-
-        # Build ICE configuration
-        ice_list = []
-        for server in self.ice_servers:
-            urls = server.get("urls", "")
-            if server.get("username"):
-                ice_list.append(
-                    RTCIceServer(
-                        urls=urls,
-                        username=server["username"],
-                        credential=server.get("credential", ""),
-                    )
-                )
-            else:
-                ice_list.append(RTCIceServer(urls=urls))
-
-        pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_list))
-
-        # Reuse existing session for this user if one exists (persistent session).
-        # This preserves dialog history and agent state across reconnects.
         session_key = user_id or pc_id
         owner_device_id = device_id or f"anonymous:{pc_id}"
-        offer_epoch = self._next_offer_epoch(session_key)
+        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
-        # Canonical session arbitration: keep only one active peer connection
-        # per logical session key. New offer wins (last-write-wins).
-        handoff_from = await self._evict_connections_for_session(
-            session_key,
-            winner_device_id=owner_device_id,
-            winner_pc_id=pc_id,
-            winner_epoch=offer_epoch,
-        )
+        async with lock:
+            # Build ICE configuration
+            ice_list = []
+            for server in self.ice_servers:
+                urls = server.get("urls", "")
+                if server.get("username"):
+                    ice_list.append(
+                        RTCIceServer(
+                            urls=urls,
+                            username=server["username"],
+                            credential=server.get("credential", ""),
+                        )
+                    )
+                else:
+                    ice_list.append(RTCIceServer(urls=urls))
 
-        is_reconnect = session_key in self._sessions
-        if is_reconnect:
-            voice_session = self._sessions[session_key]
-            logger.info(
-                "WebRTC reconnect for %s — reusing existing VoiceSession", session_key
+            pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_list))
+            offer_epoch = self._next_offer_epoch(session_key)
+
+            # Canonical session arbitration: keep only one active peer connection
+            # per logical session key. New offer wins (last-write-wins).
+            handoff_from = await self._evict_connections_for_session(
+                session_key,
+                winner_device_id=owner_device_id,
+                winner_pc_id=pc_id,
+                winner_epoch=offer_epoch,
             )
-        else:
-            if self.realtime_model is None:
-                raise RuntimeError("Realtime model is not configured for WebRTC")
-            voice_session = VoiceSession(
-                session_id=f"webrtc-{pc_id}",
-                realtime_model=self.realtime_model,
-                on_function_call=self.on_function_call,
-                instructions=self.instructions,
-                tools=self.tools,
-                session_store=self.session_store,
-                task_ledger=self.task_ledger,
-            )
-            self._sessions[session_key] = voice_session
 
-        # Create outbound audio track.
-        # Important: only attach to RTCPeerConnection when the remote offer
-        # includes an audio m-line. Some text-only WebRTC clients (dashboard)
-        # negotiate only a data channel; forcing addTrack in that case causes
-        # aiortc answer direction resolution failures.
-        offer_has_audio = bool(re.search(r"^m=audio\s", sdp, re.MULTILINE))
-        audio_out = AudioOutputTrack()
-        if offer_has_audio:
-            pc.addTrack(audio_out)
-        audio_input = WebRTCAudioInput()
-        audio_output = WebRTCAudioOutput(audio_out)
-        text_output: TextOutput = NullTextOutput()
-        voice_session.set_io(audio_input, audio_output, text_output)
-
-        # Store connection
-        conn = WebRTCConnection(
-            pc_id=pc_id,
-            pc=pc,
-            voice_session=voice_session,
-            audio_input=audio_input,
-            audio_output=audio_output,
-            text_output=text_output,
-            audio_out_track=audio_out,
-            vad_mode=config.vad.mode,
-            is_reconnect=is_reconnect,
-            session_key=session_key,
-            device_id=owner_device_id,
-            offer_epoch=offer_epoch,
-        )
-
-        if config.vad.mode in ("shadow", "active"):
-            conn.vad = build_vad(
-                VADSettings(
-                    mode=config.vad.mode,
-                    model_path=config.vad.model_path,
-                    sample_rate=config.vad.sample_rate,
-                    activation_threshold=config.vad.activation_threshold,
-                    deactivation_threshold=config.vad.deactivation_threshold,
-                    min_speech_duration=config.vad.min_speech_duration,
-                    min_silence_duration=config.vad.min_silence_duration,
+            is_reconnect = session_key in self._sessions
+            if is_reconnect:
+                voice_session = self._sessions[session_key]
+                logger.info(
+                    "WebRTC reconnect for %s — reusing existing VoiceSession",
+                    session_key,
                 )
+            else:
+                if self.realtime_model is None:
+                    raise RuntimeError("Realtime model is not configured for WebRTC")
+                voice_session = VoiceSession(
+                    session_id=f"webrtc-{pc_id}",
+                    realtime_model=self.realtime_model,
+                    on_function_call=self.on_function_call,
+                    instructions=self.instructions,
+                    tools=self.tools,
+                    session_store=self.session_store,
+                    task_ledger=self.task_ledger,
+                )
+                self._sessions[session_key] = voice_session
+
+            # Create outbound audio track.
+            # Important: only attach to RTCPeerConnection when the remote offer
+            # includes an audio m-line. Some text-only WebRTC clients (dashboard)
+            # negotiate only a data channel; forcing addTrack in that case causes
+            # aiortc answer direction resolution failures.
+            offer_has_audio = bool(re.search(r"^m=audio\s", sdp, re.MULTILINE))
+            audio_out = AudioOutputTrack()
+            if offer_has_audio:
+                pc.addTrack(audio_out)
+            audio_input = WebRTCAudioInput()
+            audio_output = WebRTCAudioOutput(audio_out)
+            text_output: TextOutput = NullTextOutput()
+            voice_session.set_io(audio_input, audio_output, text_output)
+
+            conn = WebRTCConnection(
+                pc_id=pc_id,
+                pc=pc,
+                voice_session=voice_session,
+                audio_input=audio_input,
+                audio_output=audio_output,
+                text_output=text_output,
+                audio_out_track=audio_out,
+                vad_mode=config.vad.mode,
+                is_reconnect=is_reconnect,
+                session_key=session_key,
+                device_id=owner_device_id,
+                offer_epoch=offer_epoch,
             )
 
-        self._connections[pc_id] = conn
+            if config.vad.mode in ("shadow", "active"):
+                conn.vad = build_vad(
+                    VADSettings(
+                        mode=config.vad.mode,
+                        model_path=config.vad.model_path,
+                        sample_rate=config.vad.sample_rate,
+                        activation_threshold=config.vad.activation_threshold,
+                        deactivation_threshold=config.vad.deactivation_threshold,
+                        min_speech_duration=config.vad.min_speech_duration,
+                        min_silence_duration=config.vad.min_silence_duration,
+                    )
+                )
 
-        # Setup event handlers
-        self._setup_handlers(conn)
+            self._setup_handlers(conn)
 
-        # Set remote description and create answer
-        offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
-        await pc.setRemoteDescription(offer)
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
+            offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
+            try:
+                await pc.setRemoteDescription(offer)
+                answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+            except Exception:
+                logger.exception("WebRTC offer negotiation failed: pc_id=%s", pc_id)
+                try:
+                    await pc.close()
+                except Exception:
+                    logger.debug("Failed closing pc after offer failure", exc_info=True)
+                if not is_reconnect:
+                    self._sessions.pop(session_key, None)
+                raise
 
-        logger.info("WebRTC offer handled: pc_id=%s", pc_id)
+            self._connections[pc_id] = conn
 
-        return {
-            "sdp": pc.localDescription.sdp,
-            "type": pc.localDescription.type,
-            "pc_id": pc_id,
-            "active_device_id": owner_device_id,
-            "handoff_from_device_id": handoff_from,
-        }
+            logger.info("WebRTC offer handled: pc_id=%s", pc_id)
+
+            return {
+                "sdp": pc.localDescription.sdp,
+                "type": pc.localDescription.type,
+                "pc_id": pc_id,
+                "active_device_id": owner_device_id,
+                "handoff_from_device_id": handoff_from,
+            }
 
     def _next_offer_epoch(self, session_key: str) -> int:
         next_epoch = self._offer_epoch.get(session_key, 0) + 1

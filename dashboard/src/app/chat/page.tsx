@@ -23,6 +23,7 @@ interface ChatMessageItem {
 type ConnectionState = "connecting" | "connected" | "thinking" | "disconnected";
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+const ORCHESTRATOR_URL = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "";
 
 function orbStatus(state: ConnectionState): AgentStatus {
   if (state === "thinking") return "thinking";
@@ -107,7 +108,7 @@ export default function ChatPage() {
     localDescription: RTCSessionDescriptionInit,
     previousPcId?: string
   ): Promise<{ sdp: string; type: string; pc_id: string }> {
-    const response = await fetch("/api/webrtc/offer", {
+    const response = await fetch(`${ORCHESTRATOR_URL}/api/webrtc/offer`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -127,7 +128,7 @@ export default function ChatPage() {
   }
 
   async function postIce(pcId: string, candidate: RTCIceCandidate): Promise<void> {
-    await fetch("/api/webrtc/ice", {
+    await fetch(`${ORCHESTRATOR_URL}/api/webrtc/ice`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
