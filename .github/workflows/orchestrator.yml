@@ -67,3 +67,37 @@ jobs:
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Redeploy Portainer Stack
+        if: success()
+        run: |
+          # Get the stack ID by name
+          STACK_ID=$(curl -s \
+            -H "X-API-Key: ${{ secrets.PORTAINER_API_KEY }}" \
+            "${{ secrets.PORTAINER_URL }}/api/stacks" \
+            | jq -r '.[] | select(.Name=="${{ secrets.PORTAINER_STACK_NAME }}") | .Id')
+
+          if [ -z "$STACK_ID" ] || [ "$STACK_ID" = "null" ]; then
+            echo "::warning::Stack '${{ secrets.PORTAINER_STACK_NAME }}' not found in Portainer — skipping redeploy"
+            exit 0
+          fi
+
+          # Get the stack's endpoint ID
+          ENDPOINT_ID=$(curl -s \
+            -H "X-API-Key: ${{ secrets.PORTAINER_API_KEY }}" \
+            "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID" \
+            | jq -r '.EndpointId')
+
+          # Trigger stack redeploy (pulls latest images)
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT \
+            -H "X-API-Key: ${{ secrets.PORTAINER_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"pullImage": true, "prune": false}' \
+            "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID/git/redeploy?endpointId=$ENDPOINT_ID")
+
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ Portainer stack redeployed successfully (stack=$STACK_ID, endpoint=$ENDPOINT_ID)"
+          else
+            echo "::warning::Portainer redeploy returned HTTP $HTTP_STATUS — stack may need manual update"
+          fi
