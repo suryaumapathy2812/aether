@@ -57,7 +57,6 @@ from aether.agents.task_runner import TaskRunner
 from aether.plugins.loader import PluginLoader
 from aether.plugins.context import PluginContextStore
 from aether.plugins.event import PluginEvent
-from aether.processors.event import EventProcessor
 
 # --- New architecture ---
 from aether.agent import AgentCore
@@ -209,9 +208,6 @@ for plugin in loaded_plugins:
             logger.warning(
                 f"Failed to register routes for plugin {plugin.manifest.name}: {e}"
             )
-
-# --- Event Processor (decision engine for plugin events) ---
-event_processor = EventProcessor(llm_provider, memory_store)
 
 
 def _load_p_prompt() -> str:
@@ -1367,7 +1363,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
        plugin's handle_tool with the raw payload.  The LLM decides what to
        do (notify, reply, ignore).  This is the path for Gmail, Calendar, etc.
 
-    2. No handle_tool → legacy EventProcessor path: normalise the event,
+    2. No handle_tool → NotificationService path: normalise the event,
        decide action, broadcast to WS sidecar clients.
     """
     body = await request.json()
@@ -1405,7 +1401,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
         )
         return JSONResponse({"status": "accepted", "session_id": session_id})
 
-    # ── Path 2: legacy EventProcessor path ──────────────────────────────────
+    # ── Path 2: NotificationService path ────────────────────────────────────
     event = PluginEvent(
         id=body.get("event_id", str(uuid.uuid4())),
         plugin=plugin,
@@ -1422,7 +1418,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
         metadata=raw_payload.get("metadata", {}),
     )
 
-    decision = await event_processor.process(event)
+    decision = await notification_service.process_event(event)
 
     # Broadcast notification to WS sidecar clients via AgentCore
     if decision.action in ("surface", "action_required"):
