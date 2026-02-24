@@ -1360,28 +1360,121 @@ async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
 # ── WebRTC Signaling Proxy ─────────────────────────────────
 
 
+# Guard against concurrent provisioning per user from rapid /ready polls.
+_provisioning_locks: dict[str, asyncio.Lock] = {}
+_provisioning_in_progress: set[str] = set()
+
+
 @app.get("/api/agent/ready")
 async def agent_ready(user_id: str = Depends(get_user_id)):
-    """Return whether a user agent is ready by probing its health endpoint."""
-    agent = await _get_agent_for_user(user_id)
-    if not agent:
-        return {"ready": False}
+    """Return agent readiness with actionable status for the dashboard.
 
-    # Actually probe the agent to confirm it's reachable and healthy.
+    Returns:
+        ready: bool — true only when agent is reachable and healthy
+        status: "running" | "starting" | "provisioning" | "unreachable" | "not_provisioned" | "failed"
+        message: human-readable description
+    """
+    pool = await get_pool()
+
+    # ── Fast path: local agent override ──
+    local_target = _local_agent_target()
+    if local_target:
+        ok = await _probe_agent_health(local_target)
+        if ok:
+            return {"ready": True, "status": "running", "message": "Agent is ready"}
+        return {
+            "ready": False,
+            "status": "unreachable",
+            "message": "Local agent is not reachable. Is it running?",
+        }
+
+    # ── Check DB for existing agent row ──
+    row = await pool.fetchrow(
+        "SELECT host, port, status FROM agents WHERE user_id = $1", user_id
+    )
+
+    if row and row["status"] == "running":
+        agent = {"host": row["host"], "port": row["port"]}
+        ok = await _probe_agent_health(agent)
+        if ok:
+            return {"ready": True, "status": "running", "message": "Agent is ready"}
+        # DB says running but agent is unreachable — mark stale
+        container_status = await get_agent_status(user_id)
+        if container_status not in {"running", None, "unknown"}:
+            await pool.execute(
+                "UPDATE agents SET status = 'stopped' WHERE user_id = $1", user_id
+            )
+            log.warning(
+                "Agent stale for user %s (container=%s); marked stopped",
+                user_id,
+                container_status,
+            )
+        return {
+            "ready": False,
+            "status": "unreachable",
+            "message": "Agent registered but not responding. It may be restarting.",
+        }
+
+    if row and row["status"] == "starting":
+        return {
+            "ready": False,
+            "status": "starting",
+            "message": "Agent is starting up…",
+        }
+
+    # ── No running/starting agent — trigger provisioning (once) ──
+    if user_id in _provisioning_in_progress:
+        return {
+            "ready": False,
+            "status": "provisioning",
+            "message": "Agent is being provisioned…",
+        }
+
+    # Provision in background so this request returns immediately
+    lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
+    if lock.locked():
+        return {
+            "ready": False,
+            "status": "provisioning",
+            "message": "Agent is being provisioned…",
+        }
+
+    asyncio.create_task(
+        _background_provision(user_id),
+        name=f"provision-{user_id}",
+    )
+    return {
+        "ready": False,
+        "status": "provisioning",
+        "message": "Agent provisioning started. This may take 15–30 seconds.",
+    }
+
+
+async def _background_provision(user_id: str) -> None:
+    """Run _ensure_agent in background with dedup guard."""
+    lock = _provisioning_locks.setdefault(user_id, asyncio.Lock())
+    if lock.locked():
+        return
+    async with lock:
+        _provisioning_in_progress.add(user_id)
+        try:
+            await _ensure_agent(user_id)
+        except Exception as exc:
+            log.error("Background provisioning failed for user %s: %s", user_id, exc)
+        finally:
+            _provisioning_in_progress.discard(user_id)
+
+
+async def _probe_agent_health(agent: dict) -> bool:
+    """Ping agent /health and return True if 200."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
                 f"http://{agent['host']}:{agent['port']}/health",
             )
-            if resp.status_code == 200:
-                return {"ready": True}
-            log.warning(
-                "Agent health check returned %d for user %s", resp.status_code, user_id
-            )
-            return {"ready": False}
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
-        log.warning("Agent unreachable for user %s: %s", user_id, exc)
-        return {"ready": False}
+            return resp.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
 
 
 @app.post("/api/webrtc/offer")
