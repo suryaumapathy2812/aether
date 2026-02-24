@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -45,6 +46,40 @@ class GeminiRealtimeModel(RealtimeModel):
         )
         await session.connect()
         return session
+
+    async def probe_live_model_support(self) -> tuple[bool, str, list[str]]:
+        """Validate that configured model supports Gemini Live bidiGenerateContent."""
+
+        def _fetch_supported() -> list[str]:
+            supported: list[str] = []
+            for item in self._client.models.list():
+                actions = set(getattr(item, "supported_actions", []) or [])
+                if "bidiGenerateContent" in actions:
+                    name = str(getattr(item, "name", ""))
+                    if name:
+                        supported.append(name)
+            return supported
+
+        try:
+            supported = await asyncio.to_thread(_fetch_supported)
+        except Exception as exc:
+            return False, f"Failed listing Gemini models: {exc}", []
+
+        configured = self._config.model.strip()
+        configured_full = (
+            configured if configured.startswith("models/") else f"models/{configured}"
+        )
+        supported_set = set(supported)
+        if configured in supported_set or configured_full in supported_set:
+            return True, "ok", supported
+
+        preview = ", ".join(sorted(supported)[:5]) or "none"
+        return (
+            False,
+            f"Configured realtime model '{configured}' is not bidi-capable for this key. "
+            f"Supported examples: {preview}",
+            supported,
+        )
 
     async def close(self) -> None:
         return None

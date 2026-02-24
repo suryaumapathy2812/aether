@@ -291,6 +291,14 @@ realtime_model: Any | None = None
 tool_bridge: ToolBridge | None = None
 delegation_bridge: DelegationBridge | None = None
 text_session: Any | None = None
+p_worker_runtime: dict[str, Any] = {
+    "ready": False,
+    "state": "cold",
+    "last_error": None,
+    "last_error_source": None,
+    "last_error_at": None,
+    "model": voice_cfg.realtime_model,
+}
 
 p_instructions = _load_p_prompt()
 
@@ -337,6 +345,8 @@ async def _stream_text_via_realtime(
     User text ingress must stay on the realtime P-worker path.
     """
     if text_session is None:
+        p_worker_runtime["ready"] = False
+        p_worker_runtime["state"] = "degraded"
         raise RuntimeError("P-worker realtime session unavailable")
 
     sequence = 0
@@ -371,6 +381,14 @@ async def _stream_text_via_realtime(
             continue
 
         if event.type == RealtimeEventType.SESSION_ERROR:
+            p_worker_runtime["state"] = "reconnecting"
+            p_worker_runtime["last_error"] = str(
+                event.data.get("error", "realtime error")
+            )
+            p_worker_runtime["last_error_source"] = str(
+                event.data.get("source", "session")
+            )
+            p_worker_runtime["last_error_at"] = time.time()
             sequence += 1
             yield KernelEvent(
                 job_id=job_id,
@@ -378,12 +396,19 @@ async def _stream_text_via_realtime(
                 payload={"message": str(event.data.get("error", "realtime error"))},
                 sequence=sequence,
             )
-            break
+            recoverable = bool(event.data.get("recoverable", False))
+            if not recoverable:
+                p_worker_runtime["ready"] = False
+                p_worker_runtime["state"] = "degraded"
+                break
+            continue
 
         if event.type == RealtimeEventType.TURN_DONE:
             break
 
     assistant_text = "".join(assistant_parts).strip()
+    p_worker_runtime["ready"] = True
+    p_worker_runtime["state"] = "ready"
     await session_store.ensure_session(session_id)
     await session_store.append_user_message(session_id, text)
     if assistant_text:
@@ -397,6 +422,27 @@ async def _stream_text_via_realtime(
 
 
 agent_core.set_text_reply_handler(_stream_text_via_realtime)
+
+
+def _p_worker_snapshot() -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    if text_session is not None and hasattr(text_session, "diagnostics"):
+        try:
+            diagnostics = text_session.diagnostics()
+        except Exception:
+            diagnostics = {}
+
+    combined = {
+        **p_worker_runtime,
+        **diagnostics,
+    }
+    combined["ready"] = bool(combined.get("ready", False)) and bool(
+        combined.get("connected", text_session is not None)
+    )
+    combined["configured"] = realtime_model is not None
+    combined["session_initialized"] = text_session is not None
+    return combined
+
 
 # --- Mount OpenAI-compatible HTTP API ---
 openai_router = create_openai_router(agent_core)
@@ -877,14 +923,30 @@ async def startup() -> None:
 
     # Create shared realtime text session (P-worker front door for text)
     if realtime_model is not None and tool_bridge is not None:
+        if hasattr(realtime_model, "probe_live_model_support"):
+            ok, reason, _supported = await realtime_model.probe_live_model_support()
+            if not ok:
+                p_worker_runtime["ready"] = False
+                p_worker_runtime["state"] = "degraded"
+                p_worker_runtime["last_error"] = reason
+                p_worker_runtime["last_error_source"] = "startup_probe"
+                p_worker_runtime["last_error_at"] = time.time()
+                logger.warning("Realtime model compatibility probe failed: %s", reason)
         try:
             text_session = await realtime_model.create_session(
                 instructions=p_instructions,
                 tools=tool_bridge.get_declarations(),
             )
+            p_worker_runtime["ready"] = True
+            p_worker_runtime["state"] = "ready"
             logger.info("Realtime text session initialized")
         except Exception as e:
             text_session = None
+            p_worker_runtime["ready"] = False
+            p_worker_runtime["state"] = "degraded"
+            p_worker_runtime["last_error"] = str(e)
+            p_worker_runtime["last_error_source"] = "startup_connect"
+            p_worker_runtime["last_error_at"] = time.time()
             logger.warning("Failed to initialize realtime text session: %s", e)
 
     # Start AgentCore (starts the scheduler worker pools)
@@ -925,6 +987,8 @@ async def shutdown() -> None:
         except Exception:
             logger.debug("Realtime text session close failed", exc_info=True)
         text_session = None
+    p_worker_runtime["ready"] = False
+    p_worker_runtime["state"] = "closed"
 
     if realtime_model is not None:
         try:
@@ -1155,9 +1219,12 @@ async def health() -> JSONResponse:
     facts = await memory_store.get_facts()
     recent = await memory_store.get_recent(limit=1)
 
+    p_worker = _p_worker_snapshot()
+    overall_status = "ok" if p_worker.get("ready") else "degraded"
+
     return JSONResponse(
         {
-            "status": "ok",
+            "status": overall_status,
             "version": "0.10.0",
             "providers": providers,
             "memory": {
@@ -1167,6 +1234,7 @@ async def health() -> JSONResponse:
             "tools": tool_registry.tool_names(),
             "skills": [s.name for s in skill_loader.all()],
             "agent_core": agent_health,
+            "p_worker": p_worker,
             "transports": {
                 "http": True,
                 "webrtc": webrtc_transport is not None,
@@ -1227,6 +1295,9 @@ async def latency_metrics() -> JSONResponse:
                 ),
                 "delegation_duration_p95_ms": metrics.percentile(
                     "service.delegation.duration_ms", 95
+                ),
+                "realtime_reconnect_p95_ms": metrics.percentile(
+                    "voice.realtime.reconnect_ms", 95, labels={"backend": "gemini"}
                 ),
                 "memory_extraction_p95_ms": metrics.percentile(
                     "service.memory.extraction_ms", 95

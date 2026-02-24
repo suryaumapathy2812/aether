@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator
@@ -27,6 +28,19 @@ MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BACKOFF_BASE_SECONDS = 0.5
 RECONNECT_BACKOFF_MAX_SECONDS = 8.0
 OUTBOUND_TEXT_QUEUE_MAX_SIZE = 16
+
+
+def _is_retryable_session_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    retryable_tokens = (
+        "deadline expired",
+        "timed out",
+        "connection reset",
+        "temporarily unavailable",
+        "internal error",
+        "1011",
+    )
+    return any(token in message for token in retryable_tokens)
 
 
 class GeminiRealtimeSession(RealtimeSession):
@@ -62,15 +76,23 @@ class GeminiRealtimeSession(RealtimeSession):
         self._pending_text_lock = asyncio.Lock()
         self._session_setup_emitted = False
         self._connection_dropped = False
+        self._lifecycle_state = "cold"
+        self._last_error: str | None = None
+        self._last_error_source: str | None = None
+        self._last_error_at: float | None = None
+        self._recovery_count = 0
+        self._degraded_since: float | None = None
 
     async def connect(self) -> None:
         if self._connected:
             return
         self._closed = False
+        self._set_lifecycle_state("connecting")
         started_at = asyncio.get_event_loop().time()
         connected = await self._connect_with_retries(reason="initial_connect")
         if not connected:
             metrics.inc("voice.realtime.connect.failed", labels={"backend": "gemini"})
+            self._set_lifecycle_state("degraded")
             raise RuntimeError("Failed to connect Gemini realtime session")
         metrics.observe(
             "voice.realtime.connect_ms",
@@ -180,6 +202,7 @@ class GeminiRealtimeSession(RealtimeSession):
 
         self._session = None
         self._session_cm = None
+        self._set_lifecycle_state("closed")
 
     @property
     def session_id(self) -> str:
@@ -192,6 +215,18 @@ class GeminiRealtimeSession(RealtimeSession):
     @property
     def resumption_token(self) -> str | None:
         return self._resumption_token
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "state": self._lifecycle_state,
+            "connected": self._connected,
+            "last_error": self._last_error,
+            "last_error_source": self._last_error_source,
+            "last_error_at": self._last_error_at,
+            "recovery_count": self._recovery_count,
+            "session_id": self._session_id,
+            "queued_text": len(self._pending_text_queue),
+        }
 
     async def _event_stream(self) -> AsyncIterator[RealtimeEvent]:
         while not self._closed or not self._event_queue.empty():
@@ -206,6 +241,7 @@ class GeminiRealtimeSession(RealtimeSession):
             if not self._connected or self._session is None:
                 connected = await self._connect_with_retries(reason="receive_reconnect")
                 if not connected:
+                    self._set_lifecycle_state("degraded")
                     return
 
             try:
@@ -216,12 +252,15 @@ class GeminiRealtimeSession(RealtimeSession):
                 raise
             except Exception as exc:
                 logger.exception("Gemini receive loop failed")
+                recoverable = _is_retryable_session_error(exc)
                 await self._drop_connection(
                     exc,
                     source="receive_loop",
                     retry_attempt=0,
-                    recoverable=True,
+                    recoverable=recoverable,
                 )
+                if not recoverable:
+                    return
                 continue
 
             await self._drop_connection(
@@ -352,6 +391,10 @@ class GeminiRealtimeSession(RealtimeSession):
             if self._closed:
                 return False
 
+            self._set_lifecycle_state(
+                "reconnecting" if self._connection_dropped else "connecting"
+            )
+
             try:
                 self._session_cm = self._client.aio.live.connect(
                     model=self._model,
@@ -359,14 +402,23 @@ class GeminiRealtimeSession(RealtimeSession):
                 )
                 self._session = await self._session_cm.__aenter__()
                 self._connected = True
+                self._set_lifecycle_state("ready")
 
                 was_reconnect = self._connection_dropped
                 self._connection_dropped = False
                 if was_reconnect:
+                    self._recovery_count += 1
                     metrics.inc(
                         "voice.realtime.reconnect.ok",
                         labels={"backend": "gemini", "reason": reason},
                     )
+                    if self._degraded_since is not None:
+                        metrics.observe(
+                            "voice.realtime.reconnect_ms",
+                            max(0.0, (time.time() - self._degraded_since) * 1000.0),
+                            labels={"backend": "gemini", "reason": reason},
+                        )
+                        self._degraded_since = None
                     await self._event_queue.put(
                         RealtimeEvent(type=RealtimeEventType.SESSION_RESUMED)
                     )
@@ -375,6 +427,7 @@ class GeminiRealtimeSession(RealtimeSession):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._record_error(exc, source=reason)
                 recoverable = attempt < MAX_RECONNECT_ATTEMPTS
                 metrics.inc(
                     "voice.realtime.reconnect.attempt",
@@ -394,6 +447,7 @@ class GeminiRealtimeSession(RealtimeSession):
                 self._connected = False
 
                 if not recoverable:
+                    self._set_lifecycle_state("degraded")
                     metrics.inc(
                         "voice.realtime.reconnect.exhausted",
                         labels={"backend": "gemini", "reason": reason},
@@ -414,6 +468,10 @@ class GeminiRealtimeSession(RealtimeSession):
     ) -> None:
         self._connected = False
         self._connection_dropped = True
+        if self._degraded_since is None:
+            self._degraded_since = time.time()
+        self._set_lifecycle_state("degraded")
+        self._record_error(exc, source=source)
         await self._emit_session_error(
             exc,
             source=source,
@@ -453,6 +511,28 @@ class GeminiRealtimeSession(RealtimeSession):
                 },
             )
         )
+
+    def _set_lifecycle_state(self, state: str) -> None:
+        if self._lifecycle_state == state:
+            return
+        self._lifecycle_state = state
+        metrics.gauge_set(
+            "voice.realtime.state",
+            {
+                "cold": 0,
+                "connecting": 1,
+                "ready": 2,
+                "reconnecting": 3,
+                "degraded": 4,
+                "closed": 5,
+            }.get(state, 0),
+            labels={"backend": "gemini"},
+        )
+
+    def _record_error(self, exc: Exception, *, source: str) -> None:
+        self._last_error = str(exc)
+        self._last_error_source = source
+        self._last_error_at = time.time()
 
     async def _enqueue_pending_text(self, text: str) -> None:
         async with self._pending_text_lock:
