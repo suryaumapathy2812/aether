@@ -118,10 +118,14 @@ class GeminiRealtimeModel(RealtimeModel):
         if gemini_tools:
             kwargs["tools"] = gemini_tools
 
-        if self._config.enable_session_resumption and resumption_token:
-            kwargs["session_resumption"] = genai_types.SessionResumptionConfig(
-                handle=resumption_token
-            )
+        if self._config.enable_session_resumption:
+            if resumption_token:
+                kwargs["session_resumption"] = genai_types.SessionResumptionConfig(
+                    handle=resumption_token
+                )
+            else:
+                # Always request resumption so we get a handle for future reconnects
+                kwargs["session_resumption"] = genai_types.SessionResumptionConfig()
 
         return genai_types.LiveConnectConfig(**kwargs)
 

@@ -24,9 +24,9 @@ from aether.voice.realtime import (
 
 logger = logging.getLogger(__name__)
 
-MAX_RECONNECT_ATTEMPTS = 5
-RECONNECT_BACKOFF_BASE_SECONDS = 0.5
-RECONNECT_BACKOFF_MAX_SECONDS = 8.0
+MAX_RECONNECT_ATTEMPTS = 10
+RECONNECT_BACKOFF_BASE_SECONDS = 0.3
+RECONNECT_BACKOFF_MAX_SECONDS = 10.0
 OUTBOUND_TEXT_QUEUE_MAX_SIZE = 16
 
 
@@ -251,8 +251,24 @@ class GeminiRealtimeSession(RealtimeSession):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.exception("Gemini receive loop failed")
-                recoverable = _is_retryable_session_error(exc)
+                msg = str(exc).lower()
+                # Classify: normal server-side close vs real error
+                is_normal_close = any(
+                    tok in msg
+                    for tok in ("1000", "normal closure", "going away", "1001")
+                )
+                if is_normal_close:
+                    logger.info(
+                        "Gemini session ended normally (%s) — reconnecting with resumption",
+                        self._session_id,
+                    )
+                else:
+                    logger.warning(
+                        "Gemini receive loop error (%s): %s",
+                        self._session_id,
+                        exc,
+                    )
+                recoverable = is_normal_close or _is_retryable_session_error(exc)
                 await self._drop_connection(
                     exc,
                     source="receive_loop",
@@ -263,12 +279,18 @@ class GeminiRealtimeSession(RealtimeSession):
                     return
                 continue
 
-            await self._drop_connection(
-                RuntimeError("Gemini live session closed unexpectedly"),
-                source="receive_loop",
-                retry_attempt=0,
-                recoverable=True,
+            # Server closed the stream without an exception (normal session expiry).
+            # This is expected — Gemini Live sessions have a finite lifetime.
+            # Reconnect transparently using session resumption if available.
+            logger.info(
+                "Gemini session stream ended (%s) — reconnecting with resumption",
+                self._session_id,
             )
+            self._connected = False
+            self._connection_dropped = True
+            if self._degraded_since is None:
+                self._degraded_since = time.time()
+            await self._close_session_context()
 
     def _parse_live_message(self, message: Any) -> list[RealtimeEvent]:
         events: list[RealtimeEvent] = []
@@ -394,6 +416,23 @@ class GeminiRealtimeSession(RealtimeSession):
             self._set_lifecycle_state(
                 "reconnecting" if self._connection_dropped else "connecting"
             )
+
+            # Inject session resumption handle if we have one from a previous
+            # connection.  This lets Gemini restore conversation context so the
+            # model remembers what was discussed before the reconnect.
+            if self._resumption_token:
+                self._config.session_resumption = genai_types.SessionResumptionConfig(
+                    handle=self._resumption_token,
+                )
+                self._requested_resumption = True
+                logger.info(
+                    "Reconnecting with session resumption handle (%s)",
+                    self._session_id,
+                )
+            elif self._connection_dropped:
+                # No resumption token yet — still request resumption so we get
+                # a handle for future reconnects.
+                self._config.session_resumption = genai_types.SessionResumptionConfig()
 
             try:
                 self._session_cm = self._client.aio.live.connect(

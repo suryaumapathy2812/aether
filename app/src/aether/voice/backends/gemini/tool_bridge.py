@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 ExtraToolHandler = Callable[[dict[str, Any]], Awaitable[str | dict[str, Any]]]
 
 _TOOL_TIMEOUTS_SECONDS: dict[str, float] = {
-    "memory": 0.1,
-    "file": 0.2,
-    "search": 3.0,
-    "web_fetch": 5.0,
-    "external_api": 10.0,
-    "code": 30.0,
-    "browser": 60.0,
-    "default": 10.0,
+    "memory": 5.0,
+    "file": 5.0,
+    "search": 15.0,
+    "web_fetch": 15.0,
+    "external_api": 30.0,
+    "code": 60.0,
+    "browser": 90.0,
+    "default": 15.0,
 }
 
 
