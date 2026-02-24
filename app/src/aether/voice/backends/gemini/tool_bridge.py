@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
+
+from aether.core.metrics import metrics
 
 if TYPE_CHECKING:
     from aether.session.ledger import TaskLedger
@@ -16,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 ExtraToolHandler = Callable[[dict[str, Any]], Awaitable[str | dict[str, Any]]]
+
+_TOOL_TIMEOUTS_SECONDS: dict[str, float] = {
+    "memory": 0.1,
+    "file": 0.2,
+    "search": 3.0,
+    "web_fetch": 5.0,
+    "external_api": 10.0,
+    "code": 30.0,
+    "browser": 60.0,
+    "default": 10.0,
+}
 
 
 class ToolBridge:
@@ -99,12 +113,19 @@ class ToolBridge:
                 priority="normal",
             )
             await self._task_ledger.set_running(task_id)
+            timeout_seconds = _resolve_timeout_seconds(name)
 
             if name in self._extra_handlers:
-                result = await self._extra_handlers[name](parsed_args)
+                result = await asyncio.wait_for(
+                    self._extra_handlers[name](parsed_args),
+                    timeout=timeout_seconds,
+                )
                 response = _normalize_result(result)
             else:
-                tool_result = await self._tool_registry.dispatch(name, parsed_args)
+                tool_result = await asyncio.wait_for(
+                    self._tool_registry.dispatch(name, parsed_args),
+                    timeout=timeout_seconds,
+                )
                 response = {
                     "ok": not tool_result.error,
                     "output": tool_result.output,
@@ -112,7 +133,13 @@ class ToolBridge:
                 }
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
+            metrics.observe(
+                "voice.tool_bridge.duration_ms",
+                duration_ms,
+                labels={"tool": name},
+            )
             if response.get("ok", True):
+                metrics.inc("voice.tool_bridge.ok", labels={"tool": name})
                 await self._task_ledger.set_complete(
                     task_id,
                     {
@@ -121,6 +148,7 @@ class ToolBridge:
                     },
                 )
             else:
+                metrics.inc("voice.tool_bridge.error", labels={"tool": name})
                 await self._task_ledger.set_error(
                     task_id,
                     str(
@@ -129,8 +157,33 @@ class ToolBridge:
                 )
 
             return json.dumps(response)
+        except asyncio.TimeoutError:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            timeout_seconds = _resolve_timeout_seconds(name)
+            metrics.observe(
+                "voice.tool_bridge.duration_ms",
+                duration_ms,
+                labels={"tool": name},
+            )
+            metrics.inc("voice.tool_bridge.timeout", labels={"tool": name})
+            if task_id is not None:
+                try:
+                    await self._task_ledger.set_error(
+                        task_id,
+                        f"Tool timed out after {timeout_seconds:.1f}s",
+                    )
+                except Exception:
+                    logger.debug("Failed to mark tool timeout", exc_info=True)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": f"Tool timed out after {timeout_seconds:.1f}s",
+                    "timeout_seconds": timeout_seconds,
+                }
+            )
         except Exception as exc:
             logger.exception("Tool execution failed: %s", name)
+            metrics.inc("voice.tool_bridge.exception", labels={"tool": name})
             if task_id is not None:
                 try:
                     await self._task_ledger.set_error(task_id, str(exc))
@@ -173,3 +226,33 @@ def _normalize_result(result: str | dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, **parsed}
 
     return {"ok": True, "output": parsed}
+
+
+def _resolve_timeout_seconds(tool_name: str) -> float:
+    normalized = tool_name.strip().lower()
+    if any(k in normalized for k in ("memory", "fact", "decision")):
+        return _TOOL_TIMEOUTS_SECONDS["memory"]
+    if any(k in normalized for k in ("file", "read_file", "write_file")):
+        return _TOOL_TIMEOUTS_SECONDS["file"]
+    if "search" in normalized:
+        return _TOOL_TIMEOUTS_SECONDS["search"]
+    if any(k in normalized for k in ("fetch", "crawl", "scrape")):
+        return _TOOL_TIMEOUTS_SECONDS["web_fetch"]
+    if any(k in normalized for k in ("run_command", "python", "shell", "code")):
+        return _TOOL_TIMEOUTS_SECONDS["code"]
+    if any(k in normalized for k in ("browser", "playwright", "navigate")):
+        return _TOOL_TIMEOUTS_SECONDS["browser"]
+    if any(
+        k in normalized
+        for k in (
+            "gmail",
+            "calendar",
+            "drive",
+            "spotify",
+            "weather",
+            "wolfram",
+            "wikipedia",
+        )
+    ):
+        return _TOOL_TIMEOUTS_SECONDS["external_api"]
+    return _TOOL_TIMEOUTS_SECONDS["default"]

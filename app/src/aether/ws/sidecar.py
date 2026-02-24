@@ -142,15 +142,28 @@ class WSSidecar:
         - "dismissed" → user ignores these
         - "muted" → user wants to mute this sender/plugin
         """
-        action = feedback.get("action", "")
-        plugin = feedback.get("plugin", "unknown")
-        sender = feedback.get("sender", "")
+        action = str(feedback.get("action", "")).strip().lower()
+        plugin = str(feedback.get("plugin", "unknown")).strip() or "unknown"
+        sender = str(feedback.get("sender", "")).strip()
+        notification_id = feedback.get("notification_id")
+
+        # Persist explicit delivery-state feedback for learning loop telemetry.
+        if isinstance(notification_id, int):
+            try:
+                if action == "dismissed":
+                    await self.agent._memory_store.mark_dismissed(notification_id)
+                elif action in {"engaged", "opened"}:
+                    await self.agent._memory_store.mark_delivered(notification_id)
+            except Exception as e:
+                logger.warning("Failed to update notification status: %s", e)
 
         fact = ""
-        if action == "engaged":
+        if action in {"engaged", "opened"}:
             fact = f"User immediately reads {plugin} notifications from {sender}"
         elif action == "dismissed":
             fact = f"User dismisses {plugin} notifications from {sender}"
+        elif action == "snoozed":
+            fact = f"User snoozes {plugin} notifications from {sender}"
         elif action == "muted":
             fact = f"User wants to mute all {plugin} notifications from {sender}"
 

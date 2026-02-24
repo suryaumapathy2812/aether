@@ -61,3 +61,8 @@ reference_projects/
 # Temp/workspace
 workspace/
 .tmp/
+
+# Local logs and build-generated service worker artifacts
+logs
+dashboard/public/sw.js
+dashboard/public/workbox-*.js

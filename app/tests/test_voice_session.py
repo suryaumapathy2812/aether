@@ -332,3 +332,53 @@ async def test_stop_closes_io_and_session_and_keeps_resumption() -> None:
     assert audio_out.closed is True
     assert rt_session.is_connected is False
     assert session._resumption_token == "resume-token"
+
+
+@pytest.mark.asyncio
+async def test_inject_text_buffers_when_disconnected_and_replays_on_resume() -> None:
+    rt_session = _FakeRealtimeSession([])
+    rt_session._connected = False
+    model = _FakeRealtimeModel(rt_session)
+    text_out = _FakeTextOutput()
+
+    session = VoiceSession(session_id="s7", realtime_model=model)
+    session.set_io(_FakeAudioInput(), _FakeAudioOutput(), text_out)
+    await session.start()
+
+    await session.inject_text("queued text")
+    assert rt_session.generated_replies == []
+    assert "reconnecting" in text_out.states
+
+    rt_session._connected = True
+    await session._handle_event(RealtimeEvent(type=RealtimeEventType.SESSION_RESUMED))
+    await asyncio.sleep(0)
+    await session.stop()
+
+    assert rt_session.generated_replies == ["queued text"]
+    assert "recovered" in text_out.states
+
+
+@pytest.mark.asyncio
+async def test_audio_buffers_when_disconnected_and_replays_on_resume() -> None:
+    rt_session = _FakeRealtimeSession([])
+    rt_session._connected = False
+    model = _FakeRealtimeModel(rt_session)
+    audio_chunk = b"\x01\x02" * 6
+    audio_in = _FakeAudioInput(
+        [AudioFrame(data=audio_chunk, sample_rate=16000, samples_per_channel=6)]
+    )
+    text_out = _FakeTextOutput()
+
+    session = VoiceSession(session_id="s8", realtime_model=model)
+    session.set_io(audio_in, _FakeAudioOutput(), text_out)
+    await session.start()
+    await asyncio.sleep(0.05)
+
+    assert rt_session.pushed_audio == []
+    assert "reconnecting" in text_out.states
+
+    rt_session._connected = True
+    await session._handle_event(RealtimeEvent(type=RealtimeEventType.SESSION_RESUMED))
+    await session.stop()
+
+    assert rt_session.pushed_audio == [audio_chunk]

@@ -7,11 +7,13 @@ import base64
 import json
 import logging
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
 
 from google.genai import types as genai_types
 
+from aether.core.metrics import metrics
 from aether.voice.realtime import (
     FunctionCallResult,
     RealtimeEvent,
@@ -20,6 +22,11 @@ from aether.voice.realtime import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_BACKOFF_BASE_SECONDS = 0.5
+RECONNECT_BACKOFF_MAX_SECONDS = 8.0
+OUTBOUND_TEXT_QUEUE_MAX_SIZE = 16
 
 
 class GeminiRealtimeSession(RealtimeSession):
@@ -51,17 +58,26 @@ class GeminiRealtimeSession(RealtimeSession):
 
         self._event_queue: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._receive_task: asyncio.Task[None] | None = None
+        self._pending_text_queue: deque[str] = deque()
+        self._pending_text_lock = asyncio.Lock()
+        self._session_setup_emitted = False
+        self._connection_dropped = False
 
     async def connect(self) -> None:
         if self._connected:
             return
-        self._session_cm = self._client.aio.live.connect(
-            model=self._model,
-            config=self._config,
-        )
-        self._session = await self._session_cm.__aenter__()
-        self._connected = True
         self._closed = False
+        started_at = asyncio.get_event_loop().time()
+        connected = await self._connect_with_retries(reason="initial_connect")
+        if not connected:
+            metrics.inc("voice.realtime.connect.failed", labels={"backend": "gemini"})
+            raise RuntimeError("Failed to connect Gemini realtime session")
+        metrics.observe(
+            "voice.realtime.connect_ms",
+            (asyncio.get_event_loop().time() - started_at) * 1000,
+            labels={"backend": "gemini"},
+        )
+        metrics.inc("voice.realtime.connect.ok", labels={"backend": "gemini"})
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
             name=f"gemini-live-recv-{self._session_id}",
@@ -102,18 +118,24 @@ class GeminiRealtimeSession(RealtimeSession):
         await self._event_queue.put(RealtimeEvent(type=RealtimeEventType.INTERRUPTED))
 
     async def generate_reply(self, text: str) -> None:
-        if not text or not self._connected or self._session is None:
+        if not text:
             return
-        try:
-            await self._session.send_client_content(
-                turns=genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=text)],
-                ),
-                turn_complete=True,
-            )
-        except Exception:
-            logger.exception("Failed to send text content")
+
+        if not self._connected or self._session is None:
+            await self._enqueue_pending_text(text)
+            return
+
+        sent = await self._send_text_content(text)
+        if sent:
+            return
+
+        await self._enqueue_pending_text(text)
+        await self._drop_connection(
+            RuntimeError("Text send failed; reconnect scheduled"),
+            source="generate_reply",
+            retry_attempt=0,
+            recoverable=True,
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         if not instructions:
@@ -154,10 +176,7 @@ class GeminiRealtimeSession(RealtimeSession):
                 pass
 
         if self._session_cm is not None:
-            try:
-                await self._session_cm.__aexit__(None, None, None)
-            except Exception:
-                logger.exception("Failed closing Gemini live session")
+            await self._close_session_context()
 
         self._session = None
         self._session_cm = None
@@ -183,22 +202,34 @@ class GeminiRealtimeSession(RealtimeSession):
             yield event
 
     async def _receive_loop(self) -> None:
-        try:
-            async for message in self._session.receive():
-                for event in self._parse_live_message(message):
-                    await self._event_queue.put(event)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Gemini receive loop failed")
-            await self._event_queue.put(
-                RealtimeEvent(
-                    type=RealtimeEventType.SESSION_ERROR,
-                    data={"error": str(exc)},
+        while not self._closed:
+            if not self._connected or self._session is None:
+                connected = await self._connect_with_retries(reason="receive_reconnect")
+                if not connected:
+                    return
+
+            try:
+                async for message in self._session.receive():
+                    for event in self._parse_live_message(message):
+                        await self._event_queue.put(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Gemini receive loop failed")
+                await self._drop_connection(
+                    exc,
+                    source="receive_loop",
+                    retry_attempt=0,
+                    recoverable=True,
                 )
+                continue
+
+            await self._drop_connection(
+                RuntimeError("Gemini live session closed unexpectedly"),
+                source="receive_loop",
+                retry_attempt=0,
+                recoverable=True,
             )
-        finally:
-            self._connected = False
 
     def _parse_live_message(self, message: Any) -> list[RealtimeEvent]:
         events: list[RealtimeEvent] = []
@@ -209,19 +240,26 @@ class GeminiRealtimeSession(RealtimeSession):
             self._resumption_token = new_handle
 
         if _pick(message, "setup_complete"):
-            event_type = (
-                RealtimeEventType.SESSION_RESUMED
-                if self._requested_resumption
-                else RealtimeEventType.SESSION_CREATED
-            )
-            events.append(RealtimeEvent(type=event_type))
+            if not self._session_setup_emitted:
+                event_type = (
+                    RealtimeEventType.SESSION_RESUMED
+                    if self._requested_resumption
+                    else RealtimeEventType.SESSION_CREATED
+                )
+                events.append(RealtimeEvent(type=event_type))
+                self._session_setup_emitted = True
 
         go_away = _pick(message, "go_away")
         if go_away:
             events.append(
                 RealtimeEvent(
                     type=RealtimeEventType.SESSION_ERROR,
-                    data={"error": str(go_away)},
+                    data={
+                        "error": str(go_away),
+                        "source": "go_away",
+                        "retry_attempt": 0,
+                        "recoverable": False,
+                    },
                 )
             )
 
@@ -309,6 +347,187 @@ class GeminiRealtimeSession(RealtimeSession):
 
         return events
 
+    async def _connect_with_retries(self, *, reason: str) -> bool:
+        for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
+            if self._closed:
+                return False
+
+            try:
+                self._session_cm = self._client.aio.live.connect(
+                    model=self._model,
+                    config=self._config,
+                )
+                self._session = await self._session_cm.__aenter__()
+                self._connected = True
+
+                was_reconnect = self._connection_dropped
+                self._connection_dropped = False
+                if was_reconnect:
+                    metrics.inc(
+                        "voice.realtime.reconnect.ok",
+                        labels={"backend": "gemini", "reason": reason},
+                    )
+                    await self._event_queue.put(
+                        RealtimeEvent(type=RealtimeEventType.SESSION_RESUMED)
+                    )
+                await self._flush_pending_text_queue()
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                recoverable = attempt < MAX_RECONNECT_ATTEMPTS
+                metrics.inc(
+                    "voice.realtime.reconnect.attempt",
+                    labels={
+                        "backend": "gemini",
+                        "reason": reason,
+                        "recoverable": str(recoverable).lower(),
+                    },
+                )
+                await self._emit_session_error(
+                    exc,
+                    source=reason,
+                    retry_attempt=attempt,
+                    recoverable=recoverable,
+                )
+                await self._close_session_context()
+                self._connected = False
+
+                if not recoverable:
+                    metrics.inc(
+                        "voice.realtime.reconnect.exhausted",
+                        labels={"backend": "gemini", "reason": reason},
+                    )
+                    return False
+
+                await asyncio.sleep(_backoff_delay_seconds(attempt))
+
+        return False
+
+    async def _drop_connection(
+        self,
+        exc: Exception,
+        *,
+        source: str,
+        retry_attempt: int,
+        recoverable: bool,
+    ) -> None:
+        self._connected = False
+        self._connection_dropped = True
+        await self._emit_session_error(
+            exc,
+            source=source,
+            retry_attempt=retry_attempt,
+            recoverable=recoverable,
+        )
+        await self._close_session_context()
+
+    async def _close_session_context(self) -> None:
+        if self._session_cm is None:
+            self._session = None
+            return
+        try:
+            await self._session_cm.__aexit__(None, None, None)
+        except Exception:
+            logger.exception("Failed closing Gemini live session")
+        finally:
+            self._session = None
+            self._session_cm = None
+
+    async def _emit_session_error(
+        self,
+        exc: Exception,
+        *,
+        source: str,
+        retry_attempt: int,
+        recoverable: bool,
+    ) -> None:
+        await self._event_queue.put(
+            RealtimeEvent(
+                type=RealtimeEventType.SESSION_ERROR,
+                data={
+                    "error": str(exc),
+                    "source": source,
+                    "retry_attempt": retry_attempt,
+                    "recoverable": recoverable,
+                },
+            )
+        )
+
+    async def _enqueue_pending_text(self, text: str) -> None:
+        async with self._pending_text_lock:
+            if len(self._pending_text_queue) >= OUTBOUND_TEXT_QUEUE_MAX_SIZE:
+                self._pending_text_queue.popleft()
+                metrics.inc(
+                    "voice.realtime.pending_text.drop_oldest",
+                    labels={"backend": "gemini"},
+                )
+            self._pending_text_queue.append(text)
+            metrics.gauge_set(
+                "voice.realtime.pending_text.queue_size",
+                len(self._pending_text_queue),
+                labels={"backend": "gemini"},
+            )
+
+    async def _flush_pending_text_queue(self) -> None:
+        replayed = 0
+        while self._connected and self._session is not None:
+            text: str | None = None
+            async with self._pending_text_lock:
+                if not self._pending_text_queue:
+                    if replayed:
+                        metrics.inc(
+                            "voice.realtime.pending_text.replayed",
+                            value=replayed,
+                            labels={"backend": "gemini"},
+                        )
+                    metrics.gauge_set(
+                        "voice.realtime.pending_text.queue_size",
+                        0,
+                        labels={"backend": "gemini"},
+                    )
+                    return
+                text = self._pending_text_queue.popleft()
+
+            if text is None:
+                return
+
+            sent = await self._send_text_content(text)
+            if sent:
+                replayed += 1
+                continue
+
+            async with self._pending_text_lock:
+                self._pending_text_queue.appendleft(text)
+                metrics.gauge_set(
+                    "voice.realtime.pending_text.queue_size",
+                    len(self._pending_text_queue),
+                    labels={"backend": "gemini"},
+                )
+                if replayed:
+                    metrics.inc(
+                        "voice.realtime.pending_text.replayed",
+                        value=replayed,
+                        labels={"backend": "gemini"},
+                    )
+            return
+
+    async def _send_text_content(self, text: str) -> bool:
+        if self._session is None:
+            return False
+        try:
+            await self._session.send_client_content(
+                turns=genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text=text)],
+                ),
+                turn_complete=True,
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to send text content")
+            return False
+
 
 def _pick(value: Any, key: str) -> Any:
     if value is None:
@@ -360,3 +579,9 @@ def _parse_json_or_text(value: str) -> dict[str, Any]:
     if isinstance(parsed, dict):
         return parsed
     return {"result": parsed}
+
+
+def _backoff_delay_seconds(attempt: int) -> float:
+    power = max(0, attempt - 1)
+    delay = RECONNECT_BACKOFF_BASE_SECONDS * (2**power)
+    return min(delay, RECONNECT_BACKOFF_MAX_SECONDS)

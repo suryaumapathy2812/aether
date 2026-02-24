@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from aether.core.metrics import metrics
 from aether.session.models import TaskType
 from aether.voice.io import (
     AudioFrame,
@@ -29,6 +31,9 @@ if TYPE_CHECKING:
     from aether.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
+
+_MAX_PENDING_AUDIO_CHUNKS = 256
+_MAX_PENDING_TEXT_INJECTIONS = 32
 
 
 class VoiceSession:
@@ -65,6 +70,10 @@ class VoiceSession:
 
         self._pending_user_text: str = ""
         self._assistant_parts: list[str] = []
+        self._pending_audio_chunks: deque[bytes] = deque()
+        self._pending_text_injections: deque[str] = deque()
+        self._degraded = False
+        self._replay_lock = asyncio.Lock()
 
         self.is_streaming = False
         self.is_muted = False
@@ -117,6 +126,11 @@ class VoiceSession:
         clean = text.strip()
         if not clean or self._session is None:
             return
+        if not self._is_session_connected():
+            self._buffer_pending_text(clean)
+            await self._mark_reconnecting_if_needed()
+            return
+        await self._recover_and_replay_if_connected()
         self._pending_user_text = clean
         await self._text_output.push_state("thinking")
         await self._session.generate_reply(clean)
@@ -142,7 +156,12 @@ class VoiceSession:
                     if self.is_muted:
                         continue
                     if frame.data and self._session is not None:
-                        await self._session.push_audio(frame.data)
+                        if self._is_session_connected():
+                            await self._recover_and_replay_if_connected()
+                            await self._session.push_audio(frame.data)
+                        else:
+                            self._buffer_pending_audio(frame.data)
+                            await self._mark_reconnecting_if_needed()
                 return
             except asyncio.CancelledError:
                 return
@@ -184,6 +203,14 @@ class VoiceSession:
             if text:
                 self._assistant_parts.append(text)
                 await self._text_output.push_text(text)
+            return
+
+        if event.type in {
+            RealtimeEventType.SESSION_CREATED,
+            RealtimeEventType.SESSION_RESUMED,
+        }:
+            await self._mark_recovered_if_needed()
+            await self._replay_pending_if_connected()
             return
 
         if event.type == RealtimeEventType.TEXT_DONE:
@@ -229,6 +256,89 @@ class VoiceSession:
 
         if event.type == RealtimeEventType.SESSION_ERROR:
             logger.error("Realtime session error (%s): %s", self.session_id, event.data)
+            await self._mark_reconnecting_if_needed()
+
+    def _is_session_connected(self) -> bool:
+        return self._session is not None and self._session.is_connected
+
+    def _buffer_pending_audio(self, data: bytes) -> None:
+        if len(self._pending_audio_chunks) >= _MAX_PENDING_AUDIO_CHUNKS:
+            self._pending_audio_chunks.popleft()
+            metrics.inc("voice.session.pending_audio.drop_oldest")
+            logger.warning(
+                "Pending audio buffer overflow; dropped oldest chunk (%s)",
+                self.session_id,
+            )
+        self._pending_audio_chunks.append(data)
+        metrics.gauge_set(
+            "voice.session.pending_audio.queue_size",
+            len(self._pending_audio_chunks),
+        )
+
+    def _buffer_pending_text(self, text: str) -> None:
+        if len(self._pending_text_injections) >= _MAX_PENDING_TEXT_INJECTIONS:
+            self._pending_text_injections.popleft()
+            metrics.inc("voice.session.pending_text.drop_oldest")
+            logger.warning(
+                "Pending text buffer overflow; dropped oldest injection (%s)",
+                self.session_id,
+            )
+        self._pending_text_injections.append(text)
+        metrics.gauge_set(
+            "voice.session.pending_text.queue_size",
+            len(self._pending_text_injections),
+        )
+
+    async def _mark_reconnecting_if_needed(self) -> None:
+        if self._degraded:
+            return
+        self._degraded = True
+        metrics.inc("voice.session.state.reconnecting")
+        await self._text_output.push_state("reconnecting")
+
+    async def _mark_recovered_if_needed(self) -> None:
+        if not self._degraded:
+            return
+        self._degraded = False
+        metrics.inc("voice.session.state.recovered")
+        await self._text_output.push_state("recovered")
+
+    async def _replay_pending_if_connected(self) -> None:
+        session = self._session
+        if session is None or not session.is_connected:
+            return
+
+        async with self._replay_lock:
+            session = self._session
+            if session is None or not session.is_connected:
+                return
+
+            while self._pending_text_injections and session.is_connected:
+                text = self._pending_text_injections.popleft()
+                self._pending_user_text = text
+                await self._text_output.push_state("thinking")
+                await session.generate_reply(text)
+
+            metrics.gauge_set(
+                "voice.session.pending_text.queue_size",
+                len(self._pending_text_injections),
+            )
+
+            while self._pending_audio_chunks and session.is_connected:
+                audio = self._pending_audio_chunks.popleft()
+                await session.push_audio(audio)
+
+            metrics.gauge_set(
+                "voice.session.pending_audio.queue_size",
+                len(self._pending_audio_chunks),
+            )
+
+    async def _recover_and_replay_if_connected(self) -> None:
+        if not self._is_session_connected():
+            return
+        await self._mark_recovered_if_needed()
+        if self._pending_text_injections or self._pending_audio_chunks:
+            await self._replay_pending_if_connected()
 
     async def _handle_function_call(self, event: RealtimeEvent) -> None:
         if self._session is None:

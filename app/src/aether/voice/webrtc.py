@@ -245,6 +245,11 @@ class WebRTCVoiceTransport:
         # Reuse existing session for this user if one exists (persistent session).
         # This preserves dialog history and agent state across reconnects.
         session_key = user_id or pc_id
+
+        # Canonical session arbitration: keep only one active peer connection
+        # per logical session key. New offer wins (last-write-wins).
+        await self._evict_connections_for_session(session_key)
+
         is_reconnect = session_key in self._sessions
         if is_reconnect:
             voice_session = self._sessions[session_key]
@@ -318,6 +323,38 @@ class WebRTCVoiceTransport:
             "type": pc.localDescription.type,
             "pc_id": pc_id,
         }
+
+    async def _evict_connections_for_session(self, session_key: str) -> None:
+        stale_pc_ids = [
+            pc_id
+            for pc_id, conn in self._connections.items()
+            if conn.session_key == session_key
+        ]
+        if not stale_pc_ids:
+            return
+
+        for stale_pc_id in stale_pc_ids:
+            stale = self._connections.pop(stale_pc_id, None)
+            if stale is None:
+                continue
+            logger.info(
+                "Evicting stale WebRTC connection %s for session %s",
+                stale_pc_id,
+                session_key,
+            )
+            try:
+                if (
+                    stale._disconnect_grace_task
+                    and not stale._disconnect_grace_task.done()
+                ):
+                    stale._disconnect_grace_task.cancel()
+                await stale.audio_input.close()
+                await stale.audio_output.close()
+                await stale.pc.close()
+            except Exception:
+                logger.debug(
+                    "Failed evicting stale connection %s", stale_pc_id, exc_info=True
+                )
 
     async def handle_ice_candidate(
         self,
