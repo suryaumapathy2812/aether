@@ -30,41 +30,10 @@ import aether.core.config as config_module
 
 logger = logging.getLogger(__name__)
 
-# DEPRECATED: This prompt is only used by the legacy _extract_facts() method below.
-# New extraction goes through MemoryService.extract_facts() which uses the
-# three-bucket prompt (facts + memories + decisions) in memory_service.py.
-FACT_EXTRACTION_PROMPT = """You are Aether's long-term memory extractor.
-
-Goal: store only facts that improve future assistance for a "Jarvis/second-brain" assistant.
-
-Extract ONLY durable, user-specific, decision-relevant facts from this turn:
-- Identity and profile: name, role, location, timezone, recurring schedule
-- Durable preferences: communication style, coding/workflow/tool preferences
-- Ongoing projects, goals, commitments, deadlines
-- Stable constraints: budget, device/platform limits, security/privacy boundaries
-- Important relationships and recurring contacts (only when clearly stated)
-
-Do NOT extract:
-- Small talk, greetings, jokes, filler
-- Temporary mood unless it implies a stable preference
-- Assistant claims or advice as facts
-- One-off details with no future value
-- Duplicates or near-duplicates of existing memory wording
-
-Write strict concise fact strings:
-- One fact per string
-- Third-person style, starting with "User ..." or "User's ..."
-- Canonical and specific (avoid vague language)
-- Keep each fact short (about 6-18 words)
-
-Return ONLY a JSON array of strings.
-If no high-value durable facts are present, return [] exactly.
-
-Conversation:
-User: {user_message}
-Assistant: {assistant_message}
-
-Facts (JSON array):"""
+# Maximum rows to load per table during similarity search.
+# Caps the O(N) scan to a bounded set of recent items.
+# For true vector search, migrate to pgvector in the Go rewrite.
+SEARCH_LIMIT_PER_TABLE = 200
 
 
 class MemoryStore:
@@ -190,6 +159,23 @@ class MemoryStore:
             "CREATE INDEX IF NOT EXISTS idx_notifications_deliver_at ON notifications(deliver_at)"
         )
 
+        # Performance indexes for search queries
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_updated_at ON facts(updated_at DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_actions_timestamp ON actions(timestamp DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON sessions(ended_at DESC)"
+        )
+
         await self._db.commit()
 
         await self._migrate_fact_keys()
@@ -224,51 +210,6 @@ class MemoryStore:
         )
         await self._db.commit()
         logger.debug(f"Stored conversation: {user_message[:50]}...")
-
-    async def _extract_facts(
-        self, user_message: str, assistant_message: str, conv_id: int
-    ) -> None:
-        """Use LLM to extract facts from a conversation turn."""
-        prompt = FACT_EXTRACTION_PROMPT.format(
-            user_message=user_message,
-            assistant_message=assistant_message,
-        )
-
-        try:
-            response = await self._get_openai_client().chat.completions.create(
-                model="openai/gpt-4o-mini",  # Fast and cheap for extraction
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.0,
-            )
-
-            content_raw = response.choices[0].message.content or ""
-            content = content_raw.strip()
-
-            # Parse JSON array
-            if content.startswith("["):
-                facts = json.loads(content)
-            else:
-                # Sometimes model wraps in markdown
-                import re
-
-                match = re.search(r"\[.*\]", content, re.DOTALL)
-                if match:
-                    facts = json.loads(match.group())
-                else:
-                    facts = []
-
-            unique_facts = self._dedupe_facts(facts)
-
-            for fact in unique_facts:
-                if isinstance(fact, str) and fact.strip():
-                    await self._store_fact(fact.strip(), conv_id)
-
-            if unique_facts:
-                logger.info(f"Extracted {len(unique_facts)} facts: {unique_facts}")
-
-        except Exception as e:
-            logger.error(f"Fact extraction LLM error: {e}")
 
     async def _store_fact(self, fact: str, conv_id: int) -> None:
         """Store a fact, updating if a similar one exists."""
@@ -314,22 +255,6 @@ class MemoryStore:
         lowered = fact.strip().lower().replace("\u2019", "'")
         tokens = re.findall(r"[a-z0-9]+", lowered)
         return " ".join(tokens)
-
-    def _dedupe_facts(self, facts: list) -> list[str]:
-        unique: list[str] = []
-        seen: set[str] = set()
-        for fact in facts:
-            if not isinstance(fact, str):
-                continue
-            cleaned = fact.strip()
-            if not cleaned:
-                continue
-            key = self._canonicalize_fact(cleaned)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            unique.append(cleaned)
-        return unique
 
     async def _migrate_fact_keys(self) -> None:
         if not self._db:
@@ -390,7 +315,8 @@ class MemoryStore:
 
         # Search conversations
         cursor = await self._db.execute(
-            "SELECT id, user_message, assistant_message, embedding, timestamp FROM conversations"
+            "SELECT id, user_message, assistant_message, embedding, timestamp FROM conversations ORDER BY timestamp DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         rows = await cursor.fetchall()
 
@@ -413,7 +339,8 @@ class MemoryStore:
 
         # Search facts (these get boosted because they're distilled knowledge)
         cursor = await self._db.execute(
-            "SELECT id, fact, embedding, created_at FROM facts"
+            "SELECT id, fact, embedding, created_at FROM facts ORDER BY updated_at DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         fact_rows = await cursor.fetchall()
 
@@ -436,7 +363,8 @@ class MemoryStore:
 
         # Search actions (tool calls — what Aether *did*)
         cursor = await self._db.execute(
-            "SELECT id, tool_name, arguments, output, error, embedding, timestamp FROM actions"
+            "SELECT id, tool_name, arguments, output, error, embedding, timestamp FROM actions ORDER BY timestamp DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         action_rows = await cursor.fetchall()
 
@@ -462,7 +390,8 @@ class MemoryStore:
 
         # Search memories (episodic/behavioral/emotional — same boost as actions)
         cursor = await self._db.execute(
-            "SELECT id, memory, category, embedding, confidence, created_at, expires_at FROM memories"
+            "SELECT id, memory, category, embedding, confidence, created_at, expires_at FROM memories ORDER BY created_at DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         memory_rows = await cursor.fetchall()
 
@@ -492,7 +421,8 @@ class MemoryStore:
         # Search decisions (most valuable — directly influence behavior, +0.15 boost)
         cursor = await self._db.execute(
             "SELECT id, decision, category, source, embedding, confidence, updated_at "
-            "FROM decisions WHERE active = TRUE"
+            "FROM decisions WHERE active = TRUE ORDER BY updated_at DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         decision_rows = await cursor.fetchall()
 
@@ -518,7 +448,8 @@ class MemoryStore:
 
         # Search session summaries
         cursor = await self._db.execute(
-            "SELECT id, summary, embedding, ended_at FROM sessions"
+            "SELECT id, summary, embedding, ended_at FROM sessions ORDER BY ended_at DESC LIMIT ?",
+            (SEARCH_LIMIT_PER_TABLE,),
         )
         session_rows = await cursor.fetchall()
 

@@ -117,13 +117,21 @@ class EventProcessor:
 
             results = await self.memory.search(query, limit=5)
             if results:
-                # Format relevant memories
                 lines = []
                 for r in results:
-                    if r.get("type") == "fact":
-                        lines.append(f"- {r['content']}")
-                    elif r.get("type") == "action":
-                        lines.append(f"- Previously: {r['content']}")
+                    rtype = r.get("type", "")
+                    if rtype == "fact":
+                        lines.append(f"- {r['fact']}")
+                    elif rtype == "memory":
+                        lines.append(f"- {r['memory']}")
+                    elif rtype == "decision":
+                        lines.append(f"- Rule: {r['decision']}")
+                    elif rtype == "action":
+                        lines.append(
+                            f"- Previously used: {r.get('tool_name', 'unknown tool')}"
+                        )
+                    elif rtype == "session":
+                        lines.append(f"- Session context: {r['summary']}")
                 return "\n".join(lines) if lines else "No specific preferences found."
             return "No specific preferences found."
         except Exception as e:

@@ -1,3 +1,7 @@
+> **⚠️ ARCHIVED**: This refactoring plan has been completed. The CoreHandler monolith has been fully replaced by the Kernel Architecture (AgentCore + KernelScheduler + Services + LLMCore + ContextBuilder). The Pipeline/Processor framework has been removed. This document is retained for historical reference only.
+>
+> **Completed**: All 7 implementation plan phases done. See `implementation_plan.md` for the current architecture.
+
 Before (Current in app/)
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                               CLIENTS                                                         │

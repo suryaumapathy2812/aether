@@ -118,15 +118,10 @@ class TestMemoryStoreCore:
         assert rows[0][1] == "Hi there!"
 
     @pytest.mark.asyncio
-    async def test_add_extracts_facts(self, store):
-        """add() extracts facts from the LLM response and stores them."""
-        store.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response(
-                '["User likes Python", "User lives in Chennai"]'
-            )
-        )
-
-        await store.add("I love Python and I live in Chennai", "That's great!")
+    async def test_store_fact_directly(self, store):
+        """_store_fact() stores facts directly (extraction now goes through MemoryService)."""
+        await store._store_fact("User likes Python", conv_id=1)
+        await store._store_fact("User lives in Chennai", conv_id=1)
 
         facts = await store.get_facts()
         assert len(facts) == 2
@@ -136,15 +131,8 @@ class TestMemoryStoreCore:
     @pytest.mark.asyncio
     async def test_get_facts_order(self, store):
         """get_facts() returns facts in reverse chronological order."""
-        store.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response('["Fact A"]')
-        )
-        await store.add("msg1", "reply1")
-
-        store.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response('["Fact B"]')
-        )
-        await store.add("msg2", "reply2")
+        await store._store_fact("Fact A", conv_id=1)
+        await store._store_fact("Fact B", conv_id=2)
 
         facts = await store.get_facts()
         # Most recently updated first
@@ -162,15 +150,11 @@ class TestMemoryStoreCore:
         assert len(rows) == 1
 
     @pytest.mark.asyncio
-    async def test_extract_facts_deduplicates_within_single_turn(self, store):
-        """Extractor deduplicates repeated fact variants in one response."""
-        store.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response(
-                '["User likes Python", "user likes python.", "User likes Python"]'
-            )
-        )
-
-        await store.add("I like Python", "Nice!")
+    async def test_store_fact_deduplicates_variants(self, store):
+        """_store_fact() deduplicates near-identical facts via canonical fact_key."""
+        await store._store_fact("User likes Python", conv_id=1)
+        await store._store_fact("user likes python.", conv_id=1)
+        await store._store_fact("User likes Python", conv_id=1)
 
         facts = await store.get_facts()
         assert len(facts) == 1
@@ -373,10 +357,7 @@ class TestSearch:
     async def test_search_returns_facts(self, store):
         """Search finds stored facts with boost."""
         self._use_constant_embeddings(store)
-        store.openai.chat.completions.create = AsyncMock(
-            return_value=_mock_chat_response('["User prefers dark mode"]')
-        )
-        await store.add("I prefer dark mode", "Noted!")
+        await store._store_fact("User prefers dark mode", conv_id=1)
 
         results = await store.search("dark mode preference")
         fact_results = [r for r in results if r["type"] == "fact"]

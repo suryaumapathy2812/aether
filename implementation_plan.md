@@ -786,9 +786,10 @@ This plan implements the P Worker / E Worker split defined in `Requirements.md` 
 | Agent type definitions | E Worker specialization | Phase 7 |
 
 **Not in scope** (already implemented or deferred):
-- Skill System (§9) — already implemented: 5 tools, loader, 3 directories, marketplace
-- Proactive Engine nightly analysis (§6.2) — requires memory system implementation first
-- Memory System three-bucket model (§7) — separate implementation plan needed
+- Skill System (§9) — already implemented: 6 tools (search, read, create, install, remove, marketplace), loader, 3 directories
+- Proactive Engine nightly analysis (§6.2) — ✅ implemented: `services/nightly_analysis.py`, 4 analysis functions, 24h timer in AgentCore
+- Memory System three-bucket model (§7) — ✅ implemented: facts + memories + decisions tables, three-bucket extraction prompt, decision injection in context builder
+- Notification pipeline (§6.5) — ✅ implemented: notification queue in MemoryStore, 60s sweep in AgentCore, delivery types (suppress/queue/nudge/surface/interrupt)
 - Go rewrite — explicitly deferred to a future phase
 
 ### Three Scenarios After All Phases
@@ -811,6 +812,8 @@ All 7 phases were implemented in the following commits:
 1. **Phases 1–7 (core infrastructure)**: Session store, event bus, session loop, sub-agent manager, async endpoints, compaction, agent types — implemented as a single cohesive pass across `session/`, `kernel/`, `agents/`, `http/`, `tools/`.
 
 2. **Task Ledger (additive)**: Implemented separately after the core phases. Added `session/ledger.py` (TaskLedger class), `tasks` table in SQLite, wired into SubAgentManager (persistent sub-agent tracking), CheckTaskTool (ledger-backed queries), and AgentCore (restart recovery via `resume_interrupted()`). Fully backward compatible — all existing code paths work unchanged when TaskLedger is `None`.
+
+3. **Proactive Engine + Memory System (additive)**: Implemented after the 7 core phases. Added three-bucket memory model (facts, memories, decisions) to `memory/store.py`, three-bucket extraction prompt to `services/memory_service.py`, decision injection to `llm/context_builder.py`, nightly analysis service (`services/nightly_analysis.py`), notification queue and sweep in `agent.py`. Also added `remove_skill` tool and polished the Agent Type System with `coder` and `researcher` agent types, `max_duration` enforcement, and agent type validation in `spawn_task`.
 
 **Key files by phase**:
 
