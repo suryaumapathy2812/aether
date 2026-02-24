@@ -322,6 +322,29 @@ class TestBuildAgentEnvironment:
         assert "AETHER_TURN_DETECTION_MODE" in env
         assert "AETHER_TURN_MODEL_TYPE" in env
 
+    def test_runtime_voice_defaults_are_forwarded(self):
+        """Orchestrator runtime voice defaults are passed to agents."""
+        with patch(
+            "src.agent_manager.AGENT_RUNTIME_ENV_DEFAULTS",
+            {
+                "AETHER_VOICE_BACKEND": "gemini",
+                "AETHER_GEMINI_REALTIME_MODEL": "gemini-2.5-flash-native-audio-latest",
+                "AETHER_GEMINI_TEXT_MODEL": "gemini-2.5-flash",
+                "AETHER_GEMINI_VOICE": "Puck",
+                "AETHER_GEMINI_LANGUAGE": "en",
+            },
+        ):
+            from src.agent_manager import _build_agent_environment
+
+            env = _build_agent_environment("user-42")
+
+        assert env["AETHER_VOICE_BACKEND"] == "gemini"
+        assert (
+            env["AETHER_GEMINI_REALTIME_MODEL"]
+            == "gemini-2.5-flash-native-audio-latest"
+        )
+        assert env["AETHER_GEMINI_TEXT_MODEL"] == "gemini-2.5-flash"
+
 
 # ── Container stop/destroy ─────────────────────────────────
 

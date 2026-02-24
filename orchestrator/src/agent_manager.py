@@ -135,6 +135,25 @@ SYSTEM_API_KEYS = {
     "SARVAM_API_KEY": _strip_wrapping_quotes(os.getenv("SARVAM_API_KEY", "")),
 }
 
+# Runtime model/backend defaults forwarded to spawned agents.
+# These are orchestrator-controlled defaults and can still be overridden by
+# per-user preferences in _build_agent_environment.
+AGENT_RUNTIME_ENV_DEFAULTS = {
+    "AETHER_VOICE_BACKEND": _strip_wrapping_quotes(
+        os.getenv("AETHER_VOICE_BACKEND", "")
+    ),
+    "AETHER_GEMINI_REALTIME_MODEL": _strip_wrapping_quotes(
+        os.getenv("AETHER_GEMINI_REALTIME_MODEL", "")
+    ),
+    "AETHER_GEMINI_TEXT_MODEL": _strip_wrapping_quotes(
+        os.getenv("AETHER_GEMINI_TEXT_MODEL", "")
+    ),
+    "AETHER_GEMINI_VOICE": _strip_wrapping_quotes(os.getenv("AETHER_GEMINI_VOICE", "")),
+    "AETHER_GEMINI_LANGUAGE": _strip_wrapping_quotes(
+        os.getenv("AETHER_GEMINI_LANGUAGE", "")
+    ),
+}
+
 # ── Docker client (lazy) ──────────────────────────────────
 
 _docker_client = None
@@ -369,6 +388,12 @@ def _build_agent_environment(
 
     # API keys: system defaults from orchestrator env
     for key, value in SYSTEM_API_KEYS.items():
+        cleaned = _strip_wrapping_quotes(value)
+        if cleaned:
+            env[key] = cleaned
+
+    # Runtime defaults (voice backend/model) from orchestrator env
+    for key, value in AGENT_RUNTIME_ENV_DEFAULTS.items():
         cleaned = _strip_wrapping_quotes(value)
         if cleaned:
             env[key] = cleaned
