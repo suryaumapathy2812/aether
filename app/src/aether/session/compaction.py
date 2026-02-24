@@ -50,7 +50,7 @@ PRESERVE_RECENT_TURNS = 10
 MAX_SUMMARIZATION_INPUT_CHARS = 12_000
 
 # Marker prefix for compacted summary messages so they can be identified.
-COMPACTION_MARKER = "[compacted_summary]"
+COMPACTION_MARKER = "[Compacted conversation summary]"
 
 # ─── Prompts ──────────────────────────────────────────────────────
 

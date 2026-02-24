@@ -26,9 +26,9 @@ Show a "typing..." indicator in a Telegram chat.
 
 **Returns:** Confirmation that the indicator was sent (or a non-fatal skip notice).
 
-**Use when:** Call this **immediately** upon receiving any Telegram message, before you begin processing or generating a response. The indicator lasts 5 seconds and reassures the user that you are working. It is non-fatal — if it fails, processing continues normally.
+**Use when:** Call this immediately after `handle_telegram_event` returns the `chat_id`, before you begin processing or generating a response. The indicator lasts 5 seconds and reassures the user that you are working. It is non-fatal — if it fails, processing continues normally.
 
-**Important:** Always call `telegram_send_typing` as your very first action when handling an incoming message, before calling `handle_telegram_event` or doing any other work.
+**Important:** Always call `handle_telegram_event` first to extract the `chat_id`, then call `telegram_send_typing` with that `chat_id` before doing any further work.
 
 ---
 
@@ -86,8 +86,8 @@ When a Telegram message arrives, you will receive an instruction like:
 **Always follow this flow:**
 
 ```
-1. telegram_send_typing chat_id=...          ← show "typing..." immediately
-2. handle_telegram_event payload={...}       ← extract chat_id, sender, text
+1. handle_telegram_event payload={...}       ← extract chat_id, sender, text
+2. telegram_send_typing chat_id=...          ← show "typing..." (needs chat_id from step 1)
 3. Decide: reply, ignore, or take action
 4. telegram_send_message chat_id=... text="..."   ← reply to the user
 ```
@@ -123,29 +123,31 @@ If the user asks you to send a Telegram message (e.g. "message me on Telegram wh
 
 **Incoming message: "What's the weather today?"**
 ```
-1. telegram_send_typing chat_id="123456789"
-   → typing indicator shown
-2. handle_telegram_event payload={...}
+1. handle_telegram_event payload={...}
    → chat_id="123456789", sender_name="Alice", text="What's the weather today?"
+2. telegram_send_typing chat_id="123456789"
+   → typing indicator shown
 3. [look up weather or use knowledge]
 4. telegram_send_message chat_id="123456789" text="It's 22°C and sunny in your area today ☀️"
 ```
 
 **Incoming message: "Remind me to call Bob at 3pm"**
 ```
-1. telegram_send_typing chat_id="123456789"
-   → typing indicator shown
-2. handle_telegram_event payload={...}
+1. handle_telegram_event payload={...}
    → chat_id="123456789", text="Remind me to call Bob at 3pm"
+2. telegram_send_typing chat_id="123456789"
+   → typing indicator shown
 3. schedule_reminder ... (set the reminder)
 4. telegram_send_message chat_id="123456789" text="Done! I'll remind you to call Bob at 3:00 PM."
 ```
 
 **User asks: "Send me a photo of a sunset"**
 ```
-1. telegram_send_typing chat_id="123456789"
-2. [find or generate a public image URL]
-3. telegram_send_photo chat_id="123456789" photo_url="https://..." caption="Here's a sunset 🌅"
+1. handle_telegram_event payload={...}
+   → chat_id="123456789", text="Send me a photo of a sunset"
+2. telegram_send_typing chat_id="123456789"
+3. [find or generate a public image URL]
+4. telegram_send_photo chat_id="123456789" photo_url="https://..." caption="Here's a sunset 🌅"
 ```
 
 **Proactive notification after a background task:**
@@ -156,8 +158,9 @@ If the user asks you to send a Telegram message (e.g. "message me on Telegram wh
 
 **Long response (automatic chunking):**
 ```
-1. telegram_send_typing chat_id="123456789"
-2. handle_telegram_event payload={...}
+1. handle_telegram_event payload={...}
+   → chat_id="123456789", text="..."
+2. telegram_send_typing chat_id="123456789"
 3. [generate a detailed multi-paragraph response]
 4. telegram_send_message chat_id="123456789" text="[long text, e.g. 6000 chars]"
    → automatically split into 2 chunks and sent sequentially

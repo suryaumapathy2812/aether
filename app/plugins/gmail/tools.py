@@ -1146,11 +1146,12 @@ import os as _os
 
 _ORCHESTRATOR_URL_W = _os.getenv("ORCHESTRATOR_URL", "")
 _AGENT_USER_ID_W = _os.getenv("AETHER_USER_ID", "")
+_GCP_PROJECT_ID = _os.getenv("GCP_PROJECT_ID", "")
 
 
 def _get_gcp_project_id() -> str:
     """Read GCP_PROJECT_ID lazily so hot-reloaded env vars are picked up."""
-    return _os.getenv("GCP_PROJECT_ID", "")
+    return _GCP_PROJECT_ID or _os.getenv("GCP_PROJECT_ID", "")
 
 
 def _get_pubsub_topic() -> str:

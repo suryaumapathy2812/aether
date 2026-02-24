@@ -17,6 +17,11 @@ auth:
       type: text
       required: false
       description: Optional. Comma-separated list of chat IDs that can send messages to the agent. Leave blank to allow any chat. Get your chat ID by messaging @userinfobot on Telegram.
+    - key: secret_token
+      label: Webhook Secret Token
+      type: password
+      required: false
+      description: Optional but recommended. A random string you set when registering your webhook with Telegram (setWebhook secret_token parameter). Prevents spoofed requests.
 
 webhook:
   protocol: http

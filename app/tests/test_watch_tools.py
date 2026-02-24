@@ -414,7 +414,7 @@ class TestSetupCalendarWatchTool:
         mock_client = _make_async_client(watch_resp)
 
         with (
-            patch.object(_cal_mod, "_ORCHESTRATOR_URL_W", "http://orch:8080"),
+            patch.object(_cal_mod, "_PUBLIC_HOOK_URL", "https://orch:8080"),
             patch.object(_cal_mod, "_AGENT_USER_ID_W", "user-1"),
             patch.object(_cal_mod, "httpx") as mock_httpx,
             patch.object(tool, "_register_watch", AsyncMock()) as reg,
@@ -457,7 +457,7 @@ class TestSetupCalendarWatchTool:
         mock_client = _make_async_client(resp_403)
 
         with (
-            patch.object(_cal_mod, "_ORCHESTRATOR_URL_W", "http://orch:8080"),
+            patch.object(_cal_mod, "_PUBLIC_HOOK_URL", "https://orch:8080"),
             patch.object(_cal_mod, "_AGENT_USER_ID_W", "user-1"),
             patch.object(_cal_mod, "httpx") as mock_httpx,
         ):
