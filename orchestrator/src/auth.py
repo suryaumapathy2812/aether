@@ -45,9 +45,27 @@ async def get_user_id(request: Request) -> str:
         raise HTTPException(401, "Missing authorization")
 
     for token in tokens:
-        user_id = await _validate_token(token)
+        user_id, _ = await _validate_token_identity(token)
         if user_id:
             return user_id
+
+    raise HTTPException(401, "Invalid or expired session")
+
+
+async def get_request_identity(request: Request) -> tuple[str, str | None]:
+    """Resolve request identity as (user_id, device_id).
+
+    For dashboard session tokens, returns (user_id, None).
+    For paired device tokens, returns (user_id, device_id).
+    """
+    tokens = _extract_tokens_from_request(request)
+    if not tokens:
+        raise HTTPException(401, "Missing authorization")
+
+    for token in tokens:
+        user_id, device_id = await _validate_token_identity(token)
+        if user_id:
+            return user_id, device_id
 
     raise HTTPException(401, "Invalid or expired session")
 
@@ -71,7 +89,8 @@ async def get_user_id_from_ws(ws: WebSocket) -> str | None:
     if not token:
         return None
 
-    return await _validate_token(token)
+    user_id, _ = await _validate_token_identity(token)
+    return user_id
 
 
 def _extract_tokens_from_request(request: Request) -> list[str]:
@@ -123,6 +142,12 @@ async def _validate_token(token: str) -> str | None:
 
     Returns the user_id if valid, None otherwise.
     """
+    user_id, _ = await _validate_token_identity(token)
+    return user_id
+
+
+async def _validate_token_identity(token: str) -> tuple[str | None, str | None]:
+    """Validate token and return (user_id, device_id)."""
     pool = await get_pool()
 
     # 1. Check better-auth session table
@@ -131,11 +156,11 @@ async def _validate_token(token: str) -> str | None:
         token,
     )
     if row:
-        return row["user_id"]
+        return row["user_id"], None
 
     # 2. Check device tokens (iOS pairing flow)
     row = await pool.fetchrow(
-        "SELECT user_id FROM devices WHERE token = $1",
+        "SELECT id, user_id FROM devices WHERE token = $1",
         token,
     )
     if row:
@@ -143,7 +168,7 @@ async def _validate_token(token: str) -> str | None:
         await pool.execute(
             "UPDATE devices SET last_seen = now() WHERE token = $1", token
         )
-        return row["user_id"]
+        return row["user_id"], row["id"]
 
-    log.debug(f"Token validation failed (not found in session or devices)")
-    return None
+    log.debug("Token validation failed (not found in session or devices)")
+    return None, None

@@ -101,7 +101,7 @@ class TestValidateToken:
         mock_pool = AsyncMock()
         # First call (session table) returns None, second (devices) returns match
         mock_pool.fetchrow = AsyncMock(
-            side_effect=[None, make_record(user_id="user-456")]
+            side_effect=[None, make_record(id="dev-1", user_id="user-456")]
         )
         mock_pool.execute = AsyncMock()
 
@@ -113,6 +113,23 @@ class TestValidateToken:
         mock_pool.execute.assert_called_once()
         call_sql = mock_pool.execute.call_args[0][0]
         assert "last_seen" in call_sql
+
+    @pytest.mark.asyncio
+    async def test_validate_token_identity_includes_device_id(self):
+        """Device token identity returns both user_id and device_id."""
+        from src.auth import _validate_token_identity
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[None, make_record(id="dev-22", user_id="user-22")]
+        )
+        mock_pool.execute = AsyncMock()
+
+        with patch("src.auth.get_pool", return_value=mock_pool):
+            user_id, device_id = await _validate_token_identity("device-token")
+
+        assert user_id == "user-22"
+        assert device_id == "dev-22"
 
     @pytest.mark.asyncio
     async def test_invalid_token(self):
@@ -156,7 +173,9 @@ class TestGetUserId:
         request = _make_request("Bearer good-token")
 
         with patch(
-            "src.auth._validate_token", new_callable=AsyncMock, return_value="user-789"
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=("user-789", None),
         ):
             result = await get_user_id(request)
 
@@ -183,11 +202,47 @@ class TestGetUserId:
         request = _make_request("Bearer bad-token")
 
         with patch(
-            "src.auth._validate_token", new_callable=AsyncMock, return_value=None
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=(None, None),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await get_user_id(request)
             assert exc_info.value.status_code == 401
+
+
+class TestGetRequestIdentity:
+    @pytest.mark.asyncio
+    async def test_returns_user_without_device_for_session_token(self):
+        from src.auth import get_request_identity
+
+        request = _make_request("Bearer session-token")
+
+        with patch(
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=("user-1", None),
+        ):
+            user_id, device_id = await get_request_identity(request)
+
+        assert user_id == "user-1"
+        assert device_id is None
+
+    @pytest.mark.asyncio
+    async def test_returns_user_and_device_for_device_token(self):
+        from src.auth import get_request_identity
+
+        request = _make_request("Bearer device-token")
+
+        with patch(
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=("user-9", "dev-9"),
+        ):
+            user_id, device_id = await get_request_identity(request)
+
+        assert user_id == "user-9"
+        assert device_id == "dev-9"
 
 
 # ── get_user_id_from_ws (WebSocket) ───────────────────────
@@ -202,7 +257,9 @@ class TestGetUserIdFromWs:
         ws = _make_websocket(token_param="ws-token")
 
         with patch(
-            "src.auth._validate_token", new_callable=AsyncMock, return_value="user-ws"
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=("user-ws", None),
         ):
             result = await get_user_id_from_ws(ws)
 
@@ -216,7 +273,9 @@ class TestGetUserIdFromWs:
         ws = _make_websocket(auth_header="Bearer header-token")
 
         with patch(
-            "src.auth._validate_token", new_callable=AsyncMock, return_value="user-hdr"
+            "src.auth._validate_token_identity",
+            new_callable=AsyncMock,
+            return_value=("user-hdr", None),
         ):
             result = await get_user_id_from_ws(ws)
 
@@ -232,9 +291,9 @@ class TestGetUserIdFromWs:
         )
 
         with patch(
-            "src.auth._validate_token",
+            "src.auth._validate_token_identity",
             new_callable=AsyncMock,
-            return_value="user-param",
+            return_value=("user-param", None),
         ) as mock_validate:
             result = await get_user_id_from_ws(ws)
 

@@ -972,6 +972,7 @@ async def webrtc_offer(request: Request) -> JSONResponse:
     sdp = body.get("sdp", "")
     sdp_type = body.get("type", "offer")
     user_id = body.get("user_id", "")
+    device_id = body.get("device_id", "")
     pc_id = body.get("pc_id")
 
     if not sdp:
@@ -982,6 +983,7 @@ async def webrtc_offer(request: Request) -> JSONResponse:
             sdp=sdp,
             sdp_type=sdp_type,
             user_id=user_id,
+            device_id=device_id,
             pc_id=pc_id,
         )
         # Exempt this agent from idle-kill while a WebRTC session is active.

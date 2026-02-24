@@ -145,15 +145,23 @@ class WSSidecar:
         action = str(feedback.get("action", "")).strip().lower()
         plugin = str(feedback.get("plugin", "unknown")).strip() or "unknown"
         sender = str(feedback.get("sender", "")).strip()
-        notification_id = feedback.get("notification_id")
+        notification_id = self._parse_notification_id(feedback.get("notification_id"))
+        device_id = str(feedback.get("device_id", "")).strip()
 
         # Persist explicit delivery-state feedback for learning loop telemetry.
-        if isinstance(notification_id, int):
+        status: str | None = None
+        if notification_id is not None:
             try:
                 if action == "dismissed":
                     await self.agent._memory_store.mark_dismissed(notification_id)
+                    status = "dismissed"
                 elif action in {"engaged", "opened"}:
                     await self.agent._memory_store.mark_delivered(notification_id)
+                    status = "delivered"
+                elif action == "snoozed":
+                    status = "snoozed"
+                elif action == "muted":
+                    status = "muted"
             except Exception as e:
                 logger.warning("Failed to update notification status: %s", e)
 
@@ -173,6 +181,29 @@ class WSSidecar:
                 logger.info("Notification feedback stored: %s", fact)
             except Exception as e:
                 logger.warning("Failed to store notification feedback: %s", e)
+
+        # Cross-device coherence: mirror per-notification state updates so all
+        # connected dashboards/devices converge on the same view.
+        if notification_id is not None and status is not None:
+            await self.push(
+                "notification_status",
+                {
+                    "notification_id": notification_id,
+                    "status": status,
+                    "action": action,
+                    "plugin": plugin,
+                    "sender": sender,
+                    "device_id": device_id,
+                },
+            )
+
+    @staticmethod
+    def _parse_notification_id(raw: object) -> int | None:
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+        return None
 
     @property
     def connection_count(self) -> int:

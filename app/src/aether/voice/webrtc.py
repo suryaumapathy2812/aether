@@ -81,8 +81,10 @@ class WebRTCConnection:
     _audio_frame_count: int = field(default=0, repr=False)
     is_reconnect: bool = False  # True if reusing an existing VoiceSession
     session_key: str = ""  # Key into WebRTCVoiceTransport._sessions
+    device_id: str = ""
     _disconnect_grace_task: Any | None = field(default=None, repr=False)
     last_activity_at: float = field(default_factory=lambda: __import__("time").time())
+    offer_epoch: int = 0
 
 
 class WebRTCAudioInput(AudioInput):
@@ -210,6 +212,9 @@ class WebRTCVoiceTransport:
         self._connections: dict[str, WebRTCConnection] = {}
         # Persistent sessions keyed by user_id — survive WebRTC disconnects
         self._sessions: dict[str, VoiceSession] = {}
+        # Monotonic offer epoch per logical session key.
+        # Used to make handoff ordering explicit and deterministic.
+        self._offer_epoch: dict[str, int] = {}
         # Optional callback: called with False when all persistent sessions are gone.
         # Wire this up in main.py to clear the orchestrator keep_alive flag.
         self.on_sessions_empty: Callable[[], Any] | None = None
@@ -219,6 +224,7 @@ class WebRTCVoiceTransport:
         sdp: str,
         sdp_type: str = "offer",
         user_id: str = "",
+        device_id: str = "",
         pc_id: str | None = None,
     ) -> dict:
         """Handle SDP offer → create peer connection + VoiceSession → return answer."""
@@ -245,10 +251,17 @@ class WebRTCVoiceTransport:
         # Reuse existing session for this user if one exists (persistent session).
         # This preserves dialog history and agent state across reconnects.
         session_key = user_id or pc_id
+        owner_device_id = device_id or f"anonymous:{pc_id}"
+        offer_epoch = self._next_offer_epoch(session_key)
 
         # Canonical session arbitration: keep only one active peer connection
         # per logical session key. New offer wins (last-write-wins).
-        await self._evict_connections_for_session(session_key)
+        handoff_from = await self._evict_connections_for_session(
+            session_key,
+            winner_device_id=owner_device_id,
+            winner_pc_id=pc_id,
+            winner_epoch=offer_epoch,
+        )
 
         is_reconnect = session_key in self._sessions
         if is_reconnect:
@@ -290,6 +303,8 @@ class WebRTCVoiceTransport:
             vad_mode=config.vad.mode,
             is_reconnect=is_reconnect,
             session_key=session_key,
+            device_id=owner_device_id,
+            offer_epoch=offer_epoch,
         )
 
         if config.vad.mode in ("shadow", "active"):
@@ -322,25 +337,46 @@ class WebRTCVoiceTransport:
             "sdp": pc.localDescription.sdp,
             "type": pc.localDescription.type,
             "pc_id": pc_id,
+            "active_device_id": owner_device_id,
+            "handoff_from_device_id": handoff_from,
         }
 
-    async def _evict_connections_for_session(self, session_key: str) -> None:
-        stale_pc_ids = [
-            pc_id
+    def _next_offer_epoch(self, session_key: str) -> int:
+        next_epoch = self._offer_epoch.get(session_key, 0) + 1
+        self._offer_epoch[session_key] = next_epoch
+        return next_epoch
+
+    async def _evict_connections_for_session(
+        self,
+        session_key: str,
+        *,
+        winner_device_id: str,
+        winner_pc_id: str,
+        winner_epoch: int,
+    ) -> str | None:
+        stale_connections = [
+            (pc_id, conn)
             for pc_id, conn in self._connections.items()
             if conn.session_key == session_key
         ]
+        stale_pc_ids = [pc_id for pc_id, _ in stale_connections]
         if not stale_pc_ids:
-            return
+            return None
+
+        previous_owner = stale_connections[0][1].device_id or None
 
         for stale_pc_id in stale_pc_ids:
             stale = self._connections.pop(stale_pc_id, None)
             if stale is None:
                 continue
             logger.info(
-                "Evicting stale WebRTC connection %s for session %s",
-                stale_pc_id,
+                "Session handoff: session=%s old_pc=%s old_device=%s new_pc=%s new_device=%s epoch=%s",
                 session_key,
+                stale_pc_id,
+                stale.device_id or "unknown",
+                winner_pc_id,
+                winner_device_id,
+                winner_epoch,
             )
             try:
                 if (
@@ -355,6 +391,7 @@ class WebRTCVoiceTransport:
                 logger.debug(
                     "Failed evicting stale connection %s", stale_pc_id, exc_info=True
                 )
+        return previous_owner
 
     async def handle_ice_candidate(
         self,

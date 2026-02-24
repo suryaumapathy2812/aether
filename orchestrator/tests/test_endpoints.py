@@ -614,6 +614,48 @@ class TestMemoryProxy:
         assert resp.status_code == 200
 
 
+class TestWebRtcProxy:
+    def test_webrtc_offer_forwards_device_id_when_present(self, app_client):
+        client, _ = app_client
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "sdp": "answer-sdp",
+            "type": "answer",
+            "pc_id": "pc-1",
+        }
+
+        with (
+            patch(
+                "src.main.get_request_identity",
+                new_callable=AsyncMock,
+                return_value=("user-1", "dev-1"),
+            ),
+            patch(
+                "src.main._get_agent_for_user",
+                new_callable=AsyncMock,
+                return_value=make_record(host="agent", port=8000),
+            ),
+            patch("src.main.httpx.AsyncClient") as MockClient,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            MockClient.return_value = mock_client
+
+            resp = client.post(
+                "/api/webrtc/offer",
+                json={"sdp": "offer-sdp", "type": "offer", "pc_id": "pc-1"},
+            )
+
+        assert resp.status_code == 200
+        forwarded = mock_client.post.call_args.kwargs["json"]
+        assert forwarded["user_id"] == "user-1"
+        assert forwarded["device_id"] == "dev-1"
+
+
 # ── Verify Agent Secret ───────────────────────────────────
 
 
