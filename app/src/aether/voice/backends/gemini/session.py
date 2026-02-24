@@ -245,9 +245,16 @@ class GeminiRealtimeSession(RealtimeSession):
                     return
 
             try:
+                # The SDK's receive() breaks after each turn_complete, so we
+                # must call it repeatedly on the SAME session to keep the
+                # websocket alive and preserve conversational context.
                 async for message in self._session.receive():
                     for event in self._parse_live_message(message):
                         await self._event_queue.put(event)
+                # receive() ended normally — turn is complete but the
+                # websocket is still open.  Loop back to call receive()
+                # again on the same session.
+                continue
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -278,19 +285,6 @@ class GeminiRealtimeSession(RealtimeSession):
                 if not recoverable:
                     return
                 continue
-
-            # Server closed the stream without an exception (normal session expiry).
-            # This is expected — Gemini Live sessions have a finite lifetime.
-            # Reconnect transparently using session resumption if available.
-            logger.info(
-                "Gemini session stream ended (%s) — reconnecting with resumption",
-                self._session_id,
-            )
-            self._connected = False
-            self._connection_dropped = True
-            if self._degraded_since is None:
-                self._degraded_since = time.time()
-            await self._close_session_context()
 
     def _parse_live_message(self, message: Any) -> list[RealtimeEvent]:
         """Parse a LiveServerMessage (Pydantic model) into RealtimeEvents.
