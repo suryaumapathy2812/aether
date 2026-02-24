@@ -96,7 +96,7 @@ The system consists of five logical layers. Each layer has a defined responsibil
 
 The agent is internally split into two roles that run within the same agent process:
 
-**P Worker (Performance Worker)** — the conversational LLM. Its only job is to stay responsive to the user at all times. It must never be blocked by a tool call, a slow API, or a long-running task. When the user speaks or types, the P worker responds immediately. When a tool needs to run, the P worker delegates to the E worker and continues the conversation.
+**P Worker (Performance Worker)** — the multimodal realtime model. Its primary job is to stay responsive to the user at all times — via voice, text, or video. It handles simple requests directly (single tool calls, lookups, memory) and delegates complex tasks to the E Worker. It must never be blocked by a slow API or a long-running task. When a complex task needs to run, the P Worker delegates to the E Worker and continues the conversation.
 
 **E Worker (Execution Worker)** — the task executor. It picks up delegated work from the P worker, executes it (tool calls, API calls, file operations, code execution, browser automation), and notifies the P worker when done. The P worker then informs the user of the result.
 
@@ -135,7 +135,7 @@ The Task Ledger serves three purposes:
 ```
 {
   "task_id":      "uuid",
-  "type":         "tool_call | memory_extract | proactive_check | scheduled",
+  "type":         "tool_call | delegation | sub_agent | memory_extract | proactive_check | scheduled",
   "status":       "pending | running | complete | error",
   "payload":      { ... },          // input to the task
   "result":       { ... },          // output from the task (null until complete)
@@ -159,7 +159,7 @@ No other transitions are valid. A task cannot go backwards. A failed task can be
 
 | Actor | Can do |
 |---|---|
-| P Worker | Create new tasks (status: `pending`), read any task's status and result |
+| P Worker | Create new tasks (status: `pending`), log tool executions (`tool_call`), read any task's status and result |
 | E Worker | Pick up `pending` tasks, set to `running`, set to `complete` or `error` with result |
 | LLM | Read the ledger via a tool (e.g., `check_tasks`) — used to answer "what's happening with X?" |
 
