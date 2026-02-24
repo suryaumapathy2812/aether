@@ -81,6 +81,8 @@ class TaskLedger:
         Called by the P Worker to delegate work to the E Worker.
         The task starts in 'pending' status.
         """
+        await self._store.ensure_session(session_id)
+
         task = await self._store.create_task(
             session_id=session_id,
             task_type=task_type,
