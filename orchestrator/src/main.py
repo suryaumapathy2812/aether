@@ -1013,6 +1013,22 @@ async def proxy_memory_conversations(
         return resp.json()
 
 
+@app.get("/api/metrics/latency")
+async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
+    """Proxy app latency/SLO snapshot for dashboard observability."""
+    agent = await _get_agent_for_user(user_id)
+    if not agent:
+        raise HTTPException(404, "No agent assigned")
+
+    import httpx
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"http://{agent['host']}:{agent['port']}/metrics/latency"
+        )
+        return resp.json()
+
+
 # ── WebRTC Signaling Proxy ─────────────────────────────────
 
 

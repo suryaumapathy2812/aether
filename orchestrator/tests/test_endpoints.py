@@ -656,6 +656,30 @@ class TestWebRtcProxy:
         assert forwarded["device_id"] == "dev-1"
 
 
+class TestMetricsProxy:
+    def test_latency_metrics_proxies_to_agent(self, app_client):
+        client, pool = app_client
+
+        pool.fetchrow = AsyncMock(return_value=make_record(host="agent", port=8000))
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "services": {"notification_delivery_p95_ms": 1200}
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            MockClient.return_value = mock_client
+
+            resp = client.get("/api/metrics/latency", headers=_auth_header())
+
+        assert resp.status_code == 200
+        assert resp.json()["services"]["notification_delivery_p95_ms"] == 1200
+
+
 # ── Verify Agent Secret ───────────────────────────────────
 
 

@@ -82,6 +82,22 @@ export async function deleteApiKey(provider: string) {
   });
 }
 
+// ── Observability ──
+
+export interface LatencyMetrics {
+  chat?: { ttft_p95_ms?: number | null };
+  voice?: { ttft_p95_ms?: number | null; tts_p95_ms?: number | null };
+  kernel?: { enqueue_delay_p95_ms?: number | null };
+  services?: {
+    notification_delivery_p95_ms?: number | null;
+    delegation_duration_p95_ms?: number | null;
+  };
+}
+
+export async function getLatencyMetrics() {
+  return api<LatencyMetrics>("/api/metrics/latency");
+}
+
 // ── Memory ──
 
 export async function getMemoryFacts() {
