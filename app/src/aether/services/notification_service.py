@@ -68,6 +68,13 @@ Examples of good notifications:
 Notification:"""
 
 VALID_DECISIONS = {"surface", "archive", "action_required", "deferred"}
+DELIVERY_TYPES = {"suppress", "queue", "nudge", "surface", "interrupt"}
+ACTION_TO_DELIVERY = {
+    "archive": "suppress",
+    "deferred": "queue",
+    "surface": "surface",
+    "action_required": "interrupt",
+}
 
 
 @dataclass
@@ -134,6 +141,13 @@ class NotificationService:
         return NotificationDecision(
             action=action, notification=notification, event=event
         )
+
+    @staticmethod
+    def to_delivery_type(action: str) -> str:
+        normalized = str(action).strip().lower()
+        if normalized in DELIVERY_TYPES:
+            return normalized
+        return ACTION_TO_DELIVERY.get(normalized, "suppress")
 
     async def _get_preferences(self, event: "PluginEvent") -> str:
         """Query memory for user preferences related to this event."""

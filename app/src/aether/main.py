@@ -1419,24 +1419,43 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
     )
 
     decision = await notification_service.process_event(event)
+    delivery_type = notification_service.to_delivery_type(decision.action)
 
-    # Broadcast notification to WS sidecar clients via AgentCore
-    if decision.action in ("surface", "action_required"):
-        level = "speak" if decision.action == "action_required" else "nudge"
+    notification_text = (decision.notification or event.summary or "").strip()
+    notification_id = None
+    if notification_text:
+        notification_id = await memory_store.queue_notification(
+            text=notification_text,
+            delivery_type=delivery_type,
+            source="plugin_event",
+            metadata={
+                "event_id": event.id,
+                "plugin": event.plugin,
+                "event_type": event.event_type,
+                "action": decision.action,
+            },
+        )
 
-        # For "speak" level, deliver through active voice sessions
-        if level == "speak" and decision.notification:
-            await agent_core.speak_notification(decision.notification)
-        else:
-            await agent_core.broadcast_notification(
-                {
-                    "event_id": event.id,
-                    "plugin": event.plugin,
-                    "level": level,
-                    "text": decision.notification,
-                    "actions": event.available_actions,
-                }
-            )
+    # Immediate deliveries are broadcast/spoken now. Deferred/suppressed stay queued.
+    if delivery_type in {"nudge", "surface", "interrupt"} and notification_text:
+        level = "nudge" if delivery_type == "nudge" else "speak"
+
+        if delivery_type == "interrupt":
+            await agent_core.speak_notification(notification_text)
+
+        await agent_core.broadcast_notification(
+            {
+                "event_id": event.id,
+                "plugin": event.plugin,
+                "level": level,
+                "text": notification_text,
+                "actions": event.available_actions,
+                "notification_id": notification_id,
+            }
+        )
+
+        if notification_id is not None:
+            await memory_store.mark_delivered(notification_id)
 
     # Report decision back to orchestrator
     if ORCHESTRATOR_URL and body.get("event_id"):
@@ -1448,6 +1467,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
                     f"{ORCHESTRATOR_URL}/api/internal/events/{body['event_id']}/decision",
                     json={
                         "decision": decision.action,
+                        "delivery_type": delivery_type,
                         "notification": decision.notification,
                     },
                     headers=_agent_auth_headers(),
@@ -1456,7 +1476,12 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
             logger.warning(f"Decision callback failed: {e}")
 
     return JSONResponse(
-        {"action": decision.action, "notification": decision.notification}
+        {
+            "action": decision.action,
+            "delivery_type": delivery_type,
+            "notification": decision.notification,
+            "notification_id": notification_id,
+        }
     )
 
 

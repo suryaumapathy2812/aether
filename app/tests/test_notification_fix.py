@@ -266,6 +266,21 @@ class TestEventProcessorPreferences:
         prefs = await processor._get_preferences(event)
         assert "Mute Slack after 9pm" in prefs
 
+
+class TestNotificationDeliveryMapping:
+    def test_maps_legacy_actions_to_delivery_types(self):
+        assert NotificationService.to_delivery_type("archive") == "suppress"
+        assert NotificationService.to_delivery_type("deferred") == "queue"
+        assert NotificationService.to_delivery_type("surface") == "surface"
+        assert NotificationService.to_delivery_type("action_required") == "interrupt"
+
+    def test_accepts_delivery_type_input_directly(self):
+        assert NotificationService.to_delivery_type("nudge") == "nudge"
+        assert NotificationService.to_delivery_type("interrupt") == "interrupt"
+
+    def test_unknown_action_defaults_to_suppress(self):
+        assert NotificationService.to_delivery_type("totally_unknown") == "suppress"
+
     @pytest.mark.asyncio
     async def test_get_preferences_handles_memory_type(self):
         """Positive: EventProcessor handles memory type correctly.
