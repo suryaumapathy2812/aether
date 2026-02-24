@@ -78,12 +78,41 @@ PLANNER_AGENT = AgentTypeDefinition(
     max_duration=120.0,
 )
 
+CODER_AGENT = AgentTypeDefinition(
+    name="coder",
+    description="Code writing agent with full file system access",
+    system_prompt=(
+        "You are a coding agent. Your job is to implement code changes as specified. "
+        "Read existing code to understand patterns, then write or modify files. "
+        "Always verify your changes compile/parse correctly. Be precise and follow "
+        "existing code conventions. Report what you changed and why."
+    ),
+    denied_tools=["spawn_task", "check_task"],
+    max_iterations=30,
+    max_duration=300.0,
+)
+
+RESEARCHER_AGENT = AgentTypeDefinition(
+    name="researcher",
+    description="Web research agent with search and read access",
+    system_prompt=(
+        "You are a research agent. Your job is to find information using web search "
+        "and file reading. Synthesize findings into clear, well-sourced summaries. "
+        "Cross-reference multiple sources when possible. Be thorough but concise."
+    ),
+    allowed_tools=["web_search", "read_file", "list_directory"],
+    max_iterations=20,
+    max_duration=180.0,
+)
+
 # Registry of all agent types
 _AGENT_TYPES: dict[str, AgentTypeDefinition] = {
     "default": GENERAL_AGENT,
     "general": GENERAL_AGENT,
     "explore": EXPLORE_AGENT,
     "planner": PLANNER_AGENT,
+    "coder": CODER_AGENT,
+    "researcher": RESEARCHER_AGENT,
 }
 
 

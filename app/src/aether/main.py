@@ -47,6 +47,7 @@ from aether.tools.search_skill import SearchSkillTool
 from aether.tools.read_skill import ReadSkillTool
 from aether.tools.create_skill import CreateSkillTool
 from aether.tools.install_skill import InstallSkillTool
+from aether.tools.remove_skill import RemoveSkillTool
 from aether.tools.search_marketplace import SearchMarketplaceTool
 from aether.tools.install_package import InstallPackageTool
 from aether.skills.loader import Skill, SkillLoader
@@ -156,6 +157,7 @@ tool_registry.register(SearchSkillTool(skill_loader=skill_loader))
 tool_registry.register(ReadSkillTool(skill_loader=skill_loader))
 tool_registry.register(CreateSkillTool(skill_loader=skill_loader))
 tool_registry.register(InstallSkillTool(skill_loader=skill_loader))
+tool_registry.register(RemoveSkillTool(skill_loader=skill_loader))
 tool_registry.register(SearchMarketplaceTool())
 tool_registry.register(InstallPackageTool())
 

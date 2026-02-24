@@ -171,6 +171,27 @@ class SessionLoop:
                 )
                 agent_def = get_agent_type(agent_type_name)
 
+                # Enforce agent-type max_duration (may be stricter than global limit)
+                elapsed = time.time() - started_at
+                if elapsed > agent_def.max_duration:
+                    logger.warning(
+                        "Session %s exceeded max_duration (%.1fs > %.1fs) for agent type '%s'",
+                        session_id,
+                        elapsed,
+                        agent_def.max_duration,
+                        agent_def.name,
+                    )
+                    await self._session_store.add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content=(
+                            f"[Session timed out after {elapsed:.0f}s "
+                            f"— max duration for '{agent_def.name}' agent is "
+                            f"{agent_def.max_duration:.0f}s]"
+                        ),
+                    )
+                    break
+
                 from aether.llm.context_builder import SessionState
 
                 session_state = SessionState(

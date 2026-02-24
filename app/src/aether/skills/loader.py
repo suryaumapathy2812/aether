@@ -94,6 +94,14 @@ class SkillLoader:
         self._skills[skill.name] = skill
         logger.info(f"Registered skill: {skill.name}")
 
+    def unregister(self, name: str) -> bool:
+        """Unregister a skill by name. Returns True if found and removed."""
+        if name in self._skills:
+            del self._skills[name]
+            logger.info(f"Unregistered skill: {name}")
+            return True
+        return False
+
     def get(self, name: str) -> Skill | None:
         """Get a skill by name."""
         return self._skills.get(name)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from aether.agents.agent_types import get_agent_type, list_agent_types
 from aether.tools.base import AetherTool, ToolParam, ToolResult
 
 if TYPE_CHECKING:
@@ -34,10 +35,15 @@ class SpawnTaskTool(AetherTool):
         ToolParam(
             name="agent_type",
             type="string",
-            description="Type of agent to use: general, explore, planner",
+            description=(
+                "Type of agent to spawn. Available types: "
+                "'general' (full tool access), 'explore' (read-only), "
+                "'planner' (read-only, produces plans), 'coder' (file system access), "
+                "'researcher' (web search + read). Default: 'general'."
+            ),
             required=False,
             default="general",
-            enum=["general", "explore", "planner"],
+            enum=["general", "explore", "planner", "coder", "researcher"],
         ),
     ]
 
@@ -50,6 +56,15 @@ class SpawnTaskTool(AetherTool):
         self._parent_session_id = parent_session_id
 
     async def execute(self, prompt: str, agent_type: str = "general") -> ToolResult:
+        # Validate that the requested agent type exists
+        agent_def = get_agent_type(agent_type)
+        if agent_def.name != agent_type and agent_type not in ("default",):
+            available = [t.name for t in list_agent_types()]
+            return ToolResult.fail(
+                f"Unknown agent type '{agent_type}'. "
+                f"Available types: {', '.join(available)}"
+            )
+
         try:
             child_id = await self._manager.spawn(
                 prompt=prompt,
