@@ -1362,55 +1362,59 @@ async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
 
 @app.get("/api/agent/ready")
 async def agent_ready(user_id: str = Depends(get_user_id)):
-    """Return agent readiness, provisioning if needed.
+    """Check if the user's agent is reachable, provisioning if needed.
 
-    Uses the same _get_agent_for_user path as every other endpoint so
-    provisioning actually happens synchronously before we return.
-
-    Returns:
-        ready: bool — true only when agent is reachable and healthy
-        status: "running" | "starting" | "unreachable" | "not_provisioned"
-        message: human-readable description
+    Same pattern as /api/metrics/latency: try → mark stale → reprovision → retry.
     """
-    agent = await _get_agent_for_user(user_id)
-    if not agent:
-        # _get_agent_for_user already tried provisioning and waited.
-        # Check if there's a row in starting state.
-        pool = await get_pool()
-        row = await pool.fetchrow(
-            "SELECT status FROM agents WHERE user_id = $1", user_id
-        )
-        if row and row["status"] == "starting":
-            return {
-                "ready": False,
-                "status": "starting",
-                "message": "Agent is starting up…",
-            }
-        return {
-            "ready": False,
-            "status": "not_provisioned",
-            "message": "Agent could not be provisioned. Check orchestrator logs.",
-        }
 
-    # Agent row found — probe health to confirm it's actually reachable.
-    try:
+    async def _probe(agent_row: dict) -> bool:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
-                f"http://{agent['host']}:{agent['port']}/health",
+                f"http://{agent_row['host']}:{agent_row['port']}/health"
             )
-            if resp.status_code == 200:
-                return {"ready": True, "status": "running", "message": "Agent is ready"}
-            log.warning(
-                "Agent health returned %d for user %s", resp.status_code, user_id
-            )
+            return resp.status_code == 200
+
+    # First attempt: provision if needed, then probe.
+    try:
+        agent = await _get_agent_for_user(user_id)
+    except Exception as exc:
+        log.warning("Agent lookup failed for user %s: %s", user_id, exc)
+        agent = None
+    if not agent:
+        return {"ready": False}
+
+    try:
+        if await _probe(agent):
+            return {"ready": True}
     except (httpx.ConnectError, httpx.TimeoutException) as exc:
         log.warning("Agent unreachable for user %s: %s", user_id, exc)
 
-    return {
-        "ready": False,
-        "status": "unreachable",
-        "message": "Agent registered but not responding. It may still be starting.",
-    }
+    # Agent unreachable — mark stale and reprovision (same as /latency).
+    try:
+        pool = await get_pool()
+        await pool.execute(
+            "UPDATE agents SET status = 'stopped' WHERE user_id = $1", user_id
+        )
+    except Exception:
+        log.debug("Failed marking stale agent row as stopped", exc_info=True)
+
+    try:
+        agent = await _get_agent_for_user(user_id)
+    except Exception as exc:
+        log.warning("Agent reprovision failed for user %s: %s", user_id, exc)
+        agent = None
+    if not agent:
+        return {"ready": False}
+
+    try:
+        if await _probe(agent):
+            return {"ready": True}
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        log.warning(
+            "Agent still unreachable after reprovision for user %s: %s", user_id, exc
+        )
+
+    return {"ready": False}
 
 
 @app.post("/api/webrtc/offer")
