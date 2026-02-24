@@ -154,6 +154,10 @@ export default function ChatPage() {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
 
+    // Request downstream audio from agent even for text-first chat so the
+    // SDP includes an audio m-line compatible with server-side WebRTC setup.
+    pc.addTransceiver("audio", { direction: "recvonly" });
+
     const channel = pc.createDataChannel("aether-events");
     dcRef.current = channel;
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -283,9 +284,15 @@ class WebRTCVoiceTransport:
             )
             self._sessions[session_key] = voice_session
 
-        # Create outbound audio track
+        # Create outbound audio track.
+        # Important: only attach to RTCPeerConnection when the remote offer
+        # includes an audio m-line. Some text-only WebRTC clients (dashboard)
+        # negotiate only a data channel; forcing addTrack in that case causes
+        # aiortc answer direction resolution failures.
+        offer_has_audio = bool(re.search(r"^m=audio\s", sdp, re.MULTILINE))
         audio_out = AudioOutputTrack()
-        pc.addTrack(audio_out)
+        if offer_has_audio:
+            pc.addTrack(audio_out)
         audio_input = WebRTCAudioInput()
         audio_output = WebRTCAudioOutput(audio_out)
         text_output: TextOutput = NullTextOutput()
