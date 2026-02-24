@@ -31,7 +31,7 @@ from fastapi import (
     Depends,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from .db import get_pool, close_pool, bootstrap_schema
@@ -1016,17 +1016,67 @@ async def proxy_memory_conversations(
 @app.get("/api/metrics/latency")
 async def proxy_latency_metrics(user_id: str = Depends(get_user_id)):
     """Proxy app latency/SLO snapshot for dashboard observability."""
-    agent = await _get_agent_for_user(user_id)
-    if not agent:
-        raise HTTPException(404, "No agent assigned")
 
-    import httpx
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"http://{agent['host']}:{agent['port']}/metrics/latency"
+    async def _degraded() -> JSONResponse:
+        return JSONResponse(
+            {
+                "status": "degraded",
+                "chat": {},
+                "voice": {},
+                "kernel": {},
+                "services": {},
+            },
+            status_code=503,
         )
-        return resp.json()
+
+    async def _fetch(agent_row: dict) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"http://{agent_row['host']}:{agent_row['port']}/metrics/latency"
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    try:
+        agent = await _get_agent_for_user(user_id)
+    except Exception as exc:
+        log.warning("Agent lookup failed for user %s: %s", user_id, exc)
+        agent = None
+    if not agent:
+        return await _degraded()
+
+    try:
+        return await _fetch(agent)
+    except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+        log.warning("Latency metrics fetch failed for user %s: %s", user_id, exc)
+    except ValueError as exc:
+        log.warning("Latency metrics decode failed for user %s: %s", user_id, exc)
+
+    # Force stale assignment cleanup and attempt one reprovision/retry.
+    try:
+        pool = await get_pool()
+        await pool.execute(
+            "UPDATE agents SET status = 'stopped' WHERE user_id = $1", user_id
+        )
+    except Exception:
+        log.debug("Failed marking stale agent row as stopped", exc_info=True)
+
+    try:
+        agent = await _get_agent_for_user(user_id)
+    except Exception as exc:
+        log.warning("Agent reprovision lookup failed for user %s: %s", user_id, exc)
+        agent = None
+    if not agent:
+        return await _degraded()
+
+    try:
+        return await _fetch(agent)
+    except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+        log.warning("Latency metrics retry failed for user %s: %s", user_id, exc)
+        return await _degraded()
+    except ValueError as exc:
+        log.warning("Latency metrics retry decode failed for user %s: %s", user_id, exc)
+        return await _degraded()
 
 
 # ── WebRTC Signaling Proxy ─────────────────────────────────

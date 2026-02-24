@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -678,6 +679,66 @@ class TestMetricsProxy:
 
         assert resp.status_code == 200
         assert resp.json()["services"]["notification_delivery_p95_ms"] == 1200
+
+    def test_latency_metrics_reprovisions_after_timeout(self, app_client):
+        client, pool = app_client
+
+        first_agent = make_record(host="stale-agent", port=8000)
+        second_agent = make_record(host="fresh-agent", port=8000)
+
+        success_response = MagicMock()
+        success_response.json.return_value = {
+            "services": {"delegation_duration_p95_ms": 900}
+        }
+
+        with (
+            patch(
+                "src.main._get_agent_for_user",
+                new_callable=AsyncMock,
+                side_effect=[first_agent, second_agent],
+            ) as mock_get_agent,
+            patch("httpx.AsyncClient") as MockClient,
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(
+                side_effect=[httpx.ConnectTimeout("boom"), success_response]
+            )
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            MockClient.return_value = mock_client
+
+            resp = client.get("/api/metrics/latency", headers=_auth_header())
+
+        assert resp.status_code == 200
+        assert resp.json()["services"]["delegation_duration_p95_ms"] == 900
+        mock_get_agent.assert_awaited()
+        pool.execute.assert_awaited_once_with(
+            "UPDATE agents SET status = 'stopped' WHERE user_id = $1", "user-1"
+        )
+
+    def test_latency_metrics_returns_degraded_when_retry_fails(self, app_client):
+        client, _ = app_client
+
+        with (
+            patch(
+                "src.main._get_agent_for_user",
+                new_callable=AsyncMock,
+                side_effect=[make_record(host="stale-agent", port=8000), None],
+            ),
+            patch("httpx.AsyncClient") as MockClient,
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("boom"))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            MockClient.return_value = mock_client
+
+            resp = client.get("/api/metrics/latency", headers=_auth_header())
+
+        assert resp.status_code == 503
+        payload = resp.json()
+        assert payload["status"] == "degraded"
+        assert payload["services"] == {}
 
 
 # ── Verify Agent Secret ───────────────────────────────────
