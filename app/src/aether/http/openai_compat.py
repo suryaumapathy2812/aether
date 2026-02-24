@@ -143,7 +143,7 @@ async def _stream_response(
     # Stream from AgentCore
     finish_reason = "stop"
     try:
-        async for event in agent.generate_reply(text, session_id, vision=vision):
+        async for event in _stream_text_session(agent, text, session_id, vision=vision):
             if event.stream_type == "text_chunk":
                 chunk_text = event.payload.get("text", "")
                 if chunk_text:
@@ -272,7 +272,7 @@ async def _sync_response(
     collected: list[str] = []
 
     try:
-        async for event in agent.generate_reply(text, session_id, vision=vision):
+        async for event in _stream_text_session(agent, text, session_id, vision=vision):
             if event.stream_type == "text_chunk":
                 collected.append(event.payload.get("text", ""))
     except Exception as e:
@@ -381,3 +381,24 @@ def _extract_vision(messages: list[dict]) -> dict | None:
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
+
+
+def _resolve_text_session_method(agent: "AgentCore"):
+    method = getattr(agent, "generate_text_reply_session", None)
+    if callable(method):
+        return method
+    return agent.generate_reply
+
+
+def _stream_text_session(
+    agent: "AgentCore",
+    text: str,
+    session_id: str,
+    *,
+    vision: dict | None,
+):
+    return _resolve_text_session_method(agent)(
+        text=text,
+        session_id=session_id,
+        vision=vision,
+    )

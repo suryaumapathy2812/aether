@@ -6,8 +6,8 @@ Reuses VoiceSession entirely. Only the audio I/O layer changes:
 - Telephony: 8kHz mulaw via WebSocket
 
 Audio pipeline:
-  Receive: 8kHz mulaw → decode → resample to 16kHz → VAD → VoiceSession.on_audio_in()
-  Send:    TTS 24kHz PCM → resample to 8kHz → mulaw encode → WebSocket → phone
+  Receive: 8kHz mulaw → decode → resample to 16kHz → VAD → VoiceSession input queue
+  Send:    Model 24kHz PCM → resample to 8kHz → mulaw encode → WebSocket → phone
 
 Supports Twilio, Telnyx, and Vobiz via protocol adapters.
 Outbound calls are handled by provider-specific plugins (e.g., Vobiz plugin).
@@ -19,9 +19,17 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from aether.core.config import config
+from aether.voice.io import (
+    AudioFrame as IOAudioFrame,
+    AudioInput,
+    AudioInputEvent,
+    AudioOutput,
+    NullTextOutput,
+)
+from aether.voice.realtime import RealtimeModel
 from aether.voice.session import VoiceSession
 from aether.voice.telephony_protocol import (
     TelephonyProtocol,
@@ -39,6 +47,8 @@ if TYPE_CHECKING:
 
     from aether.agent import AgentCore
     from aether.providers.base import TTSProvider
+    from aether.session.ledger import TaskLedger
+    from aether.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +61,8 @@ class TelephonySession:
         call_id: str,
         stream_sid: str,
         voice_session: VoiceSession,
+        audio_input: Any,
+        audio_output: Any,
         protocol: TelephonyProtocol,
         ws: "WebSocket",
         vad: Any | None = None,
@@ -59,6 +71,8 @@ class TelephonySession:
         self.call_id = call_id
         self.stream_sid = stream_sid
         self.voice_session = voice_session
+        self.audio_input = audio_input
+        self.audio_output = audio_output
         self.protocol = protocol
         self.ws = ws
         self.vad = vad
@@ -70,6 +84,78 @@ class TelephonySession:
         self.input_sample_rate = 8000
         self.output_content_type = "audio/x-mulaw"
         self.output_sample_rate = 8000
+
+
+class TelephonyAudioInput(AudioInput):
+    """Queue-backed AudioInput for telephony PCM16 frames."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[IOAudioFrame] = asyncio.Queue(maxsize=200)
+        self._closed = False
+
+    async def push_pcm(
+        self,
+        pcm_bytes: bytes,
+        *,
+        event: AudioInputEvent | None = None,
+    ) -> None:
+        if self._closed:
+            return
+        frame = IOAudioFrame(
+            data=pcm_bytes,
+            sample_rate=16000,
+            samples_per_channel=len(pcm_bytes) // 2,
+            event=event,
+        )
+        try:
+            self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            return
+
+    async def __aiter__(self):
+        while not self._closed:
+            try:
+                frame = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                yield frame
+            except asyncio.TimeoutError:
+                continue
+
+    async def close(self) -> None:
+        self._closed = True
+
+
+class TelephonyAudioOutput(AudioOutput):
+    """AudioOutput that encodes/sends audio over telephony WebSocket."""
+
+    def __init__(self, session: TelephonySession) -> None:
+        self._session = session
+
+    async def push_frame(self, frame: IOAudioFrame) -> None:
+        out_bytes, chunk_size = _encode_outbound_audio(
+            frame.data,
+            content_type=self._session.output_content_type,
+            sample_rate=self._session.output_sample_rate,
+        )
+        for i in range(0, len(out_bytes), chunk_size):
+            chunk = out_bytes[i : i + chunk_size]
+            msg = self._session.protocol.encode_audio_message(
+                chunk,
+                self._session.stream_sid,
+                content_type=self._session.output_content_type,
+                sample_rate=self._session.output_sample_rate,
+            )
+            await self._session.ws.send_text(msg)
+            self._session._audio_chunks_sent += 1
+
+    async def clear(self) -> None:
+        clear_msg = self._session.protocol.create_clear_message(
+            self._session.stream_sid
+        )
+        if clear_msg:
+            await self._session.ws.send_text(clear_msg)
+
+    async def close(self) -> None:
+        return None
 
 
 class TelephonyTransport:
@@ -85,9 +171,21 @@ class TelephonyTransport:
         self,
         agent: "AgentCore",
         tts_provider: "TTSProvider",
+        realtime_model: RealtimeModel | None = None,
+        on_function_call: Callable[[str, str, str], Awaitable[str]] | None = None,
+        instructions: str = "",
+        tools: list[dict[str, Any]] | None = None,
+        session_store: "SessionStore | None" = None,
+        task_ledger: "TaskLedger | None" = None,
     ) -> None:
         self.agent = agent
         self.tts_provider = tts_provider
+        self.realtime_model = realtime_model
+        self.on_function_call = on_function_call
+        self.instructions = instructions
+        self.tools = tools
+        self.session_store = session_store
+        self.task_ledger = task_ledger
         self._sessions: dict[str, TelephonySession] = {}
         self.on_sessions_empty: Callable[[], Any] | None = None
 
@@ -122,10 +220,19 @@ class TelephonyTransport:
                         stream_sid,
                     )
 
+                    if self.realtime_model is None:
+                        raise RuntimeError(
+                            "Realtime model is not configured for telephony"
+                        )
+
                     voice_session = VoiceSession(
-                        agent=self.agent,
-                        tts_provider=self.tts_provider,
                         session_id=call_id,
+                        realtime_model=self.realtime_model,
+                        on_function_call=self.on_function_call,
+                        instructions=self.instructions,
+                        tools=self.tools,
+                        session_store=self.session_store,
+                        task_ledger=self.task_ledger,
                     )
 
                     # Build VAD
@@ -148,6 +255,8 @@ class TelephonyTransport:
                         call_id=call_id,
                         stream_sid=stream_sid,
                         voice_session=voice_session,
+                        audio_input=TelephonyAudioInput(),
+                        audio_output=None,
                         protocol=protocol,
                         ws=ws,
                         vad=vad,
@@ -164,76 +273,12 @@ class TelephonyTransport:
                         _select_output_audio_format()
                     )
 
-                    # Wire audio output: TTS 24kHz PCM → 8kHz mulaw → WebSocket
-                    async def send_audio(
-                        audio_bytes: bytes,
-                        _session: TelephonySession = session,
-                    ) -> None:
-                        try:
-                            # TTS produces 24kHz PCM16 mono
-                            out_bytes, chunk_size = _encode_outbound_audio(
-                                audio_bytes,
-                                content_type=_session.output_content_type,
-                                sample_rate=_session.output_sample_rate,
-                            )
-
-                            for i in range(0, len(out_bytes), chunk_size):
-                                chunk = out_bytes[i : i + chunk_size]
-                                msg = _session.protocol.encode_audio_message(
-                                    chunk,
-                                    _session.stream_sid,
-                                    content_type=_session.output_content_type,
-                                    sample_rate=_session.output_sample_rate,
-                                )
-                                await _session.ws.send_text(msg)
-                                _session._audio_chunks_sent += 1
-                        except Exception as e:
-                            logger.warning("Telephony send_audio error: %s", e)
-
-                    async def on_barge_in(
-                        _session: TelephonySession = session,
-                    ) -> None:
-                        clear_msg = _session.protocol.create_clear_message(
-                            _session.stream_sid
-                        )
-                        if clear_msg:
-                            try:
-                                await _session.ws.send_text(clear_msg)
-                            except Exception as e:
-                                logger.debug("Telephony clearAudio send failed: %s", e)
-                        logger.info("Telephony barge-in on call %s", _session.call_id)
-
-                    def on_tts_duration(
-                        playback_secs: float,
-                        _session: TelephonySession = session,
-                    ) -> None:
-                        now = time.time()
-                        current_end = max(
-                            now,
-                            _session.voice_session._assistant_speaking_until,
-                        )
-                        _session.voice_session._assistant_speaking_until = (
-                            current_end + playback_secs
-                        )
-                        _session.voice_session._tts_cooldown_until = (
-                            _session.voice_session._assistant_speaking_until + 0.3
-                        )
-
-                    async def send_event(
-                        event: dict,
-                        _session: TelephonySession = session,
-                    ) -> None:
-                        # Text events are not sent over phone — log only
-                        logger.debug(
-                            "Telephony text event (call=%s): %s",
-                            _session.call_id,
-                            event.get("type", ""),
-                        )
-
-                    voice_session.on_audio_out = send_audio
-                    voice_session.on_barge_in = on_barge_in
-                    voice_session.on_tts_duration = on_tts_duration
-                    voice_session.on_text_event = send_event
+                    session.audio_output = TelephonyAudioOutput(session)
+                    voice_session.set_io(
+                        session.audio_input,
+                        session.audio_output,
+                        NullTextOutput(),
+                    )
 
                     # Start the voice session
                     await voice_session.start()
@@ -254,12 +299,18 @@ class TelephonyTransport:
                     # Run VAD
                     if session.vad is not None:
                         for event in session.vad.process_pcm16(pcm_16k):
-                            await session.voice_session.on_vad_event(
-                                event, session.vad_mode
-                            )
+                            action = str(event.get("action", ""))
+                            if action == "speech_started":
+                                await session.audio_input.push_pcm(
+                                    b"", event=AudioInputEvent.START_OF_SPEECH
+                                )
+                            elif action == "speech_ended":
+                                await session.audio_input.push_pcm(
+                                    b"", event=AudioInputEvent.END_OF_SPEECH
+                                )
 
                     # Send to voice session
-                    await session.voice_session.on_audio_in(pcm_16k)
+                    await session.audio_input.push_pcm(pcm_16k)
 
                 elif msg_type == "stop" and session:
                     logger.info("Telephony call ended: %s", call_id)

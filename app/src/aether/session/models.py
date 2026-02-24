@@ -164,6 +164,8 @@ class TaskType(str, Enum):
     SUB_AGENT = "sub_agent"  # Delegated sub-agent work
     SCHEDULED = "scheduled"  # Cron / scheduled work
     PROACTIVE_CHECK = "proactive_check"  # Proactive engine check
+    TOOL_CALL = "tool_call"  # P-worker tool call audit record
+    DELEGATION = "delegation"  # P-worker to E-worker delegation record
 
 
 @dataclass(frozen=True)

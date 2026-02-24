@@ -497,6 +497,7 @@ async def _ensure_agent(user_id: str) -> None:
 # ── Auth (user info) ───────────────────────────────────────
 
 
+@app.get("/auth/me")
 @app.get("/api/auth/me")
 async def me(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
@@ -511,6 +512,7 @@ async def me(user_id: str = Depends(get_user_id)):
 # ── Agent Registry ─────────────────────────────────────────
 
 
+@app.post("/agents/register", dependencies=[Depends(verify_agent_secret)])
 @app.post("/api/agents/register", dependencies=[Depends(verify_agent_secret)])
 async def register_agent(body: AgentRegisterRequest):
     """Called by an Aether agent on startup. Requires AGENT_SECRET."""
@@ -536,6 +538,7 @@ async def register_agent(body: AgentRegisterRequest):
     return {"status": "registered"}
 
 
+@app.post("/agents/{agent_id}/assign", dependencies=[Depends(verify_agent_secret)])
 @app.post("/api/agents/{agent_id}/assign", dependencies=[Depends(verify_agent_secret)])
 async def assign_agent(agent_id: str, user_id: str = Query(...)):
     """Assign an agent to a user. Requires AGENT_SECRET."""
@@ -546,6 +549,7 @@ async def assign_agent(agent_id: str, user_id: str = Query(...)):
     return {"status": "assigned"}
 
 
+@app.get("/agents/health")
 @app.get("/api/agents/health")
 async def list_agents():
     pool = await get_pool()
@@ -555,6 +559,7 @@ async def list_agents():
     return [dict(r) for r in rows]
 
 
+@app.post("/agents/{agent_id}/heartbeat", dependencies=[Depends(verify_agent_secret)])
 @app.post(
     "/api/agents/{agent_id}/heartbeat", dependencies=[Depends(verify_agent_secret)]
 )
@@ -567,6 +572,7 @@ async def heartbeat(agent_id: str):
     return {"status": "ok"}
 
 
+@app.post("/agents/{agent_id}/keep_alive", dependencies=[Depends(verify_agent_secret)])
 @app.post(
     "/api/agents/{agent_id}/keep_alive", dependencies=[Depends(verify_agent_secret)]
 )
@@ -589,6 +595,7 @@ async def set_keep_alive(agent_id: str, enabled: bool = True):
 # ── Device Pairing ─────────────────────────────────────────
 
 
+@app.post("/pair/request")
 @app.post("/api/pair/request")
 async def pair_request(body: PairRequestBody):
     """iOS app calls this with the code it's displaying."""
@@ -605,6 +612,7 @@ async def pair_request(body: PairRequestBody):
     return {"status": "waiting", "expires_in": 600}
 
 
+@app.post("/pair/confirm")
 @app.post("/api/pair/confirm")
 async def pair_confirm(body: PairConfirmBody, user_id: str = Depends(get_user_id)):
     """Dashboard calls this when user enters the code."""
@@ -645,6 +653,7 @@ async def pair_confirm(body: PairConfirmBody, user_id: str = Depends(get_user_id
     return {"device_id": device_id, "device_token": device_token}
 
 
+@app.get("/pair/status/{code}")
 @app.get("/api/pair/status/{code}")
 async def pair_status(code: str):
     """iOS app polls this to check if code was confirmed."""
@@ -669,6 +678,7 @@ async def pair_status(code: str):
     return {"status": "waiting"}
 
 
+@app.get("/devices")
 @app.get("/api/devices")
 async def list_devices(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
@@ -682,6 +692,7 @@ async def list_devices(user_id: str = Depends(get_user_id)):
 # ── API Key Management ─────────────────────────────────────
 
 
+@app.post("/services/keys")
 @app.post("/api/services/keys")
 async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
@@ -701,6 +712,7 @@ async def store_api_key(body: ApiKeyBody, user_id: str = Depends(get_user_id)):
     return {"status": "saved"}
 
 
+@app.get("/services/keys")
 @app.get("/api/services/keys")
 async def list_api_keys(user_id: str = Depends(get_user_id)):
     pool = await get_pool()
@@ -718,6 +730,7 @@ async def list_api_keys(user_id: str = Depends(get_user_id)):
     ]
 
 
+@app.delete("/services/keys/{provider}")
 @app.delete("/api/services/keys/{provider}")
 async def delete_api_key(provider: str, user_id: str = Depends(get_user_id)):
     pool = await get_pool()
@@ -925,7 +938,9 @@ async def _get_agent_for_user(user_id: str) -> dict | None:
     if agent:
         # Guard against stale DB state (row says running but container is gone).
         container_status = await get_agent_status(user_id)
-        if container_status == "running":
+        # In local/test environments container status may be unavailable.
+        # Trust DB registration in that case to avoid unnecessary reprovision loops.
+        if container_status in {"running", None, "unknown"}:
             return agent
         log.warning(
             "Agent row stale for user %s (db=running, container=%s); reprovisioning",
@@ -952,6 +967,7 @@ async def _get_agent_for_user(user_id: str) -> dict | None:
     return None
 
 
+@app.get("/memory/facts")
 @app.get("/api/memory/facts")
 async def proxy_memory_facts(user_id: str = Depends(get_user_id)):
     agent = await _get_agent_for_user(user_id)
@@ -964,6 +980,7 @@ async def proxy_memory_facts(user_id: str = Depends(get_user_id)):
         return resp.json()
 
 
+@app.get("/memory/sessions")
 @app.get("/api/memory/sessions")
 async def proxy_memory_sessions(user_id: str = Depends(get_user_id)):
     agent = await _get_agent_for_user(user_id)
@@ -978,6 +995,7 @@ async def proxy_memory_sessions(user_id: str = Depends(get_user_id)):
         return resp.json()
 
 
+@app.get("/memory/conversations")
 @app.get("/api/memory/conversations")
 async def proxy_memory_conversations(
     user_id: str = Depends(get_user_id), limit: int = 20
@@ -3307,6 +3325,7 @@ async def vobiz_ws_proxy(ws: WebSocket):
 # ── Health ─────────────────────────────────────────────────
 
 
+@app.get("/health")
 @app.get("/api/health")
 async def health():
     try:

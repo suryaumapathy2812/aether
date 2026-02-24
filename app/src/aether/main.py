@@ -15,12 +15,14 @@ Run: uv run uvicorn aether.main:app --host 0.0.0.0 --port 8000
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -73,10 +75,16 @@ from aether.http.sessions import create_session_router
 from aether.kernel.event_bus import EventBus
 from aether.session.store import SessionStore
 from aether.session.ledger import TaskLedger
+from aether.session.models import TaskType
 from aether.agents.manager import SubAgentManager
 from aether.tools.spawn_task import SpawnTaskTool
 from aether.tools.check_task import CheckTaskTool
 from aether.ws.sidecar import WSSidecar
+from aether.voice.factory import create_realtime_model
+from aether.voice.realtime import RealtimeEventType, RealtimeModelConfig
+from aether.voice.backends.gemini.tool_bridge import ToolBridge
+from aether.voice.backends.gemini.bridge import DelegationBridge
+from aether.kernel.contracts import KernelEvent
 
 # Optional: WebRTC voice transport (requires aiortc)
 WebRTCVoiceTransport = None
@@ -205,6 +213,14 @@ for plugin in loaded_plugins:
 # --- Event Processor (decision engine for plugin events) ---
 event_processor = EventProcessor(llm_provider, memory_store)
 
+
+def _load_p_prompt() -> str:
+    prompt_path = Path(__file__).parent / "PROMPT_P.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8").strip()
+    return "You are Aether, a warm and helpful personal assistant."
+
+
 # --- Build the core stack ---
 # LLMCore + ContextBuilder + ToolOrchestrator
 tool_orchestrator = ToolOrchestrator(tool_registry)
@@ -270,8 +286,128 @@ task_runner = TaskRunner(sub_agent_manager=sub_agent_manager)
 tool_registry.register(RunTaskTool(task_runner))
 
 # Register spawn_task and check_task tools
-tool_registry.register(SpawnTaskTool(sub_agent_manager))
-tool_registry.register(CheckTaskTool(task_ledger=task_ledger))
+tool_registry.register(SpawnTaskTool(sub_agent_manager=sub_agent_manager))
+tool_registry.register(CheckTaskTool(task_ledger))
+
+# --- Realtime backend wiring (voice + text P-worker path) ---
+voice_cfg = _config_mod.config.voice_backend
+realtime_model: Any | None = None
+tool_bridge: ToolBridge | None = None
+delegation_bridge: DelegationBridge | None = None
+text_session: Any | None = None
+
+p_instructions = _load_p_prompt()
+
+if voice_cfg.api_key:
+    try:
+        realtime_model = create_realtime_model(
+            RealtimeModelConfig(
+                model=voice_cfg.realtime_model,
+                api_key=voice_cfg.api_key,
+                voice=voice_cfg.voice,
+                instructions=p_instructions,
+                temperature=voice_cfg.temperature,
+                language=voice_cfg.language,
+                input_sample_rate=voice_cfg.input_sample_rate,
+                output_sample_rate=voice_cfg.output_sample_rate,
+                enable_session_resumption=voice_cfg.enable_session_resumption,
+            )
+        )
+        tool_bridge = ToolBridge(tool_registry=tool_registry, task_ledger=task_ledger)
+        delegation_bridge = DelegationBridge(
+            agent_core=agent_core,
+            task_ledger=task_ledger,
+        )
+        tool_bridge.register_extra(
+            name="delegate_to_agent",
+            description=DelegationBridge.DESCRIPTION,
+            parameters=DelegationBridge.PARAMETERS,
+            handler=delegation_bridge.execute,
+        )
+    except Exception as e:
+        logger.warning("Realtime model init failed (%s): %s", voice_cfg.backend, e)
+else:
+    logger.warning("GEMINI_API_KEY not set — voice/text realtime backend disabled")
+
+
+async def _stream_text_via_realtime(
+    text: str,
+    session_id: str,
+    history: list[dict] | None = None,
+    vision: dict | None = None,
+):
+    """AgentCore text stream handler backed by shared realtime session.
+
+    Falls back to scheduler path if realtime session is unavailable.
+    """
+    if text_session is None:
+        async for event in agent_core.generate_reply(
+            text=text,
+            session_id=session_id,
+            history=history,
+            vision=vision,
+        ):
+            yield event
+        return
+
+    sequence = 0
+    job_id = f"realtime-{session_id}"
+    assistant_parts: list[str] = []
+
+    await text_session.generate_reply(text)
+    async for event in text_session.events():
+        if event.type == RealtimeEventType.TEXT_DELTA:
+            chunk = str(event.data.get("text", ""))
+            if chunk:
+                assistant_parts.append(chunk)
+                sequence += 1
+                yield KernelEvent.text_chunk(job_id, chunk, sequence)
+            continue
+
+        if event.type in {
+            RealtimeEventType.FUNCTION_CALL,
+            RealtimeEventType.FUNCTION_CALL_DONE,
+        }:
+            sequence += 1
+            yield KernelEvent(
+                job_id=job_id,
+                stream_type="tool_call",
+                payload={
+                    "call_id": event.data.get("call_id", ""),
+                    "tool_name": event.data.get("name", ""),
+                    "arguments": event.data.get("arguments", "{}"),
+                },
+                sequence=sequence,
+            )
+            continue
+
+        if event.type == RealtimeEventType.SESSION_ERROR:
+            sequence += 1
+            yield KernelEvent(
+                job_id=job_id,
+                stream_type="error",
+                payload={"message": str(event.data.get("error", "realtime error"))},
+                sequence=sequence,
+            )
+            break
+
+        if event.type == RealtimeEventType.TURN_DONE:
+            break
+
+    assistant_text = "".join(assistant_parts).strip()
+    await session_store.ensure_session(session_id)
+    await session_store.append_user_message(session_id, text)
+    if assistant_text:
+        await session_store.append_assistant_message(session_id, assistant_text)
+        await task_ledger.submit(
+            session_id=session_id,
+            task_type=TaskType.MEMORY_EXTRACT.value,
+            payload={"user_message": text, "assistant_message": assistant_text},
+            priority="low",
+        )
+
+
+agent_core.set_text_reply_handler(_stream_text_via_realtime)
 
 # --- Mount OpenAI-compatible HTTP API ---
 openai_router = create_openai_router(agent_core)
@@ -310,10 +446,29 @@ if AIORTC_AVAILABLE and WebRTCVoiceTransport is not None:
                 }
             )
 
+        async def _handle_realtime_tool_call(
+            call_id: str,
+            name: str,
+            arguments: str,
+        ) -> str:
+            if tool_bridge is None:
+                return json.dumps({"ok": False, "error": "tool bridge unavailable"})
+            return await tool_bridge.execute(
+                name,
+                arguments,
+                session_id="voice",
+            )
+
         webrtc_transport = WebRTCVoiceTransport(
             agent=agent_core,
             tts_provider=tts_provider,
             ice_servers=ice_servers or None,
+            realtime_model=realtime_model,
+            on_function_call=_handle_realtime_tool_call,
+            instructions=p_instructions,
+            tools=tool_bridge.get_declarations() if tool_bridge else None,
+            session_store=session_store,
+            task_ledger=task_ledger,
         )
 
         async def _on_sessions_empty() -> None:
@@ -518,9 +673,29 @@ async def _init_vobiz_telephony(config_data: dict) -> None:
         return
 
     try:
+
+        async def _handle_realtime_tool_call(
+            call_id: str,
+            name: str,
+            arguments: str,
+        ) -> str:
+            if tool_bridge is None:
+                return json.dumps({"ok": False, "error": "tool bridge unavailable"})
+            return await tool_bridge.execute(
+                name,
+                arguments,
+                session_id="telephony",
+            )
+
         telephony_transport = TelephonyTransport(
             agent=agent_core,
             tts_provider=tts_provider,
+            realtime_model=realtime_model,
+            on_function_call=_handle_realtime_tool_call,
+            instructions=p_instructions,
+            tools=tool_bridge.get_declarations() if tool_bridge else None,
+            session_store=session_store,
+            task_ledger=task_ledger,
         )
 
         # Use the SAME module instance that PluginLoader registered with FastAPI.
@@ -681,6 +856,7 @@ async def _fetch_user_preferences() -> str:
 
 @app.on_event("startup")
 async def startup() -> None:
+    global text_session
     # Register with orchestrator and start heartbeat
     await _register_with_orchestrator()
     if ORCHESTRATOR_URL:
@@ -710,6 +886,18 @@ async def startup() -> None:
     await memory_store.start()
     await session_store.start()
 
+    # Create shared realtime text session (P-worker front door for text)
+    if realtime_model is not None and tool_bridge is not None:
+        try:
+            text_session = await realtime_model.create_session(
+                instructions=p_instructions,
+                tools=tool_bridge.get_declarations(),
+            )
+            logger.info("Realtime text session initialized")
+        except Exception as e:
+            text_session = None
+            logger.warning("Failed to initialize realtime text session: %s", e)
+
     # Start AgentCore (starts the scheduler worker pools)
     await agent_core.start()
 
@@ -733,6 +921,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    global text_session
     # Stop AgentCore (stops scheduler)
     await agent_core.stop()
 
@@ -741,6 +930,19 @@ async def shutdown() -> None:
         await webrtc_transport.close_all()
 
     # Stop providers and stores
+    if text_session is not None:
+        try:
+            await text_session.close()
+        except Exception:
+            logger.debug("Realtime text session close failed", exc_info=True)
+        text_session = None
+
+    if realtime_model is not None:
+        try:
+            await realtime_model.close()
+        except Exception:
+            logger.debug("Realtime model close failed", exc_info=True)
+
     await llm_provider.stop()
     await tts_provider.stop()
     await session_store.stop()
@@ -830,7 +1032,7 @@ async def chat_endpoint(request: Request):
     """
     Legacy HTTP streaming chat endpoint for dashboard text chat.
 
-    Streams plain text chunks via AgentCore. For OpenAI-compatible
+    Streams plain text chunks via the P-worker text session path. For OpenAI-compatible
     format, use /v1/chat/completions instead.
     """
     body = await request.json()
@@ -860,7 +1062,10 @@ async def chat_endpoint(request: Request):
 
     async def generate():
         try:
-            async for event in agent_core.generate_reply(last_user_msg, session_id):
+            async for event in agent_core.generate_text_reply_session(
+                text=last_user_msg,
+                session_id=session_id,
+            ):
                 if event.stream_type == "text_chunk":
                     chunk = event.payload.get("text", "")
                     yield chunk

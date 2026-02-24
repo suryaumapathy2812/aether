@@ -39,6 +39,7 @@ from aether.session.models import TaskType
 
 if TYPE_CHECKING:
     from aether.kernel.event_bus import EventBus
+    from aether.kernel.contracts import KernelEvent
     from aether.kernel.scheduler import KernelScheduler
     from aether.llm.context_builder import ContextBuilder
     from aether.llm.core import LLMCore
@@ -94,6 +95,15 @@ class AgentCore:
 
         # Notification subscribers (WS sidecar connections)
         self._notification_subscribers: list[Callable] = []
+
+        # Optional text-reply session handler (Gemini P-worker path)
+        self._text_reply_handler: (
+            Callable[
+                [str, str, list[dict] | None, dict | None],
+                AsyncGenerator["KernelEvent", None],
+            ]
+            | None
+        ) = None
 
         # Voice transport reference for spoken notifications
         self._voice_transport: Any = None
@@ -255,46 +265,52 @@ class AgentCore:
         # Fire background memory extraction on E-Cores
         await self._submit_memory_extraction(text, full_response, session_id)
 
+    async def generate_text_reply_session(
+        self,
+        text: str,
+        session_id: str,
+        history: list[dict] | None = None,
+        vision: dict | None = None,
+    ) -> AsyncGenerator[KernelEvent, None]:
+        """P-worker text session entry point.
+
+        This currently reuses the scheduler text-reply path so HTTP streaming
+        behavior stays identical while transports are routed through one API.
+        """
+        if self._text_reply_handler is not None:
+            async for event in self._text_reply_handler(
+                text, session_id, history, vision
+            ):
+                yield event
+            return
+
+        async for event in self.generate_reply(
+            text=text,
+            session_id=session_id,
+            history=history,
+            vision=vision,
+        ):
+            yield event
+
+    def set_text_reply_handler(
+        self,
+        handler: Callable[
+            [str, str, list[dict] | None, dict | None],
+            AsyncGenerator["KernelEvent", None],
+        ]
+        | None,
+    ) -> None:
+        """Set or clear custom text reply streaming handler."""
+        self._text_reply_handler = handler
+
     async def generate_reply_voice(
         self,
         text: str,
         session_id: str,
     ) -> AsyncGenerator[KernelEvent, None]:
-        """
-        Same as generate_reply but tagged as voice modality.
-
-        The scheduler routes this to ReplyService with mode="voice",
-        which adjusts context (shorter system prompt, voice-friendly output).
-        """
-        history = await self._get_history(session_id)
-
-        request = KernelRequest(
-            kind=JobKind.REPLY_VOICE.value,
-            modality=JobModality.VOICE.value,
-            user_id=os.getenv("AETHER_USER_ID", ""),
-            session_id=session_id,
-            payload={
-                "text": text,
-                "history": history,
-                "enabled_plugins": self._plugin_context.loaded_plugins(),
-            },
-            priority=JobPriority.INTERACTIVE.value,
-        )
-
-        job_id = await self._scheduler.submit(request)
-
-        collected_text: list[str] = []
-        async for event in self._scheduler.stream(job_id):
-            if event.stream_type == "text_chunk":
-                collected_text.append(event.payload.get("text", ""))
+        """Compatibility shim for legacy VoiceSession implementations."""
+        async for event in self.generate_reply(text=text, session_id=session_id):
             yield event
-
-        # Update session history
-        full_response = "".join(collected_text).strip()
-        await self._save_turn(session_id, text, full_response)
-
-        # Fire background memory extraction on E-Cores
-        await self._submit_memory_extraction(text, full_response, session_id)
 
     # ─── Session History Helpers ─────────────────────────────────
 
@@ -898,7 +914,10 @@ class AgentCore:
             try:
                 sessions = self._voice_transport.get_active_sessions()
                 for session in sessions:
-                    await session.deliver_notification(text)
+                    if hasattr(session, "inject_text"):
+                        await session.inject_text(text)
+                    else:
+                        await session.deliver_notification(text)
                     delivered = True
             except Exception as e:
                 logger.warning("Spoken notification delivery failed: %s", e)

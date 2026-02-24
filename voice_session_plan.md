@@ -14,7 +14,7 @@
 6. [Phase 2 — VoiceSession Rewrite](#6-phase-2--voicesession-rewrite)
 7. [Phase 3 — Transport Update (WebRTC + Telephony)](#7-phase-3--transport-update-webrtc--telephony)
 8. [Phase 4 — Gemini Realtime Backend](#8-phase-4--gemini-realtime-backend)
-9. [Phase 5 — P-Tools Registry](#9-phase-5--p-tools-registry)
+9. [Phase 5 — Tool Bridge (All Tools for P Worker)](#9-phase-5--tool-bridge-all-tools-for-p-worker)
 10. [Phase 6 — Delegation Bridge (P→E)](#10-phase-6--delegation-bridge-pe)
 11. [Phase 7 — Factory + Wiring](#11-phase-7--factory--wiring)
 12. [Summary](#12-summary)
@@ -149,7 +149,7 @@ These components are fully replaced by Gemini Live's native capabilities.
 | 2 | VoiceSession Rewrite | Phase 1 | 0 | 1 | 0 | ~900 (rewrite) | Pending |
 | 3 | Transport Update | Phases 1, 2 | 0 | 2 | ~30 | ~120 | Pending |
 | 4 | Gemini Realtime Backend | Phase 1 | 3 | 0 | ~600 | 0 | Pending |
-| 5 | P-Tools Registry | Phase 4 | 1 | 0 | ~250 | 0 | Pending |
+| 5 | Tool Bridge (All Tools) | Phase 4 | 1 | 0 | ~250 | 0 | Pending |
 | 6 | Delegation Bridge (P→E) | Phases 4, 5 | 1 | 0 | ~200 | 0 | Pending |
 | 7 | Factory + Wiring | Phases 1–6 | 1 | 2 | ~80 | ~60 | Pending |
 | | **Total** | | **8** | **5** | **~1,360** | **~1,080** | |
@@ -2358,7 +2358,7 @@ vs = VoiceSession(
 | 2 — VoiceSession Rewrite | 0 | ~900 (rewrite) | ~208 (turn_detection.py) | -700 |
 | 3 — Transport Update | ~30 | ~120 | 0 | +150 |
 | 4 — Gemini Realtime Backend | ~600 | 0 | 0 | +600 |
-| 5 — P-Tools Registry | ~250 | 0 | 0 | +250 |
+| 5 — Tool Bridge (All Tools) | ~250 | 0 | 0 | +250 |
 | 6 — Delegation Bridge | ~200 | 0 | 0 | +200 |
 | 7 — Factory + Wiring | ~80 | ~60 | ~20 | +120 |
 | **Total** | **~1,360** | **~1,080** | **~228** | **+820** |
@@ -2373,7 +2373,7 @@ vs = VoiceSession(
 | Phase 2 | VoiceSession is a thin orchestrator — ready for any realtime model backend |
 | Phase 3 | Transports use AudioIO protocol — fully decoupled from model backend |
 | Phase 4 | Gemini Live is connected — audio in/out works, function calls work |
-| Phase 5 | Gemini can handle simple requests directly — time, weather, memory, search |
+| Phase 5 | Gemini can call all tools through ToolBridge, with full ledger logging and policy enforcement |
 | Phase 6 | Complex requests delegate to Claude — email, calendar, research, code |
 | Phase 7 | Everything wired together — config-driven backend selection, production ready |
 
@@ -2406,21 +2406,20 @@ vs = VoiceSession(
 │              │  Video: native multimodal      │                   │
 │              │                                │                   │
 │              │  ┌──────────┐ ┌─────────┐     │                   │
-│              │  │ P-Tools  │ │ Bridge  │     │                   │
-│              │  │ Registry │ │ (P→E)   │     │                   │
+│              │  │ToolBridge│ │ Bridge  │     │                   │
+│              │  │(all tools)│ │ (P→E)   │     │                   │
 │              │  └────┬─────┘ └────┬────┘     │                   │
 │              └───────┼────────────┼──────────┘                   │
 │                      │            │                               │
 │         ┌────────────┘            └────────────┐                 │
 │         ▼                                      ▼                 │
-│   Simple tools (60%)                    Task Ledger              │
-│   - world_time                               │                   │
-│   - weather                                  ▼                   │
-│   - search_memory                     E Worker (Claude)          │
-│   - web_search                        - Gmail                    │
-│   - spotify                           - Calendar                 │
-│   - wikipedia                         - Drive                    │
-│   - ...                               - Sub-agents              │
+│   Direct tool calls (majority path)         Task Ledger          │
+│   - any ToolRegistry tool                        │               │
+│   - fast single-step calls                        ▼               │
+│   - immediate results                     E Worker (Claude)      │
+│                                           - multi-step execution │
+│                                           - long-running tasks   │
+│                                           - sub-agents           │
 │                                       - Research                 │
 │                                       - Code gen                 │
 │                                                                  │
@@ -2672,6 +2671,203 @@ class TaskType(str, Enum):
 4. **Audit trail** — Every action taken on behalf of the user is recorded, regardless of which worker performed it
 
 **Phase impact:** `TaskType.TOOL_CALL` re-added in Phase 5 (ToolBridge). `TaskType.MEMORY_EXTRACT` added in Phase 2 (Conversation Memory Sync). No new files — these are enum additions to the existing `models.py`.
+
+---
+
+### Implementation Readiness Addendum (Mandatory)
+
+The sections below are mandatory clarifications required before implementation. They resolve remaining architectural gaps and are normative for all phases.
+
+#### A. Delegation Must Be Non-Blocking (P Worker Never Waits)
+
+`delegate_to_agent` is fire-and-forget from Gemini's perspective.
+
+**Required behavior:**
+- `delegate_to_agent` submits a ledger task and returns immediately with `{task_id, status:"accepted"}`.
+- Gemini acknowledges the user immediately ("Got it, I'm on it.").
+- P Worker continues accepting and responding to new input while E Worker runs.
+- Completion is delivered asynchronously via a completion event and user-facing follow-up.
+
+**Prohibited behavior:**
+- Polling Task Ledger inside the tool call until completion.
+- Blocking Gemini's turn while Claude executes.
+
+**Acceptance criteria (additive):**
+- [ ] `delegate_to_agent` returns within 250ms in normal conditions.
+- [ ] User can continue conversation during long-running delegated tasks.
+- [ ] Delegated completion is surfaced asynchronously with the original `task_id`.
+
+#### B. Memory Injection Strategy (Works Without Per-Turn Reconnect)
+
+Per-turn `update_instructions()` that only applies on reconnect is not sufficient.
+
+**Required behavior:**
+- Maintain a small in-process memory cache (`facts`, `decisions`, recent episodic items).
+- Retrieve memory before each user turn using budgeted lookup (<100ms target).
+- Inject memory context via turn-level hidden preamble/content update supported by active session flow.
+- Use reconnect-based instruction refresh only for coarse updates (not per-turn critical context).
+
+**Acceptance criteria (additive):**
+- [ ] Memory context is available for every turn without forced reconnect.
+- [ ] P95 memory retrieval+injection time is within configured budget.
+- [ ] Cache hit ratio and latency are measurable via metrics.
+
+#### C. Proactive Engine Rewire for Gemini-as-P
+
+Proactive events must flow through the P Worker decision path:
+
+`event source -> memory retrieval -> Gemini decision (suppress/queue/nudge/surface/interrupt) -> delivery -> feedback capture -> memory write`
+
+**Required behavior:**
+- Webhook/time events are classified by P Worker, not bypassed.
+- Notification actions (`engaged`, `dismissed`, `snoozed`) are captured and written as memories.
+- Decision outcomes are traceable with `session_id` correlation.
+
+**Acceptance criteria (additive):**
+- [ ] Notification type is decided by P Worker with memory context.
+- [ ] User feedback is persisted and participates in learning loop.
+- [ ] End-to-end proactive event trace is queryable by `session_id`.
+
+#### D. Gemini Failure and Recovery Policy
+
+Realtime provider failures are expected and must be handled explicitly.
+
+**Required behavior:**
+- Automatic reconnect with exponential backoff (bounded attempts and cap).
+- Buffered input replay after successful reconnect (bounded queue).
+- Graceful user-facing fallback message when outage persists.
+- Deferred task handling with retry when provider recovers.
+
+**Acceptance criteria (additive):**
+- [ ] No silent failure path on model disconnect.
+- [ ] Reconnect attempts and outcomes are observable.
+- [ ] Buffered inputs are replayed or deterministically dropped with reason.
+
+#### E. Multi-Device Canonical Session Model
+
+One canonical conversational session can have multiple active device bindings.
+
+**Required behavior:**
+- Support concurrent device connections per user.
+- Output fan-out policy is explicit (all active devices or designated primary with mirrored text).
+- Input arbitration is defined (`last-write-wins` for conflicting simultaneous inputs).
+- Notification state sync is defined (`dismiss on one -> dismiss on all`).
+
+**Acceptance criteria (additive):**
+- [ ] Two active devices share one coherent conversation state.
+- [ ] Notification dismissal and delivery state remain synchronized.
+
+#### F. Reconnection Buffering
+
+**Required behavior:**
+- Maintain bounded ring buffers for audio/text during transient realtime disconnects.
+- Define queue limits (duration/bytes/messages), eviction policy, and replay order.
+- Expose metrics for drops and replay counts.
+
+**Acceptance criteria (additive):**
+- [ ] Short disconnects do not lose immediate user utterances.
+- [ ] Buffer overflow behavior is deterministic and observable.
+
+#### G. Resumption Token Durability
+
+Session resumption state must survive process restart.
+
+**Required behavior:**
+- Persist latest valid `resumption_token` in durable storage keyed by logical session.
+- Restore token on restart before reconnect attempt.
+- Fall back to transcript-based continuity when token is invalid/expired.
+
+**Acceptance criteria (additive):**
+- [ ] Restart can resume active realtime sessions when token is valid.
+- [ ] Invalid token path recovers gracefully without user-visible corruption.
+
+#### H. Tool Timeout and Cancellation Enforcement
+
+ToolBridge must enforce per-category budgets.
+
+**Required behavior:**
+- Apply timeout map by tool category (memory/file/search/api/code/browser).
+- Cancel over-budget tool executions.
+- Return structured timeout result to Gemini.
+- Log timeout as `error` with duration and budget metadata.
+
+**Acceptance criteria (additive):**
+- [ ] Over-budget tools are cancelled and surfaced as timeout outcomes.
+- [ ] Per-category timeout metrics are available.
+
+#### I. P-Path Context Window Management
+
+Gemini-managed context does not remove requirement for long-session continuity.
+
+**Required behavior:**
+- Persist full transcript in `SessionStore`.
+- Maintain rolling summaries for long-running sessions.
+- Inject compacted context when needed to preserve commitments/open loops.
+
+**Acceptance criteria (additive):**
+- [ ] Long sessions continue without user-facing context-limit errors.
+- [ ] Critical commitments and decisions survive compaction boundaries.
+
+#### J. Public VoiceSession APIs (No Transport Access to Internals)
+
+Transports must not depend on private VoiceSession internals.
+
+**Required behavior:**
+- Expose explicit public methods for text input, barge-in signaling, and notification enqueue.
+- Remove transport writes to private timing/state fields.
+- Keep transport integration through `AudioIO` and public session methods only.
+
+**Acceptance criteria (additive):**
+- [ ] No transport references to private VoiceSession fields/methods.
+- [ ] Text and barge-in flows work through documented public APIs.
+
+#### K. TTS Lifecycle and Config Compatibility
+
+Voice migration must not silently break config/health/dashboard paths.
+
+**Required behavior:**
+- Define exactly which TTS provider lifecycle hooks are removed vs retained.
+- Preserve health/config endpoint behavior or provide explicit replacement.
+- Keep orchestrator preference compatibility (or migrate with explicit schema/version step).
+
+**Acceptance criteria (additive):**
+- [ ] Startup/shutdown/health paths remain valid after voice migration.
+- [ ] Dashboard/orchestrator settings have a documented migration path.
+
+#### L. Text API Compatibility Contract
+
+Routing text through Gemini must preserve existing client contracts.
+
+**Required behavior:**
+- Preserve `/chat` and `/v1/chat/completions` payload and streaming semantics.
+- Preserve tool-call message formatting expected by current clients.
+- Preserve vision/multipart handling behavior where currently supported.
+
+**Acceptance criteria (additive):**
+- [ ] Existing client integrations require no schema changes.
+- [ ] Streaming behavior remains OpenAI-compatible at wire level.
+
+#### M. Metrics and Observability Migration
+
+Voice metrics must be migrated from STT/TTS pipeline metrics to realtime metrics.
+
+**Required behavior:**
+- Introduce realtime metrics (`realtime.connect_ms`, `first_audio_ms`, `first_text_ms`, `tool_bridge.duration_ms`, delegation accept/complete timings, buffer drop/replay counters).
+- Mark deprecated STT/TTS/turn-detector metrics and update dashboard queries.
+- Ensure every significant action emits traceable events keyed by `session_id`.
+
+**Acceptance criteria (additive):**
+- [ ] Latency dashboard remains complete post-migration.
+- [ ] End-to-end traces can reconstruct a user turn across P/E boundaries.
+
+#### N. Plan Consistency and Naming
+
+This document uses `ToolBridge` terminology for Phase 5.
+
+**Required cleanup:**
+- Ensure all remaining references to "P-tools registry" are replaced where Phase 5 semantics now expose all tools.
+- Keep `delegate_to_agent` function signatures consistent across snippets.
+- Tie each addendum requirement to at least one phase acceptance criterion.
 
 ---
 

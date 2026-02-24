@@ -2,7 +2,7 @@
 Simplified WebRTC transport — signaling + audio routing.
 
 Creates a VoiceSession per peer connection. No CoreMsg, no TransportManager.
-Direct: audio frames → VoiceSession → AgentCore → TTS → audio out.
+Direct: audio frames → VoiceSession → realtime model → audio out.
 
 Requires aiortc (optional dependency). If not installed, the transport
 is not available and main.py skips it gracefully.
@@ -16,15 +16,26 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from aether.core.config import config
+from aether.voice.io import (
+    AudioFrame as IOAudioFrame,
+    AudioInput,
+    AudioInputEvent,
+    AudioOutput,
+    NullTextOutput,
+    TextOutput,
+)
+from aether.voice.realtime import RealtimeModel
 from aether.voice.session import VoiceSession
 from aether.voice.vad import VADSettings, build_vad
 
 if TYPE_CHECKING:
     from aether.agent import AgentCore
     from aether.providers.base import TTSProvider
+    from aether.session.ledger import TaskLedger
+    from aether.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +71,9 @@ class WebRTCConnection:
     pc_id: str
     pc: Any  # RTCPeerConnection
     voice_session: VoiceSession
+    audio_input: Any
+    audio_output: Any
+    text_output: Any
     audio_out_track: Any  # AudioOutputTrack
     data_channel: Any | None = None
     vad: Any | None = None
@@ -69,6 +83,88 @@ class WebRTCConnection:
     session_key: str = ""  # Key into WebRTCVoiceTransport._sessions
     _disconnect_grace_task: Any | None = field(default=None, repr=False)
     last_activity_at: float = field(default_factory=lambda: __import__("time").time())
+
+
+class WebRTCAudioInput(AudioInput):
+    """Queue-backed AudioInput for WebRTC inbound PCM frames."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[IOAudioFrame] = asyncio.Queue(maxsize=200)
+        self._closed = False
+
+    async def push_pcm(
+        self,
+        pcm_bytes: bytes,
+        *,
+        event: AudioInputEvent | None = None,
+    ) -> None:
+        if self._closed:
+            return
+        frame = IOAudioFrame(
+            data=pcm_bytes,
+            sample_rate=16000,
+            samples_per_channel=len(pcm_bytes) // 2,
+            event=event,
+        )
+        try:
+            self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            return
+
+    async def __aiter__(self):
+        while not self._closed:
+            try:
+                frame = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                yield frame
+            except asyncio.TimeoutError:
+                continue
+
+    async def close(self) -> None:
+        self._closed = True
+
+
+class WebRTCAudioOutput(AudioOutput):
+    """AudioOutput backed by AudioOutputTrack with 24kHz->48kHz resampling."""
+
+    def __init__(self, track: Any) -> None:
+        from av import AudioResampler
+
+        self._track = track
+        self._resampler = AudioResampler(format="s16", layout="mono", rate=48000)
+
+    async def push_frame(self, frame: IOAudioFrame) -> None:
+        sample_count = len(frame.data) // 2
+        src_frame = AudioFrame(format="s16", layout="mono", samples=sample_count)
+        src_frame.sample_rate = frame.sample_rate
+        src_frame.planes[0].update(frame.data)
+        for out in self._resampler.resample(src_frame):
+            self._track.add_audio(out.to_ndarray().tobytes())
+
+    async def clear(self) -> None:
+        self._track.clear_audio()
+
+    async def close(self) -> None:
+        return None
+
+
+class WebRTCTextOutput(TextOutput):
+    """TextOutput for sending session events over the data channel."""
+
+    def __init__(self, data_channel: Any) -> None:
+        self._dc = data_channel
+
+    async def push_text(self, text: str, *, final: bool = False) -> None:
+        if self._dc is None or self._dc.readyState != "open":
+            return
+        if text:
+            self._dc.send(json.dumps({"type": "text_chunk", "data": text}))
+        if final:
+            self._dc.send(json.dumps({"type": "stream_end", "data": ""}))
+
+    async def push_state(self, state: str) -> None:
+        if self._dc is None or self._dc.readyState != "open":
+            return
+        self._dc.send(json.dumps({"type": "status", "data": state}))
 
 
 class WebRTCVoiceTransport:
@@ -92,12 +188,24 @@ class WebRTCVoiceTransport:
         agent: "AgentCore",
         tts_provider: "TTSProvider",
         ice_servers: list[dict] | None = None,
+        realtime_model: RealtimeModel | None = None,
+        on_function_call: Callable[[str, str, str], Awaitable[str]] | None = None,
+        instructions: str = "",
+        tools: list[dict[str, Any]] | None = None,
+        session_store: "SessionStore | None" = None,
+        task_ledger: "TaskLedger | None" = None,
     ) -> None:
         if not AIORTC_AVAILABLE:
             raise RuntimeError("aiortc is required for WebRTC transport")
 
         self.agent = agent
         self.tts_provider = tts_provider
+        self.realtime_model = realtime_model
+        self.on_function_call = on_function_call
+        self.instructions = instructions
+        self.tools = tools
+        self.session_store = session_store
+        self.task_ledger = task_ledger
         self.ice_servers = ice_servers or [{"urls": "stun:stun.l.google.com:19302"}]
         self._connections: dict[str, WebRTCConnection] = {}
         # Persistent sessions keyed by user_id — survive WebRTC disconnects
@@ -144,85 +252,35 @@ class WebRTCVoiceTransport:
                 "WebRTC reconnect for %s — reusing existing VoiceSession", session_key
             )
         else:
+            if self.realtime_model is None:
+                raise RuntimeError("Realtime model is not configured for WebRTC")
             voice_session = VoiceSession(
-                agent=self.agent,
-                tts_provider=self.tts_provider,
                 session_id=f"webrtc-{pc_id}",
+                realtime_model=self.realtime_model,
+                on_function_call=self.on_function_call,
+                instructions=self.instructions,
+                tools=self.tools,
+                session_store=self.session_store,
+                task_ledger=self.task_ledger,
             )
             self._sessions[session_key] = voice_session
 
         # Create outbound audio track
         audio_out = AudioOutputTrack()
         pc.addTrack(audio_out)
-
-        # Wire voice session audio output → outbound track
-        # Stateful resampler: 24kHz mono s16 → 48kHz mono s16 (matches inbound path)
-        from av import AudioResampler as _OutResampler
-
-        tts_resampler = _OutResampler(format="s16", layout="mono", rate=48000)
-
-        async def send_audio(audio_bytes: bytes) -> None:
-            # TTS provider returns 24kHz PCM16 mono; WebRTC track expects 48kHz.
-            # Build an AudioFrame from the raw PCM so av can resample it properly.
-            sample_count = len(audio_bytes) // 2  # 16-bit = 2 bytes per sample
-            logger.info(
-                "[pipeline] send_audio: %d bytes (%d samples) input at 24kHz",
-                len(audio_bytes),
-                sample_count,
-            )
-            src_frame = AudioFrame(format="s16", layout="mono", samples=sample_count)
-            src_frame.sample_rate = 24000
-            src_frame.planes[0].update(audio_bytes)
-
-            resampled_frames = tts_resampler.resample(src_frame)
-            total_queued = 0
-            for rf in resampled_frames:
-                data = rf.to_ndarray().tobytes()
-                total_queued += len(data)
-                audio_out.add_audio(data)
-
-            # Calculate true playback duration from resampled PCM:
-            # 48kHz mono s16 = 48000 samples/sec × 2 bytes/sample = 96000 bytes/sec
-            playback_secs = total_queued / 96000.0
-            logger.info(
-                "[pipeline] send_audio: resampled to %d bytes (%.2fs), queue size=%d",
-                total_queued,
-                playback_secs,
-                audio_out._queue.qsize(),
-            )
-            if voice_session.on_tts_duration:
-                voice_session.on_tts_duration(playback_secs)
-
-        async def on_barge_in() -> None:
-            audio_out.clear_audio()
-            logger.info("AudioOutputTrack: cleared buffered audio on barge-in")
-
-        def on_tts_duration(playback_secs: float) -> None:
-            """Update echo suppression window with the true PCM playback duration.
-
-            Cumulative: extends the speaking window rather than resetting it.
-            This is critical for streaming TTS where multiple chunks arrive
-            in quick succession — each chunk extends the window from the
-            current end point, not from now.
-            """
-            import time as _time
-
-            now = _time.time()
-            current_end = max(now, voice_session._assistant_speaking_until)
-            voice_session._assistant_speaking_until = current_end + playback_secs
-            voice_session._tts_cooldown_until = (
-                voice_session._assistant_speaking_until + 0.3
-            )
-
-        voice_session.on_audio_out = send_audio
-        voice_session.on_barge_in = on_barge_in
-        voice_session.on_tts_duration = on_tts_duration
+        audio_input = WebRTCAudioInput()
+        audio_output = WebRTCAudioOutput(audio_out)
+        text_output: TextOutput = NullTextOutput()
+        voice_session.set_io(audio_input, audio_output, text_output)
 
         # Store connection
         conn = WebRTCConnection(
             pc_id=pc_id,
             pc=pc,
             voice_session=voice_session,
+            audio_input=audio_input,
+            audio_output=audio_output,
+            text_output=text_output,
             audio_out_track=audio_out,
             vad_mode=config.vad.mode,
             is_reconnect=is_reconnect,
@@ -346,13 +404,10 @@ class WebRTCVoiceTransport:
         def on_datachannel(channel: Any) -> None:
             logger.info("Data channel opened: %s", conn.pc_id)
             conn.data_channel = channel
-
-            # Wire text events from VoiceSession → data channel
-            async def send_event(event: dict) -> None:
-                if conn.data_channel and conn.data_channel.readyState == "open":
-                    conn.data_channel.send(json.dumps(event))
-
-            conn.voice_session.on_text_event = send_event
+            conn.text_output = WebRTCTextOutput(channel)
+            conn.voice_session.set_io(
+                conn.audio_input, conn.audio_output, conn.text_output
+            )
 
             @channel.on("message")
             def on_message(message: str) -> None:
@@ -403,9 +458,17 @@ class WebRTCVoiceTransport:
 
                     if conn.vad is not None:
                         for event in conn.vad.process_pcm16(pcm_bytes):
-                            await conn.voice_session.on_vad_event(event, conn.vad_mode)
+                            action = str(event.get("action", ""))
+                            if action == "speech_started":
+                                await conn.audio_input.push_pcm(
+                                    b"", event=AudioInputEvent.START_OF_SPEECH
+                                )
+                            elif action == "speech_ended":
+                                await conn.audio_input.push_pcm(
+                                    b"", event=AudioInputEvent.END_OF_SPEECH
+                                )
 
-                    await conn.voice_session.on_audio_in(pcm_bytes)
+                    await conn.audio_input.push_pcm(pcm_bytes)
 
         except asyncio.CancelledError:
             pass  # Expected on connection close
@@ -476,7 +539,7 @@ class WebRTCVoiceTransport:
                 # Text input via data channel
                 text = data.get("data", "")
                 if text:
-                    await conn.voice_session._trigger_response(text)
+                    await conn.voice_session.inject_text(text)
 
         except Exception as e:
             logger.error(

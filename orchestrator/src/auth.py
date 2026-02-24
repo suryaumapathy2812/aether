@@ -23,6 +23,14 @@ from .db import get_pool
 log = logging.getLogger("orchestrator.auth")
 
 
+def _extract_token_from_request(request: Request) -> str | None:
+    """Extract bearer token from Authorization header only."""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return None
+
+
 async def get_user_id(request: Request) -> str:
     """
     Extract and validate the user ID from the request.
@@ -78,9 +86,9 @@ def _extract_tokens_from_request(request: Request) -> list[str]:
     tokens: list[str] = []
 
     # 1. Authorization header
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        tokens.append(auth_header[7:])
+    bearer_token = _extract_token_from_request(request)
+    if bearer_token is not None:
+        tokens.append(bearer_token)
 
     # 2/3. better-auth session cookies (sent by browser on same-origin requests)
     # The cookie value is URL-encoded: token.signature
@@ -88,14 +96,20 @@ def _extract_tokens_from_request(request: Request) -> list[str]:
         "__Secure-better-auth.session_token",
         "better-auth.session_token",
     ):
-        cookie_token = request.cookies.get(cookie_name)
+        cookies = getattr(request, "cookies", {})
+        cookie_token = cookies.get(cookie_name) if hasattr(cookies, "get") else None
+        if not isinstance(cookie_token, str):
+            continue
         if not cookie_token:
             continue
         token_part = cookie_token.split(".")[0] if "." in cookie_token else cookie_token
         tokens.append(token_part)
 
     # 4. Fallback: query param (used by OAuth redirect flows)
-    query_token = request.query_params.get("token")
+    query_params = getattr(request, "query_params", {})
+    query_token = query_params.get("token") if hasattr(query_params, "get") else None
+    if not isinstance(query_token, str):
+        query_token = None
     if query_token:
         tokens.append(query_token)
 

@@ -324,6 +324,47 @@ class TelephonyConfig:
 
 
 @dataclass(frozen=True)
+class VoiceBackendConfig:
+    """Realtime voice backend settings."""
+
+    backend: str = "gemini"
+    api_key: str = ""
+    realtime_model: str = "gemini-2.5-flash-preview-native-audio-dialog"
+    text_model: str = "gemini-2.5-flash"
+    voice: str = "Puck"
+    language: str = "en"
+    temperature: float = 0.7
+    input_sample_rate: int = 16000
+    output_sample_rate: int = 24000
+    enable_session_resumption: bool = True
+
+    @classmethod
+    def from_env(cls) -> "VoiceBackendConfig":
+        return cls(
+            backend=os.getenv("AETHER_VOICE_BACKEND", "gemini"),
+            api_key=os.getenv("GEMINI_API_KEY", ""),
+            realtime_model=os.getenv(
+                "AETHER_GEMINI_REALTIME_MODEL",
+                "gemini-2.5-flash-preview-native-audio-dialog",
+            ),
+            text_model=os.getenv("AETHER_GEMINI_TEXT_MODEL", "gemini-2.5-flash"),
+            voice=os.getenv("AETHER_GEMINI_VOICE", "Puck"),
+            language=os.getenv("AETHER_GEMINI_LANGUAGE", "en"),
+            temperature=float(os.getenv("AETHER_GEMINI_TEMPERATURE", "0.7")),
+            input_sample_rate=int(
+                os.getenv("AETHER_GEMINI_INPUT_SAMPLE_RATE", "16000")
+            ),
+            output_sample_rate=int(
+                os.getenv("AETHER_GEMINI_OUTPUT_SAMPLE_RATE", "24000")
+            ),
+            enable_session_resumption=os.getenv(
+                "AETHER_GEMINI_ENABLE_SESSION_RESUMPTION", "true"
+            ).lower()
+            == "true",
+        )
+
+
+@dataclass(frozen=True)
 class TurnDetectionConfig:
     """LiveKit turn detector settings."""
 
@@ -377,6 +418,7 @@ class AetherConfig:
     vad: VADConfig = field(default_factory=VADConfig)
     webrtc: WebRTCConfig = field(default_factory=WebRTCConfig)
     telephony: TelephonyConfig = field(default_factory=TelephonyConfig)
+    voice_backend: VoiceBackendConfig = field(default_factory=VoiceBackendConfig)
     turn_detection: TurnDetectionConfig = field(default_factory=TurnDetectionConfig)
 
     @classmethod
@@ -392,6 +434,7 @@ class AetherConfig:
             vad=VADConfig.from_env(),
             webrtc=WebRTCConfig.from_env(),
             telephony=TelephonyConfig.from_env(),
+            voice_backend=VoiceBackendConfig.from_env(),
             turn_detection=TurnDetectionConfig.from_env(),
         )
 
