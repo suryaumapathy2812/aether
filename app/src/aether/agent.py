@@ -26,6 +26,7 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
 from aether.kernel.contracts import (
@@ -578,11 +579,23 @@ class AgentCore:
                 # Queue candidate notifications for delivery
                 for notif in result.candidate_notifications:
                     try:
+                        delivery_type = str(
+                            notif.get("delivery_type", "surface")
+                        ).strip()
+                        delivery_hint = notif.get("deliver_at")
+                        deliver_at = self._resolve_notification_deliver_at(
+                            delivery_hint,
+                            delivery_type=delivery_type,
+                        )
                         await self._memory_store.queue_notification(
                             text=notif.get("text", ""),
-                            delivery_type=notif.get("delivery_type", "surface"),
+                            delivery_type=delivery_type,
+                            deliver_at=deliver_at,
                             source="proactive",
-                            metadata={"origin": "nightly_analysis"},
+                            metadata={
+                                "origin": "nightly_analysis",
+                                "delivery_hint": delivery_hint,
+                            },
                         )
                     except Exception as e:
                         logger.warning("Failed to queue proactive notification: %s", e)
@@ -617,6 +630,68 @@ class AgentCore:
                         pass
 
             await asyncio.sleep(interval)
+
+    @classmethod
+    def _resolve_notification_deliver_at(
+        cls,
+        delivery_hint: Any,
+        *,
+        delivery_type: str,
+        now_ts: float | None = None,
+    ) -> float | None:
+        now_ts = now_ts or time.time()
+        hint = str(delivery_hint or "").strip().lower()
+
+        if hint in {"", "immediately", "now", "asap"}:
+            if delivery_type in {
+                "nudge",
+                "surface",
+                "deferred",
+            } and cls._is_quiet_hours(now_ts):
+                return cls._next_local_time(now_ts, hour=8, minute=0)
+            return None
+
+        if hint in {"morning", "tomorrow morning"}:
+            return cls._next_local_time(now_ts, hour=8, minute=0)
+
+        if hint in {"evening", "tonight"}:
+            return cls._next_local_time(now_ts, hour=18, minute=0)
+
+        relative = re.search(
+            r"in\s+(\d+)\s*(minute|minutes|min|hour|hours|hr|hrs)", hint
+        )
+        if relative:
+            amount = int(relative.group(1))
+            unit = relative.group(2)
+            delta = amount * 60 if unit.startswith("m") else amount * 3600
+            return now_ts + delta
+
+        before = re.search(r"before\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", hint)
+        if before:
+            hour = int(before.group(1))
+            minute = int(before.group(2) or 0)
+            meridiem = (before.group(3) or "").lower()
+            if meridiem == "pm" and hour < 12:
+                hour += 12
+            if meridiem == "am" and hour == 12:
+                hour = 0
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return cls._next_local_time(now_ts, hour=hour, minute=minute)
+
+        return None
+
+    @staticmethod
+    def _next_local_time(now_ts: float, *, hour: int, minute: int) -> float:
+        now = datetime.fromtimestamp(now_ts)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target.timestamp()
+
+    @staticmethod
+    def _is_quiet_hours(now_ts: float) -> bool:
+        local_hour = datetime.fromtimestamp(now_ts).hour
+        return local_hour >= 22 or local_hour < 7
 
     # ─── Notification Sweep ──────────────────────────────────────
 
