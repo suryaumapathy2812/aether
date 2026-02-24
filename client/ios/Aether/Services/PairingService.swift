@@ -8,16 +8,17 @@ class PairingService: ObservableObject {
     @Published var pairingCode: String = ""
     @Published var isPaired: Bool = false
     @Published var status: String = "ready"
+    @Published var orchestratorURL: String
 
     /// In-memory token (primary) — Keychain is fallback for app restarts.
     private var cachedToken: String?
     private var pollTimer: Timer?
-    let orchestratorURL: String
+    private static let defaultOrchestratorURL = "https://aether.suryaumapathy.in"
 
     init() {
         // Load from UserDefaults or use default
         self.orchestratorURL = UserDefaults.standard.string(forKey: "orchestrator_url")
-            ?? "http://localhost:3080"
+            ?? Self.defaultOrchestratorURL
 
         // Check if already paired (try Keychain, also try UserDefaults as fallback)
         if let token = KeychainHelper.load(key: "device_token") {
@@ -33,13 +34,23 @@ class PairingService: ObservableObject {
 
     /// Generate a new pairing code and register with orchestrator.
     func startPairing() {
+        let normalizedBaseURL = normalizedOrchestratorURL(orchestratorURL)
+        guard let pairURL = URL(string: "\(normalizedBaseURL)/api/pair/request") else {
+            DispatchQueue.main.async {
+                self.status = "invalid orchestrator URL"
+            }
+            return
+        }
+
+        // Persist normalized URL so VoiceOrb uses the same host.
+        saveOrchestratorURL(normalizedBaseURL)
+
         let code = generateCode()
         self.pairingCode = code
         self.status = "waiting for pairing..."
 
         // Register the code with orchestrator
-        let url = URL(string: "\(orchestratorURL)/api/pair/request")!
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: pairURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -58,20 +69,35 @@ class PairingService: ObservableObject {
                 }
                 return
             }
+
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard statusCode == 200 || statusCode == 201 else {
+                DispatchQueue.main.async {
+                    self?.status = "failed: HTTP \(statusCode)"
+                }
+                return
+            }
+
             // Start polling on main thread (Timer needs main RunLoop)
             DispatchQueue.main.async {
-                self?.startPolling(code: code)
+                self?.startPolling(code: code, baseURL: normalizedBaseURL)
             }
         }.resume()
     }
 
     /// Poll orchestrator to check if code was confirmed.
-    private func startPolling(code: String) {
+    private func startPolling(code: String, baseURL: String) {
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
-            let url = URL(string: "\(self.orchestratorURL)/api/pair/status/\(code)")!
+            guard let url = URL(string: "\(baseURL)/api/pair/status/\(code)") else {
+                DispatchQueue.main.async {
+                    self.status = "invalid orchestrator URL"
+                }
+                self.pollTimer?.invalidate()
+                return
+            }
             URLSession.shared.dataTask(with: url) { data, _, _ in
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -93,6 +119,23 @@ class PairingService: ObservableObject {
                 }
             }.resume()
         }
+    }
+
+    func saveOrchestratorURL(_ value: String) {
+        let normalized = normalizedOrchestratorURL(value)
+        orchestratorURL = normalized
+        UserDefaults.standard.set(normalized, forKey: "orchestrator_url")
+    }
+
+    private func normalizedOrchestratorURL(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return Self.defaultOrchestratorURL
+        }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
     }
 
     func getDeviceToken() -> String? {

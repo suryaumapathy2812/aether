@@ -36,7 +36,7 @@ class WebRTCService: NSObject, ObservableObject {
     private let factory: RTCPeerConnectionFactory
     private let audioQueue = DispatchQueue(label: "com.aether.webrtc.audio")
 
-    private var baseURL = "http://localhost:3080"
+    private var baseURL = "https://aether.suryaumapathy.in"
     private var token = ""
 
     /// Keep-alive ping timer
@@ -94,7 +94,7 @@ class WebRTCService: NSObject, ObservableObject {
 
     func configure(token: String, orchestratorURL: String) {
         self.token = token
-        self.baseURL = orchestratorURL
+        self.baseURL = orchestratorURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     // MARK: - Microphone Permission
@@ -324,7 +324,11 @@ class WebRTCService: NSObject, ObservableObject {
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let dc = self?.dataChannel, dc.readyState == .open else { return }
-            let buffer = RTCDataBuffer(data: Data("ping".utf8), isBinary: false)
+            let pingPayload: [String: Any] = ["type": "ping", "data": [:]]
+            guard let data = try? JSONSerialization.data(withJSONObject: pingPayload) else {
+                return
+            }
+            let buffer = RTCDataBuffer(data: data, isBinary: false)
             dc.sendData(buffer)
         }
     }
@@ -407,6 +411,10 @@ extension WebRTCService: RTCDataChannelDelegate {
 
         DispatchQueue.main.async {
             self.onMessage?(json)
+        }
+
+        if let type = json["type"] as? String, type == "pong" {
+            return
         }
     }
 }

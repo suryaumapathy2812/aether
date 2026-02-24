@@ -4,6 +4,7 @@ struct PairingView: View {
     @EnvironmentObject var pairing: PairingService
 
     @State private var codePulse = false
+    @State private var orchestratorURLInput = ""
 
     var body: some View {
         ZStack {
@@ -29,6 +30,9 @@ struct PairingView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            orchestratorURLInput = pairing.orchestratorURL
+        }
     }
 
     private var pairingBackground: some View {
@@ -84,12 +88,37 @@ struct PairingView: View {
 
     private var initialState: some View {
         VStack(spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("orchestrator url")
+                    .font(.system(size: 10, weight: .regular, design: .rounded))
+                    .tracking(1.4)
+                    .foregroundStyle(.white.opacity(0.4))
+
+                TextField("https://aether.suryaumapathy.in", text: $orchestratorURLInput)
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.04))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    )
+            }
+            .padding(.horizontal, 24)
+
             Text("pair your device")
                 .font(.system(size: 13, weight: .regular, design: .rounded))
                 .tracking(2.4)
                 .foregroundStyle(.white.opacity(0.58))
 
-            Button(action: { pairing.startPairing() }) {
+            Button(action: {
+                pairing.saveOrchestratorURL(orchestratorURLInput)
+                pairing.startPairing()
+            }) {
                 Text("start")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .tracking(3.8)
