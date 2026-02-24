@@ -162,9 +162,6 @@ class MemoryStore:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_notifications_deliver_at ON notifications(deliver_at)"
         )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notifications_next_retry_at ON notifications(next_retry_at)"
-        )
 
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS proactive_events (
@@ -238,6 +235,12 @@ class MemoryStore:
             await self._db.execute(
                 "ALTER TABLE notifications ADD COLUMN last_error TEXT"
             )
+
+        # Create index after schema migration so older DBs without
+        # next_retry_at don't fail startup before ALTER TABLE runs.
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_next_retry_at ON notifications(next_retry_at)"
+        )
         await self._db.commit()
 
     async def stop(self) -> None:
