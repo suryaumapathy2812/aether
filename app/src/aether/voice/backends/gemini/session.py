@@ -293,13 +293,34 @@ class GeminiRealtimeSession(RealtimeSession):
             await self._close_session_context()
 
     def _parse_live_message(self, message: Any) -> list[RealtimeEvent]:
+        """Parse a LiveServerMessage (Pydantic model) into RealtimeEvents.
+
+        Field locations (verified against google-genai SDK types):
+          LiveServerMessage (top-level):
+            .setup_complete            → SESSION_CREATED / SESSION_RESUMED
+            .server_content            → LiveServerContent (see below)
+            .tool_call                 → FUNCTION_CALL / FUNCTION_CALL_DONE
+            .tool_call_cancellation    → (logged, not mapped)
+            .go_away                   → SESSION_ERROR
+            .session_resumption_update → resumption token bookkeeping
+            .voice_activity            → INPUT_SPEECH_STARTED / INPUT_SPEECH_STOPPED
+          LiveServerContent (.server_content):
+            .model_turn.parts[]        → TEXT_DELTA / AUDIO_DELTA (skip .thought)
+            .input_transcription.text  → INPUT_SPEECH_TRANSCRIPTION_COMPLETED
+            .output_transcription.text → TEXT_DELTA (model's spoken words as text)
+            .interrupted               → INTERRUPTED
+            .generation_complete       → AUDIO_DONE + TEXT_DONE + TURN_DONE
+            .turn_complete             → AUDIO_DONE + TEXT_DONE + TURN_DONE
+        """
         events: list[RealtimeEvent] = []
 
+        # ── Session resumption bookkeeping ─────────────────────────
         resumption_update = _pick(message, "session_resumption_update")
         new_handle = _pick(resumption_update, "new_handle")
         if isinstance(new_handle, str) and new_handle:
             self._resumption_token = new_handle
 
+        # ── Setup complete ─────────────────────────────────────────
         if _pick(message, "setup_complete"):
             if not self._session_setup_emitted:
                 event_type = (
@@ -310,6 +331,7 @@ class GeminiRealtimeSession(RealtimeSession):
                 events.append(RealtimeEvent(type=event_type))
                 self._session_setup_emitted = True
 
+        # ── Go away (server disconnect warning) ───────────────────
         go_away = _pick(message, "go_away")
         if go_away:
             events.append(
@@ -324,63 +346,58 @@ class GeminiRealtimeSession(RealtimeSession):
                 )
             )
 
-        input_transcription = _pick(message, "input_transcription")
-        transcript = _pick(input_transcription, "text")
-        if isinstance(transcript, str) and transcript.strip():
-            events.append(
-                RealtimeEvent(
-                    type=RealtimeEventType.INPUT_SPEECH_TRANSCRIPTION_COMPLETED,
-                    data={"transcript": transcript},
-                )
-            )
-
-        server_content = _pick(message, "server_content")
-        if server_content:
-            # Gemini may surface transcriptions under server_content in some SDK
-            # versions/model variants.
-            sc_input_transcription = _pick(server_content, "input_transcription")
-            sc_transcript = _pick(sc_input_transcription, "text")
-            if isinstance(sc_transcript, str) and sc_transcript.strip():
-                events.append(
-                    RealtimeEvent(
-                        type=RealtimeEventType.INPUT_SPEECH_TRANSCRIPTION_COMPLETED,
-                        data={"transcript": sc_transcript},
-                    )
-                )
-
-            sc_output_transcription = _pick(server_content, "output_transcription")
-            sc_output_text = _pick(sc_output_transcription, "text")
-            if isinstance(sc_output_text, str) and sc_output_text:
-                events.append(
-                    RealtimeEvent(
-                        type=RealtimeEventType.TEXT_DELTA,
-                        data={"text": sc_output_text},
-                    )
-                )
-
-            if _pick(server_content, "interrupted"):
-                events.append(RealtimeEvent(type=RealtimeEventType.INTERRUPTED))
-
-            if _pick(server_content, "input_speech_started"):
+        # ── Voice activity (top-level, NOT inside server_content) ─
+        voice_activity = _pick(message, "voice_activity")
+        if voice_activity:
+            activity_type = str(
+                _pick(voice_activity, "voice_activity_type") or ""
+            ).upper()
+            if "START" in activity_type:
                 events.append(
                     RealtimeEvent(type=RealtimeEventType.INPUT_SPEECH_STARTED)
                 )
-            if _pick(server_content, "input_speech_stopped"):
+            elif "END" in activity_type:
                 events.append(
                     RealtimeEvent(type=RealtimeEventType.INPUT_SPEECH_STOPPED)
                 )
-            if _pick(server_content, "input_speech_committed"):
+
+        # ── Server content ─────────────────────────────────────────
+        server_content = _pick(message, "server_content")
+        if server_content:
+            # Input transcription (user speech → text)
+            input_transcription = _pick(server_content, "input_transcription")
+            transcript = _pick(input_transcription, "text")
+            if isinstance(transcript, str) and transcript.strip():
                 events.append(
-                    RealtimeEvent(type=RealtimeEventType.INPUT_SPEECH_COMMITTED)
+                    RealtimeEvent(
+                        type=RealtimeEventType.INPUT_SPEECH_TRANSCRIPTION_COMPLETED,
+                        data={"transcript": transcript},
+                    )
                 )
 
+            # Output transcription (model audio → text for UI display)
+            output_transcription = _pick(server_content, "output_transcription")
+            output_text = _pick(output_transcription, "text")
+            if isinstance(output_text, str) and output_text:
+                events.append(
+                    RealtimeEvent(
+                        type=RealtimeEventType.TEXT_DELTA,
+                        data={"text": output_text},
+                    )
+                )
+
+            # Interrupted
+            if _pick(server_content, "interrupted"):
+                events.append(RealtimeEvent(type=RealtimeEventType.INTERRUPTED))
+
+            # Model turn parts (audio chunks and/or text)
             model_turn = _pick(server_content, "model_turn")
             parts = _pick(model_turn, "parts") if model_turn else None
             if isinstance(parts, list) and parts:
                 events.append(RealtimeEvent(type=RealtimeEventType.TURN_STARTED))
                 for part in parts:
+                    # Skip chain-of-thought / thinking content
                     if _pick(part, "thought"):
-                        # Keep chain-of-thought private; do not stream to UI.
                         continue
 
                     text_part = _pick(part, "text")
@@ -406,23 +423,15 @@ class GeminiRealtimeSession(RealtimeSession):
                             )
                         )
 
-            if _pick(server_content, "turn_complete"):
+            # Turn / generation completion
+            if _pick(server_content, "generation_complete") or _pick(
+                server_content, "turn_complete"
+            ):
                 events.append(RealtimeEvent(type=RealtimeEventType.AUDIO_DONE))
                 events.append(RealtimeEvent(type=RealtimeEventType.TEXT_DONE))
                 events.append(RealtimeEvent(type=RealtimeEventType.TURN_DONE))
 
-        # Some responses still emit output transcription at top-level.
-        # Keep this fallback after server_content processing.
-        output_transcription = _pick(message, "output_transcription")
-        output_text = _pick(output_transcription, "text")
-        if isinstance(output_text, str) and output_text:
-            events.append(
-                RealtimeEvent(
-                    type=RealtimeEventType.TEXT_DELTA,
-                    data={"text": output_text},
-                )
-            )
-
+        # ── Tool calls (top-level) ─────────────────────────────────
         tool_call = _pick(message, "tool_call")
         function_calls = _pick(tool_call, "function_calls") if tool_call else None
         if isinstance(function_calls, list):

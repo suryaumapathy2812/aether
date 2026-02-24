@@ -110,12 +110,14 @@ class VoiceSession:
         self._stopped = True
         self.is_streaming = False
         await self._cancel_tasks()
+        await self._flush_transcript_on_pause_or_stop()
         await self._close_session()
         await self._close_io()
 
     async def pause(self) -> None:
         self.is_streaming = False
         await self._cancel_tasks()
+        await self._flush_transcript_on_pause_or_stop()
         await self._close_session()
         await self._close_io()
 
@@ -379,6 +381,14 @@ class VoiceSession:
         if not user_text:
             user_text = str(event.data.get("user_text", "")).strip()
 
+        logger.debug(
+            "Transcript sync attempt (%s): user=%r, assistant=%r (len=%d)",
+            self.session_id,
+            user_text[:80] if user_text else "",
+            assistant_text[:80] if assistant_text else "",
+            len(self._assistant_parts),
+        )
+
         if not user_text and not assistant_text:
             return
 
@@ -408,6 +418,18 @@ class VoiceSession:
             logger.warning(
                 "Transcript sync failed (%s)", self.session_id, exc_info=True
             )
+
+    async def _flush_transcript_on_pause_or_stop(self) -> None:
+        if (
+            not self._pending_user_text.strip()
+            and not "".join(self._assistant_parts).strip()
+        ):
+            return
+        await self._sync_transcript_best_effort(
+            RealtimeEvent(type=RealtimeEventType.TEXT_DONE)
+        )
+        self._assistant_parts.clear()
+        self._pending_user_text = ""
 
     async def _close_session(self) -> None:
         if self._session is None:
