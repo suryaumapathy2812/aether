@@ -13,9 +13,9 @@ and services underneath — AgentCore just submits jobs and streams results.
 
 Single-user, single-container: no auth, no multi-user isolation.
 
-Session history is persisted to SQLite via SessionStore. The in-memory
-dict fallback is kept only for backward compatibility when SessionStore
-is not provided.
+Session history is persisted to SQLite via SessionStore.
+Task Ledger tracks all background work (memory extraction, nightly
+analysis, sub-agent tasks) for audit and restart recovery.
 """
 
 from __future__ import annotations
@@ -72,11 +72,11 @@ class AgentCore:
         tool_registry: "ToolRegistry",
         skill_loader: "SkillLoader",
         plugin_context: "PluginContextStore",
-        session_store: "SessionStore | None" = None,
+        session_store: "SessionStore",
+        task_ledger: "TaskLedger",
         event_bus: "EventBus | None" = None,
         llm_core: "LLMCore | None" = None,
         context_builder: "ContextBuilder | None" = None,
-        task_ledger: "TaskLedger | None" = None,
         nightly_service: "NightlyAnalysisService | None" = None,
     ) -> None:
         self._scheduler = scheduler
@@ -86,15 +86,11 @@ class AgentCore:
         self._skill_loader = skill_loader
         self._plugin_context = plugin_context
         self._session_store = session_store
+        self._task_ledger = task_ledger
         self._event_bus = event_bus
         self._llm_core = llm_core
         self._context_builder = context_builder
-        self._task_ledger = task_ledger
         self._nightly_service = nightly_service
-
-        # In-memory fallback when SessionStore is not provided.
-        # When session_store is set, this dict is unused.
-        self._sessions: dict[str, list[dict]] = {}
 
         # Notification subscribers (WS sidecar connections)
         self._notification_subscribers: list[Callable] = []
@@ -131,15 +127,12 @@ class AgentCore:
         await self._scheduler.start()
 
         # Resume interrupted tasks from the Task Ledger (restart recovery)
-        if self._task_ledger is not None:
-            try:
-                resumed = await self._task_ledger.resume_interrupted()
-                if resumed > 0:
-                    logger.info(
-                        "Resumed %d interrupted tasks from Task Ledger", resumed
-                    )
-            except Exception as e:
-                logger.warning("Failed to resume interrupted tasks: %s", e)
+        try:
+            resumed = await self._task_ledger.resume_interrupted()
+            if resumed > 0:
+                logger.info("Resumed %d interrupted tasks from Task Ledger", resumed)
+        except Exception as e:
+            logger.warning("Failed to resume interrupted tasks: %s", e)
 
         # Subscribe to task.completed events from SubAgentManager
         if self._event_bus is not None:
@@ -149,13 +142,12 @@ class AgentCore:
             )
 
         # Start background memory extraction handler
-        if self._task_ledger is not None:
-            self._memory_extraction_listener = asyncio.create_task(
-                self._process_memory_extractions()
-            )
+        self._memory_extraction_listener = asyncio.create_task(
+            self._process_memory_extractions()
+        )
 
         # Start nightly analysis loop (24-hour timer)
-        if self._nightly_service is not None and self._task_ledger is not None:
+        if self._nightly_service is not None:
             self._nightly_analysis_task = asyncio.create_task(
                 self._run_nightly_analysis_loop()
             )
@@ -307,28 +299,20 @@ class AgentCore:
     # ─── Session History Helpers ─────────────────────────────────
 
     async def _get_history(self, session_id: str) -> list[dict]:
-        """Get conversation history — from SessionStore if available, else in-memory."""
-        if self._session_store is not None:
-            await self._session_store.ensure_session(session_id)
-            return await self._session_store.get_messages_as_openai(session_id)
-        return self._sessions.get(session_id, [])
+        """Get conversation history from SessionStore."""
+        await self._session_store.ensure_session(session_id)
+        return await self._session_store.get_messages_as_openai(session_id)
 
     async def _save_turn(
         self, session_id: str, user_text: str, assistant_text: str
     ) -> None:
-        """Persist a user+assistant turn — to SessionStore if available, else in-memory."""
-        if self._session_store is not None:
-            await self._session_store.ensure_session(session_id)
-            await self._session_store.append_user_message(session_id, user_text)
-            if assistant_text:
-                await self._session_store.append_assistant_message(
-                    session_id, assistant_text
-                )
-        else:
-            session_history = self._sessions.setdefault(session_id, [])
-            session_history.append({"role": "user", "content": user_text})
-            if assistant_text:
-                session_history.append({"role": "assistant", "content": assistant_text})
+        """Persist a user+assistant turn to SessionStore."""
+        await self._session_store.ensure_session(session_id)
+        await self._session_store.append_user_message(session_id, user_text)
+        if assistant_text:
+            await self._session_store.append_assistant_message(
+                session_id, assistant_text
+            )
 
     # ─── Session Loop (Autonomous Agent) ───────────────────────────
 
@@ -357,14 +341,8 @@ class AgentCore:
             The final assistant text if run synchronously (background=False).
             The session_id if run as a background task (background=True).
         """
-        if (
-            self._session_store is None
-            or self._llm_core is None
-            or self._context_builder is None
-        ):
-            raise RuntimeError(
-                "run_session requires session_store, llm_core, and context_builder"
-            )
+        if self._llm_core is None or self._context_builder is None:
+            raise RuntimeError("run_session requires llm_core and context_builder")
 
         from aether.session.loop import SessionLoop
 
@@ -436,11 +414,9 @@ class AgentCore:
                 logger.info("Task completed notification: %s", session_id)
 
                 # Get the result text for the notification
-                result_text = None
-                if self._session_store is not None:
-                    result_text = await self._session_store.get_last_assistant_text(
-                        session_id
-                    )
+                result_text = await self._session_store.get_last_assistant_text(
+                    session_id
+                )
 
                 # Build notification
                 preview = (result_text or "")[:200].strip()
@@ -474,26 +450,6 @@ class AgentCore:
         if not user_text or not assistant_text:
             return
 
-        if self._task_ledger is None:
-            # Fallback: submit directly to scheduler if no ledger
-            try:
-                await self._scheduler.submit(
-                    KernelRequest(
-                        kind=JobKind.MEMORY_FACT_EXTRACT.value,
-                        modality=JobModality.SYSTEM.value,
-                        user_id=os.getenv("AETHER_USER_ID", ""),
-                        session_id=session_id,
-                        payload={
-                            "user_message": user_text,
-                            "assistant_message": assistant_text,
-                        },
-                        priority=JobPriority.BACKGROUND.value,
-                    )
-                )
-            except Exception as e:
-                logger.warning("Failed to submit memory extraction: %s", e)
-            return
-
         try:
             await self._task_ledger.submit(
                 session_id=session_id,
@@ -519,7 +475,6 @@ class AgentCore:
         KernelScheduler (execution engine). The ledger tracks status,
         the scheduler does the work.
         """
-        assert self._task_ledger is not None
         poll_interval = 2.0  # seconds
 
         while True:
@@ -584,7 +539,6 @@ class AgentCore:
         Runs every 24 hours from startup (Requirements.md §6.2).
         """
         assert self._nightly_service is not None
-        assert self._task_ledger is not None
 
         interval = 24 * 60 * 60  # 24 hours
         # Wait 1 minute after startup before first check
@@ -838,14 +792,6 @@ class AgentCore:
         """Get conversation history for a session."""
         return await self._get_history(session_id)
 
-    def clear_history(self, session_id: str) -> None:
-        """Clear conversation history for a session (in-memory only).
-
-        Note: When using SessionStore, session data persists in SQLite.
-        Use cancel_session() to stop active work on a session.
-        """
-        self._sessions.pop(session_id, None)
-
     async def cancel_session(self, session_id: str) -> int:
         """Cancel all pending/running jobs for a session (on disconnect)."""
         return await self._scheduler.cancel_by_session(session_id)
@@ -968,18 +914,13 @@ class AgentCore:
         """Return AgentCore + scheduler health."""
         scheduler_health = await self._scheduler.health_check()
 
-        if self._session_store is not None:
-            sessions = await self._session_store.list_sessions(limit=1000)
-            session_count = len(sessions)
-            session_backend = "sqlite"
-        else:
-            session_count = len(self._sessions)
-            session_backend = "memory"
+        sessions = await self._session_store.list_sessions(limit=1000)
+        session_count = len(sessions)
 
         return {
             "agent_core": True,
             "sessions": session_count,
-            "session_backend": session_backend,
+            "session_backend": "sqlite",
             "active_session_loops": self.get_active_session_loops(),
             "last_greeting_at": self._last_greeting_at,
             "notification_subscribers": len(self._notification_subscribers),

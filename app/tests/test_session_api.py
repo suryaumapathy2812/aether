@@ -11,10 +11,10 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from aether.agents.manager import SubAgentManager
 from aether.http.sessions import create_session_router
 from aether.kernel.event_bus import EventBus
 from aether.llm.contracts import LLMEventEnvelope, LLMRequestEnvelope
+from aether.session.ledger import TaskLedger
 from aether.session.store import SessionStore
 
 
@@ -57,11 +57,13 @@ def client(store, event_bus):
     """Create a test client with the session router."""
     app = FastAPI()
     agent = _make_mock_agent(store)
+    ledger = TaskLedger(store)
 
     router = create_session_router(
         agent=agent,
         session_store=store,
         event_bus=event_bus,
+        task_ledger=ledger,
     )
     app.include_router(router)
 
@@ -212,41 +214,46 @@ async def test_cancel_session_not_running(client):
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_no_manager(client):
+async def test_list_tasks_empty(client):
+    """Empty Task Ledger returns empty list."""
     test_client, agent, store = client
 
     response = test_client.get("/v1/tasks")
     assert response.status_code == 200
     data = response.json()
     assert data["tasks"] == []
+    assert data["count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_with_sub_agents(store, event_bus):
-    """Test listing tasks when sub-agent manager is available."""
+async def test_list_tasks_with_ledger_entries(store, event_bus):
+    """Tasks submitted to the Task Ledger appear in GET /v1/tasks."""
     app = FastAPI()
     agent = _make_mock_agent(store)
-
-    # Create a mock sub-agent manager
-    sub_mgr = MagicMock()
-    sub_mgr.list_children = AsyncMock(return_value=[])
+    ledger = TaskLedger(store)
 
     router = create_session_router(
         agent=agent,
         session_store=store,
         event_bus=event_bus,
-        sub_agent_manager=sub_mgr,
+        task_ledger=ledger,
     )
     app.include_router(router)
 
-    # Create a child session
-    await store.create_session("parent-1")
-    await store.create_session(
-        "child-1", parent_session_id="parent-1", agent_type="explore"
+    # Create the session first (FK constraint on tasks.session_id)
+    await store.create_session("sess-1")
+
+    # Submit a task to the ledger
+    task_id = await ledger.submit(
+        session_id="sess-1",
+        task_type="sub_agent",
+        payload={"instruction": "Do something"},
+        priority="normal",
     )
 
     test_client = TestClient(app)
     response = test_client.get("/v1/tasks")
     assert response.status_code == 200
     data = response.json()
-    assert len(data["tasks"]) >= 1
+    assert data["count"] >= 1
+    assert any(t["task_id"] == task_id for t in data["tasks"])

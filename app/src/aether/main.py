@@ -249,10 +249,10 @@ agent_core = AgentCore(
     skill_loader=skill_loader,
     plugin_context=plugin_context_store,
     session_store=session_store,
+    task_ledger=task_ledger,
     event_bus=event_bus,
     llm_core=llm_core,
     context_builder=context_builder,
-    task_ledger=task_ledger,
     nightly_service=nightly_service,
 )
 
@@ -271,7 +271,7 @@ tool_registry.register(RunTaskTool(task_runner))
 
 # Register spawn_task and check_task tools
 tool_registry.register(SpawnTaskTool(sub_agent_manager))
-tool_registry.register(CheckTaskTool(sub_agent_manager, task_ledger=task_ledger))
+tool_registry.register(CheckTaskTool(task_ledger=task_ledger))
 
 # --- Mount OpenAI-compatible HTTP API ---
 openai_router = create_openai_router(agent_core)
@@ -282,7 +282,6 @@ session_router = create_session_router(
     agent=agent_core,
     session_store=session_store,
     event_bus=event_bus,
-    sub_agent_manager=sub_agent_manager,
     task_ledger=task_ledger,
 )
 app.include_router(session_router)

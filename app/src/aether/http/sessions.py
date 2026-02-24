@@ -27,7 +27,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 if TYPE_CHECKING:
     from aether.agent import AgentCore
-    from aether.agents.manager import SubAgentManager
     from aether.kernel.event_bus import EventBus
     from aether.session.ledger import TaskLedger
     from aether.session.store import SessionStore
@@ -39,8 +38,7 @@ def create_session_router(
     agent: "AgentCore",
     session_store: "SessionStore",
     event_bus: "EventBus",
-    sub_agent_manager: "SubAgentManager | None" = None,
-    task_ledger: "TaskLedger | None" = None,
+    task_ledger: "TaskLedger",
 ) -> APIRouter:
     """Create the session management router."""
 
@@ -214,26 +212,9 @@ def create_session_router(
         """List tasks from the Task Ledger.
 
         Filterable by session_id, status (pending/running/complete/error),
-        and task_type (sub_agent/memory_extract/tool_call/scheduled).
+        and task_type (sub_agent/memory_extract/scheduled).
         Returns all task types — not just sub-agents.
         """
-        if task_ledger is None:
-            # Fallback: use SubAgentManager if no ledger
-            if sub_agent_manager is None:
-                return JSONResponse({"tasks": []})
-            all_sessions = await session_store.list_sessions(limit=100)
-            tasks = [
-                {
-                    "session_id": s.session_id,
-                    "status": s.status,
-                    "agent_type": s.agent_type,
-                    "parent_session_id": s.parent_session_id,
-                }
-                for s in all_sessions
-                if s.parent_session_id is not None
-            ]
-            return JSONResponse({"tasks": tasks})
-
         tasks = await task_ledger.get_tasks(
             session_id=session_id,
             status=status,
@@ -266,22 +247,6 @@ def create_session_router(
     @router.get("/tasks/{task_id}")
     async def get_task(task_id: str) -> JSONResponse:
         """Get a single task from the Task Ledger by ID."""
-        if task_ledger is None:
-            # Fallback: use SubAgentManager if no ledger
-            if sub_agent_manager is None:
-                return JSONResponse(
-                    {"error": "Task Ledger not available"}, status_code=404
-                )
-            status = await sub_agent_manager.get_status(task_id)
-            if status["status"] == "not_found":
-                return JSONResponse(
-                    {"error": f"Task {task_id} not found"}, status_code=404
-                )
-            result = None
-            if status["status"] in ("done", "error"):
-                result = await sub_agent_manager.get_result(task_id)
-            return JSONResponse({**status, "result": result})
-
         task = await task_ledger.get_task(task_id)
         if task is None:
             return JSONResponse({"error": f"Task {task_id} not found"}, status_code=404)

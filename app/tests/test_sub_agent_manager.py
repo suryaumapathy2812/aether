@@ -12,6 +12,7 @@ import pytest_asyncio
 from aether.agents.manager import SubAgentManager
 from aether.kernel.event_bus import EventBus
 from aether.llm.contracts import LLMEventEnvelope, LLMEventType, LLMRequestEnvelope
+from aether.session.ledger import TaskLedger
 from aether.session.models import SessionStatus
 from aether.session.store import SessionStore
 from aether.tools.check_task import CheckTaskTool
@@ -310,22 +311,38 @@ async def test_spawn_task_tool_with_agent_type(store, manager):
 
 
 @pytest.mark.asyncio
-async def test_check_task_tool_completed(store, manager):
+async def test_check_task_tool_completed(store, event_bus):
+    """CheckTaskTool reads completed tasks from the Task Ledger."""
+    ledger = TaskLedger(store)
+
+    mgr = SubAgentManager(
+        session_store=store,
+        llm_core=_make_mock_llm_core(),
+        context_builder=_make_mock_context_builder(),
+        event_bus=event_bus,
+        task_ledger=ledger,
+    )
+
     await store.create_session("parent-1")
-    child_id = await manager.spawn("Quick task", parent_session_id="parent-1")
+    child_id = await mgr.spawn("Quick task", parent_session_id="parent-1")
 
-    await asyncio.sleep(0.2)
+    # spawn() returns the child session ID (sub-xxxxx), but the ledger
+    # stores the task under a separate UUID. Retrieve the real ledger ID.
+    ledger_task_id = mgr._ledger_task_ids[child_id]
 
-    tool = CheckTaskTool(manager)
-    result = await tool.execute(task_id=child_id)
+    await asyncio.sleep(0.3)
+
+    tool = CheckTaskTool(task_ledger=ledger)
+    result = await tool.execute(task_id=ledger_task_id)
     assert not result.error
-    assert "completed" in result.output
-    assert "Task completed." in result.output
+    assert "complete" in result.output.lower()
 
 
 @pytest.mark.asyncio
-async def test_check_task_tool_not_found(manager):
-    tool = CheckTaskTool(manager)
+async def test_check_task_tool_not_found(store):
+    """CheckTaskTool returns error for nonexistent task."""
+    ledger = TaskLedger(store)
+    tool = CheckTaskTool(task_ledger=ledger)
     result = await tool.execute(task_id="nonexistent")
     assert result.error
     assert "not found" in result.output
@@ -333,6 +350,9 @@ async def test_check_task_tool_not_found(manager):
 
 @pytest.mark.asyncio
 async def test_check_task_tool_running(store, event_bus):
+    """CheckTaskTool shows running status for in-progress tasks."""
+    ledger = TaskLedger(store)
+
     async def slow_generate(envelope):
         await asyncio.sleep(2.0)
         for event in _make_text_events("Done"):
@@ -346,14 +366,19 @@ async def test_check_task_tool_running(store, event_bus):
         llm_core=slow_llm,
         context_builder=_make_mock_context_builder(),
         event_bus=event_bus,
+        task_ledger=ledger,
     )
 
     await store.create_session("parent-1")
     child_id = await mgr.spawn("Slow task", parent_session_id="parent-1")
 
-    tool = CheckTaskTool(mgr)
-    result = await tool.execute(task_id=child_id)
+    # spawn() returns the child session ID (sub-xxxxx), but the ledger
+    # stores the task under a separate UUID. Retrieve the real ledger ID.
+    ledger_task_id = mgr._ledger_task_ids[child_id]
+
+    tool = CheckTaskTool(task_ledger=ledger)
+    result = await tool.execute(task_id=ledger_task_id)
     assert not result.error
-    assert "still running" in result.output
+    assert "running" in result.output.lower()
 
     await mgr.cancel(child_id)

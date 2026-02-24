@@ -26,6 +26,7 @@ from aether.llm.contracts import (
     LLMRequestEnvelope,
 )
 from aether.session.loop import SessionLoop
+from aether.session.ledger import TaskLedger
 from aether.session.models import SessionStatus
 from aether.session.store import SessionStore
 
@@ -398,7 +399,9 @@ class TestTaskCompletedNotifications:
     """Test that AgentCore subscribes to task.completed and pushes notifications."""
 
     @pytest.mark.asyncio
-    async def test_agent_core_subscribes_on_start(self, event_bus: EventBus):
+    async def test_agent_core_subscribes_on_start(
+        self, store: SessionStore, event_bus: EventBus
+    ):
         """AgentCore.start() should subscribe to task.completed topic."""
         from aether.agent import AgentCore
 
@@ -413,6 +416,8 @@ class TestTaskCompletedNotifications:
             tool_registry=MagicMock(),
             skill_loader=MagicMock(),
             plugin_context=MagicMock(),
+            session_store=store,
+            task_ledger=TaskLedger(store),
             event_bus=event_bus,
         )
 
@@ -446,6 +451,7 @@ class TestTaskCompletedNotifications:
             skill_loader=MagicMock(),
             plugin_context=MagicMock(),
             session_store=store,
+            task_ledger=TaskLedger(store),
             event_bus=event_bus,
         )
 
@@ -479,7 +485,9 @@ class TestTaskCompletedNotifications:
         await agent.stop()
 
     @pytest.mark.asyncio
-    async def test_agent_core_cleans_up_on_stop(self, event_bus: EventBus):
+    async def test_agent_core_cleans_up_on_stop(
+        self, store: SessionStore, event_bus: EventBus
+    ):
         """AgentCore.stop() should cancel the listener and unsubscribe."""
         from aether.agent import AgentCore
 
@@ -494,6 +502,8 @@ class TestTaskCompletedNotifications:
             tool_registry=MagicMock(),
             skill_loader=MagicMock(),
             plugin_context=MagicMock(),
+            session_store=store,
+            task_ledger=TaskLedger(store),
             event_bus=event_bus,
         )
 
@@ -507,7 +517,7 @@ class TestTaskCompletedNotifications:
         assert event_bus.subscriber_count("task.completed") == 0
 
     @pytest.mark.asyncio
-    async def test_agent_core_no_event_bus_no_crash(self):
+    async def test_agent_core_no_event_bus_no_crash(self, store: SessionStore):
         """AgentCore works fine without an EventBus (no subscription)."""
         from aether.agent import AgentCore
 
@@ -522,6 +532,8 @@ class TestTaskCompletedNotifications:
             tool_registry=MagicMock(),
             skill_loader=MagicMock(),
             plugin_context=MagicMock(),
+            session_store=store,
+            task_ledger=TaskLedger(store),
             event_bus=None,
         )
 

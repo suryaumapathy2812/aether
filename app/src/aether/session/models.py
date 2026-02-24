@@ -160,7 +160,6 @@ class TaskStatus(str, Enum):
 class TaskType(str, Enum):
     """Type of work represented by a task."""
 
-    TOOL_CALL = "tool_call"  # LLM-initiated tool execution
     MEMORY_EXTRACT = "memory_extract"  # Post-turn memory extraction
     SUB_AGENT = "sub_agent"  # Delegated sub-agent work
     SCHEDULED = "scheduled"  # Cron / scheduled work
