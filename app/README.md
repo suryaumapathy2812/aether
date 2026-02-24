@@ -19,6 +19,13 @@ Runtime AI agent service for text + voice interactions. It exposes OpenAI-compat
 - Voice/WebRTC: `src/aether/voice/session.py`, `src/aether/voice/webrtc.py`
 - Memory store: `src/aether/memory/store.py`
 
+### P/E execution split
+
+- P-worker ingress (always-on, multimodal): `/chat`, `/v1/chat/completions`, `/webrtc/*`
+- P-worker model: Gemini realtime session (requires `GEMINI_API_KEY`)
+- E-worker execution: delegated/advanced agentic workflows (`delegate_to_agent`, background tasks)
+- User ingress does not silently fall back to scheduler/OpenRouter when P-worker realtime is unavailable
+
 ## Run locally
 
 ```bash
@@ -42,7 +49,7 @@ docker build -t aether-agent:local .
 
 - Runtime: `AETHER_HOST`, `AETHER_PORT`, `AETHER_DB_PATH`, `AETHER_WORKING_DIR`
 - LLM/TTS/STT: `AETHER_LLM_MODEL`, `AETHER_TTS_PROVIDER`, `AETHER_STT_PROVIDER`
-- Keys: `OPENROUTER_API_KEY` (LLM + embeddings — always routes through OpenRouter), `OPENAI_API_KEY` (TTS — direct OpenAI), `DEEPGRAM_API_KEY`
+- Keys: `GEMINI_API_KEY` (required for P-worker voice/text realtime ingress), `OPENROUTER_API_KEY` (agentic/background LLM paths), `OPENAI_API_KEY` (TTS), `DEEPGRAM_API_KEY` (STT)
 - Voice tuning: `AETHER_VAD_MODE`, `AETHER_TURN_DETECTION_MODE`, `AETHER_WEBRTC_SESSION_TTL`
 
 ## Current constraints

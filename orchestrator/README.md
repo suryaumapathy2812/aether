@@ -42,7 +42,7 @@ docker build -t aether-orchestrator:local .
 - Core: `DATABASE_URL`, `CORS_ORIGINS`, `BETTER_AUTH_SECRET`, `AGENT_SECRET`
 - Agent lifecycle: `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_IDLE_TIMEOUT`, `AGENT_DEV_ROOT`
 - Shared models: `AGENT_SHARED_MODELS_HOST_PATH`, `AGENT_SHARED_MODELS_ORCH_PATH`, `AGENT_SHARED_MODELS_CONTAINER_PATH`
-- Fallback keys passed to agents: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+- Provider keys passed to agents: `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
 
 ## Current constraints
 

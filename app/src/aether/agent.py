@@ -282,22 +282,13 @@ class AgentCore:
     ) -> AsyncGenerator[KernelEvent, None]:
         """P-worker text session entry point.
 
-        This currently reuses the scheduler text-reply path so HTTP streaming
-        behavior stays identical while transports are routed through one API.
+        User ingress must always go through the P-worker text handler
+        (Gemini realtime session). There is no OpenRouter fallback here.
         """
-        if self._text_reply_handler is not None:
-            async for event in self._text_reply_handler(
-                text, session_id, history, vision
-            ):
-                yield event
-            return
+        if self._text_reply_handler is None:
+            raise RuntimeError("P-worker text handler unavailable")
 
-        async for event in self.generate_reply(
-            text=text,
-            session_id=session_id,
-            history=history,
-            vision=vision,
-        ):
+        async for event in self._text_reply_handler(text, session_id, history, vision):
             yield event
 
     def set_text_reply_handler(

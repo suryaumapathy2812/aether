@@ -42,7 +42,7 @@ Fill required values in `docker/.env`:
 
 - `AGENT_SECRET`
 - `BETTER_AUTH_SECRET`
-- provider keys as needed (`OPENROUTER_API_KEY` for LLM, `OPENAI_API_KEY` for TTS, `DEEPGRAM_API_KEY`, ...)
+- provider keys as needed (`GEMINI_API_KEY` for P-worker realtime ingress, `OPENROUTER_API_KEY` for delegated/agentic LLM paths, `OPENAI_API_KEY` for TTS, `DEEPGRAM_API_KEY`, ...)
 
 ## Run (development)
 

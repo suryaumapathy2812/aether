@@ -334,17 +334,10 @@ async def _stream_text_via_realtime(
 ):
     """AgentCore text stream handler backed by shared realtime session.
 
-    Falls back to scheduler path if realtime session is unavailable.
+    User text ingress must stay on the realtime P-worker path.
     """
     if text_session is None:
-        async for event in agent_core.generate_reply(
-            text=text,
-            session_id=session_id,
-            history=history,
-            vision=vision,
-        ):
-            yield event
-        return
+        raise RuntimeError("P-worker realtime session unavailable")
 
     sequence = 0
     job_id = f"realtime-{session_id}"
