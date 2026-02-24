@@ -35,6 +35,7 @@ async def test_feedback_dismissed_syncs_notification_status() -> None:
     )
 
     agent._memory_store.mark_dismissed.assert_awaited_once_with(12)
+    agent._memory_store.store_decision.assert_awaited_once()
     sidecar.push.assert_awaited_once()
     event_type, payload = sidecar.push.await_args.args
     assert event_type == "notification_status"
@@ -60,7 +61,33 @@ async def test_feedback_engaged_marks_delivered_and_syncs() -> None:
 
     agent._memory_store.mark_delivered.assert_awaited_once_with(7)
     agent._memory_store._store_fact.assert_awaited_once()
+    agent._memory_store.store_decision.assert_awaited_once()
     event_type, payload = sidecar.push.await_args.args
     assert event_type == "notification_status"
     assert payload["status"] == "delivered"
     assert payload["notification_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_feedback_muted_without_notification_id_still_syncs() -> None:
+    agent = _FakeAgent()
+    sidecar = WSSidecar(agent=agent)
+    sidecar.push = AsyncMock()
+
+    await sidecar._handle_feedback(
+        {
+            "action": "muted",
+            "plugin": "gmail",
+            "sender": "alerts@example.com",
+            "device_id": "dev-3",
+        }
+    )
+
+    agent._memory_store.mark_dismissed.assert_not_awaited()
+    agent._memory_store.mark_delivered.assert_not_awaited()
+    agent._memory_store.store_decision.assert_awaited_once()
+    event_type, payload = sidecar.push.await_args.args
+    assert event_type == "notification_status"
+    assert payload["status"] == "muted"
+    assert payload["notification_id"] is None
+    assert payload["device_id"] == "dev-3"

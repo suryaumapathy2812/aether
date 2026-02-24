@@ -6,7 +6,7 @@ No voice, no text chat — those go through HTTP and WebRTC respectively.
 
 Client messages:
 - notification_feedback: User engaged/dismissed/muted a notification
-  → stored as memory fact for future notification filtering
+  → stored as memory facts/decisions for future notification filtering
 
 Server pushes:
 - notification: Plugin event surfaced by NotificationService
@@ -21,8 +21,9 @@ notifications, not per-session event streams.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, cast
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -150,6 +151,11 @@ class WSSidecar:
 
         # Persist explicit delivery-state feedback for learning loop telemetry.
         status: str | None = None
+        if action == "snoozed":
+            status = "snoozed"
+        elif action == "muted":
+            status = "muted"
+
         if notification_id is not None:
             try:
                 if action == "dismissed":
@@ -158,10 +164,6 @@ class WSSidecar:
                 elif action in {"engaged", "opened"}:
                     await self.agent._memory_store.mark_delivered(notification_id)
                     status = "delivered"
-                elif action == "snoozed":
-                    status = "snoozed"
-                elif action == "muted":
-                    status = "muted"
             except Exception as e:
                 logger.warning("Failed to update notification status: %s", e)
 
@@ -178,13 +180,18 @@ class WSSidecar:
         if fact:
             try:
                 await self.agent._memory_store._store_fact(fact, 0)
+                await self._store_feedback_decision(
+                    action=action, plugin=plugin, sender=sender
+                )
                 logger.info("Notification feedback stored: %s", fact)
             except Exception as e:
                 logger.warning("Failed to store notification feedback: %s", e)
 
         # Cross-device coherence: mirror per-notification state updates so all
         # connected dashboards/devices converge on the same view.
-        if notification_id is not None and status is not None:
+        if status is not None and (
+            notification_id is not None or action in {"muted", "snoozed"}
+        ):
             await self.push(
                 "notification_status",
                 {
@@ -196,6 +203,36 @@ class WSSidecar:
                     "device_id": device_id,
                 },
             )
+
+    async def _store_feedback_decision(
+        self,
+        *,
+        action: str,
+        plugin: str,
+        sender: str,
+    ) -> None:
+        decision = ""
+        if action in {"engaged", "opened"}:
+            decision = f"Prefer surfacing {plugin} notifications from {sender}; user engages quickly"
+        elif action == "dismissed":
+            decision = f"Deprioritize {plugin} notifications from {sender}; user dismisses often"
+        elif action == "snoozed":
+            decision = f"Delay {plugin} notifications from {sender}; user prefers snooze behavior"
+        elif action == "muted":
+            decision = f"Suppress {plugin} notifications from {sender}; user explicitly muted this source"
+
+        if not decision:
+            return
+
+        store_decision = getattr(self.agent._memory_store, "store_decision", None)
+        if callable(store_decision):
+            maybe_coro = store_decision(
+                decision,
+                category="notification",
+                source="explicit",
+            )
+            if inspect.isawaitable(maybe_coro):
+                await cast(Awaitable[Any], maybe_coro)
 
     @staticmethod
     def _parse_notification_id(raw: object) -> int | None:
