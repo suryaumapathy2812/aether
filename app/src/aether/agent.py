@@ -725,11 +725,27 @@ class AgentCore:
 
                 # Get pending notifications ready for delivery
                 pending = await self._memory_store.get_pending_notifications()
+                metrics.gauge_set("service.notification.pending", len(pending))
                 for notif in pending:
+                    notif_id = int(notif.get("id", 0) or 0)
                     try:
+                        if notif_id:
+                            await self._memory_store.mark_delivery_attempt(notif_id)
                         await self._deliver_notification(notif)
-                        await self._memory_store.mark_delivered(notif["id"])
+                        await self._memory_store.mark_delivered(notif_id)
                     except Exception as e:
+                        if notif_id:
+                            await self._memory_store.mark_delivery_error(
+                                notif_id, str(e)
+                            )
+                        metrics.inc(
+                            "service.notification.delivery_error",
+                            labels={
+                                "delivery_type": str(
+                                    notif.get("delivery_type", "unknown")
+                                )
+                            },
+                        )
                         logger.warning(
                             "Failed to deliver notification %d: %s",
                             notif.get("id", 0),

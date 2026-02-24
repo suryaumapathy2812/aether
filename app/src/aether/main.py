@@ -1218,6 +1218,7 @@ async def health() -> JSONResponse:
 
     facts = await memory_store.get_facts()
     recent = await memory_store.get_recent(limit=1)
+    reliability = await memory_store.get_reliability_snapshot()
 
     p_worker = _p_worker_snapshot()
     overall_status = "ok" if p_worker.get("ready") else "degraded"
@@ -1230,6 +1231,7 @@ async def health() -> JSONResponse:
             "memory": {
                 "facts_count": len(facts),
                 "has_conversations": len(recent) > 0,
+                "reliability": reliability,
             },
             "tools": tool_registry.tool_names(),
             "skills": [s.name for s in skill_loader.all()],
@@ -1299,6 +1301,12 @@ async def latency_metrics() -> JSONResponse:
                 "realtime_reconnect_p95_ms": metrics.percentile(
                     "voice.realtime.reconnect_ms", 95, labels={"backend": "gemini"}
                 ),
+                "notification_delivery_error_count": metrics.snapshot()["counters"].get(
+                    "service.notification.delivery_error", 0
+                ),
+                "proactive_ingest_failed_count": metrics.snapshot()["counters"].get(
+                    "service.proactive.event_ingest_failed", 0
+                ),
                 "memory_extraction_p95_ms": metrics.percentile(
                     "service.memory.extraction_ms", 95
                 ),
@@ -1323,6 +1331,44 @@ async def memory_sessions() -> JSONResponse:
 async def memory_conversations(limit: int = 20) -> JSONResponse:
     conversations = await memory_store.get_recent(limit=limit)
     return JSONResponse({"conversations": conversations})
+
+
+@app.get("/memory/memories")
+async def memory_memories(
+    limit: int = 100, category: str | None = None
+) -> JSONResponse:
+    memories = await memory_store.get_memories(category=category, limit=limit)
+    return JSONResponse({"memories": memories})
+
+
+@app.get("/memory/decisions")
+async def memory_decisions(
+    category: str | None = None,
+    active_only: bool = True,
+) -> JSONResponse:
+    decisions = await memory_store.get_decisions(
+        category=category,
+        active_only=active_only,
+    )
+    return JSONResponse({"decisions": decisions})
+
+
+@app.get("/memory/notifications")
+async def memory_notifications(limit: int = 200) -> JSONResponse:
+    notifications = await memory_store.get_notifications(limit=limit)
+    reliability = await memory_store.get_reliability_snapshot()
+    return JSONResponse(
+        {
+            "notifications": notifications,
+            "reliability": reliability,
+        }
+    )
+
+
+@app.get("/memory/export")
+async def memory_export() -> JSONResponse:
+    export = await memory_store.export_snapshot()
+    return JSONResponse({"export": export})
 
 
 # ── Config endpoints ───────────────────────────────────────────
@@ -1441,6 +1487,31 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
     plugin: str = body.get("plugin", "unknown")
     handle_tool: str | None = body.get("handle_tool")
     raw_payload: dict = body.get("payload", {})
+    incoming_event_id = str(body.get("event_id", str(uuid.uuid4())))
+
+    proactive_row_id: int | None = None
+    try:
+        proactive_row_id = await memory_store.record_proactive_event(
+            event_id=incoming_event_id,
+            plugin=plugin,
+            event_type=str(body.get("event_type", "unknown")),
+            payload=raw_payload,
+            status="ingested",
+        )
+        metrics.inc(
+            "service.proactive.event_ingested",
+            labels={"plugin": plugin},
+        )
+    except Exception as e:
+        logger.error("Proactive event durability write failed: %s", e, exc_info=True)
+        metrics.inc(
+            "service.proactive.event_ingest_failed",
+            labels={"plugin": plugin},
+        )
+        return JSONResponse(
+            {"error": "failed_to_durably_ingest_event", "detail": str(e)},
+            status_code=503,
+        )
 
     # ── Path 1: plugin owns its own event handling via handle_tool ──────────
     if handle_tool:
@@ -1469,11 +1540,18 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
                 background=False,
             )
         )
+        if proactive_row_id is not None:
+            await memory_store.update_proactive_event(
+                proactive_row_id,
+                status="delegated",
+                decision="delegated",
+                delivery_type="delegate",
+            )
         return JSONResponse({"status": "accepted", "session_id": session_id})
 
     # ── Path 2: NotificationService path ────────────────────────────────────
     event = PluginEvent(
-        id=body.get("event_id", str(uuid.uuid4())),
+        id=incoming_event_id,
         plugin=plugin,
         event_type=body.get("event_type", "unknown"),
         source_id=body.get("source_id", ""),
@@ -1488,8 +1566,18 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
         metadata=raw_payload.get("metadata", {}),
     )
 
-    decision = await notification_service.process_event(event)
-    delivery_type = notification_service.to_delivery_type(decision.action)
+    try:
+        decision = await notification_service.process_event(event)
+        delivery_type = notification_service.to_delivery_type(decision.action)
+    except Exception as e:
+        if proactive_row_id is not None:
+            await memory_store.update_proactive_event(
+                proactive_row_id,
+                status="error",
+                error=str(e),
+            )
+        metrics.inc("service.proactive.process_failed", labels={"plugin": plugin})
+        raise
 
     notification_text = (decision.notification or event.summary or "").strip()
     notification_id = None
@@ -1543,6 +1631,15 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
                 },
             )
 
+    if proactive_row_id is not None:
+        await memory_store.update_proactive_event(
+            proactive_row_id,
+            status="processed",
+            decision=decision.action,
+            delivery_type=delivery_type,
+            notification_id=notification_id,
+        )
+
     # Report decision back to orchestrator
     if ORCHESTRATOR_URL and body.get("event_id"):
         try:
@@ -1560,6 +1657,7 @@ async def receive_plugin_event(request: Request) -> JSONResponse:
                 )
         except Exception as e:
             logger.warning(f"Decision callback failed: {e}")
+            metrics.inc("service.proactive.decision_callback_failed")
 
     return JSONResponse(
         {

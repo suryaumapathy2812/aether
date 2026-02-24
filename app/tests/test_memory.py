@@ -509,3 +509,66 @@ class TestNotificationStatusUpdates:
         row = await cursor.fetchone()
         assert row is not None
         assert row[0] == "muted"
+
+
+class TestProactiveReliability:
+    @pytest.mark.asyncio
+    async def test_delivery_error_sets_retry_backoff(self, store):
+        notification_id = await store.queue_notification(
+            "Retry me",
+            delivery_type="surface",
+        )
+
+        await store.mark_delivery_attempt(notification_id)
+        await store.mark_delivery_error(notification_id, "network down")
+
+        cursor = await store._db.execute(
+            "SELECT status, delivery_attempts, next_retry_at, last_error FROM notifications WHERE id = ?",
+            (notification_id,),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == "pending"
+        assert row[1] == 1
+        assert row[2] is not None
+        assert "network down" in row[3]
+
+    @pytest.mark.asyncio
+    async def test_pending_notifications_respect_next_retry_at(self, store):
+        notification_id = await store.queue_notification(
+            "Future retry", delivery_type="nudge"
+        )
+
+        await store._db.execute(
+            "UPDATE notifications SET next_retry_at = ? WHERE id = ?",
+            (time.time() + 120, notification_id),
+        )
+        await store._db.commit()
+
+        pending = await store.get_pending_notifications(now=time.time())
+        ids = {item["id"] for item in pending}
+        assert notification_id not in ids
+
+    @pytest.mark.asyncio
+    async def test_record_and_export_proactive_event(self, store):
+        row_id = await store.record_proactive_event(
+            event_id="evt-1",
+            plugin="gmail",
+            event_type="email_received",
+            payload={"subject": "hello"},
+        )
+        await store.update_proactive_event(
+            row_id,
+            status="processed",
+            decision="surface",
+            delivery_type="surface",
+            notification_id=11,
+        )
+
+        snapshot = await store.get_reliability_snapshot()
+        assert snapshot["proactive_events"]["processed"] >= 1
+
+        export = await store.export_snapshot()
+        proactive = export["proactive_events"]
+        assert proactive
+        assert proactive[0]["event_id"] == "evt-1"

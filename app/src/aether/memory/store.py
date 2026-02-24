@@ -147,6 +147,10 @@ class MemoryStore:
                 source TEXT NOT NULL DEFAULT 'proactive',
                 deliver_at REAL,
                 delivered_at REAL,
+                delivery_attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at REAL,
+                next_retry_at REAL,
+                last_error TEXT,
                 expires_at REAL,
                 created_at REAL NOT NULL,
                 metadata TEXT NOT NULL DEFAULT '{}'
@@ -157,6 +161,32 @@ class MemoryStore:
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_notifications_deliver_at ON notifications(deliver_at)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_next_retry_at ON notifications(next_retry_at)"
+        )
+
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS proactive_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                plugin TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                decision TEXT,
+                delivery_type TEXT,
+                notification_id INTEGER,
+                error TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proactive_events_created_at ON proactive_events(created_at DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proactive_events_status ON proactive_events(status)"
         )
 
         # Performance indexes for search queries
@@ -179,11 +209,36 @@ class MemoryStore:
         await self._db.commit()
 
         await self._migrate_fact_keys()
+        await self._migrate_notification_columns()
 
         # Compact old actions on startup
         await self._compact_old_actions()
 
         logger.info(f"Memory store initialized at {self.db_path}")
+
+    async def _migrate_notification_columns(self) -> None:
+        if not self._db:
+            return
+        cursor = await self._db.execute("PRAGMA table_info(notifications)")
+        columns = {row[1] for row in await cursor.fetchall()}
+
+        if "delivery_attempts" not in columns:
+            await self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_attempt_at" not in columns:
+            await self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN last_attempt_at REAL"
+            )
+        if "next_retry_at" not in columns:
+            await self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN next_retry_at REAL"
+            )
+        if "last_error" not in columns:
+            await self._db.execute(
+                "ALTER TABLE notifications ADD COLUMN last_error TEXT"
+            )
+        await self._db.commit()
 
     async def stop(self) -> None:
         if self._db:
@@ -908,10 +963,11 @@ class MemoryStore:
             """SELECT id, text, delivery_type, source, deliver_at, expires_at, created_at, metadata
                FROM notifications
                WHERE status = 'pending'
-                 AND (deliver_at IS NULL OR deliver_at <= ?)
-                 AND (expires_at IS NULL OR expires_at > ?)
-               ORDER BY created_at ASC""",
-            (now, now),
+                  AND (deliver_at IS NULL OR deliver_at <= ?)
+                  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+                  AND (expires_at IS NULL OR expires_at > ?)
+                ORDER BY created_at ASC""",
+            (now, now, now),
         )
         rows = await cursor.fetchall()
         return [
@@ -928,16 +984,227 @@ class MemoryStore:
             for r in rows
         ]
 
+    async def mark_delivery_attempt(self, notification_id: int) -> None:
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            """UPDATE notifications
+               SET delivery_attempts = COALESCE(delivery_attempts, 0) + 1,
+                   last_attempt_at = ?
+               WHERE id = ?""",
+            (time.time(), notification_id),
+        )
+        await self._db.commit()
+
+    async def mark_delivery_error(self, notification_id: int, error: str) -> None:
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        now = time.time()
+        cursor = await self._db.execute(
+            "SELECT delivery_attempts FROM notifications WHERE id = ?",
+            (notification_id,),
+        )
+        row = await cursor.fetchone()
+        attempts = int(row[0] if row and row[0] is not None else 1)
+        backoff_s = min(2 ** max(0, attempts - 1), 300)
+
+        await self._db.execute(
+            """UPDATE notifications
+               SET status = 'pending',
+                   last_error = ?,
+                   next_retry_at = ?
+               WHERE id = ?""",
+            (error[:500], now + backoff_s, notification_id),
+        )
+        await self._db.commit()
+
     async def mark_delivered(self, notification_id: int) -> None:
         """Mark a notification as delivered."""
         if not self._db:
             raise RuntimeError("Memory store not started")
 
         await self._db.execute(
-            "UPDATE notifications SET status = 'delivered', delivered_at = ? WHERE id = ?",
+            """UPDATE notifications
+               SET status = 'delivered', delivered_at = ?, next_retry_at = NULL, last_error = NULL
+               WHERE id = ?""",
             (time.time(), notification_id),
         )
         await self._db.commit()
+
+    async def record_proactive_event(
+        self,
+        *,
+        event_id: str,
+        plugin: str,
+        event_type: str,
+        payload: dict[str, Any],
+        status: str = "ingested",
+    ) -> int:
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        now = time.time()
+        cursor = await self._db.execute(
+            """INSERT INTO proactive_events
+               (event_id, plugin, event_type, status, payload, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                plugin,
+                event_type,
+                status,
+                json.dumps(payload),
+                now,
+                now,
+            ),
+        )
+        await self._db.commit()
+        return int(cursor.lastrowid or 0)
+
+    async def update_proactive_event(
+        self,
+        row_id: int,
+        *,
+        status: str,
+        decision: str | None = None,
+        delivery_type: str | None = None,
+        notification_id: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        if not self._db:
+            raise RuntimeError("Memory store not started")
+
+        await self._db.execute(
+            """UPDATE proactive_events
+               SET status = ?, decision = ?, delivery_type = ?, notification_id = ?,
+                   error = ?, updated_at = ?
+               WHERE id = ?""",
+            (
+                status,
+                decision,
+                delivery_type,
+                notification_id,
+                error,
+                time.time(),
+                row_id,
+            ),
+        )
+        await self._db.commit()
+
+    async def get_reliability_snapshot(self) -> dict[str, Any]:
+        if not self._db:
+            return {}
+
+        now = time.time()
+        pending_cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM notifications WHERE status = 'pending'"
+        )
+        pending_row = await pending_cursor.fetchone()
+        pending_count = int(pending_row[0] if pending_row else 0)
+
+        retry_cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM notifications WHERE status = 'pending' AND next_retry_at IS NOT NULL"
+        )
+        retry_row = await retry_cursor.fetchone()
+        retry_count = int(retry_row[0] if retry_row else 0)
+
+        oldest_cursor = await self._db.execute(
+            "SELECT MIN(created_at) FROM notifications WHERE status = 'pending'"
+        )
+        oldest_row = await oldest_cursor.fetchone()
+        oldest = oldest_row[0] if oldest_row else None
+        oldest_age_s = max(0.0, now - float(oldest)) if oldest is not None else 0.0
+
+        event_cursor = await self._db.execute(
+            "SELECT status, COUNT(*) FROM proactive_events GROUP BY status"
+        )
+        event_rows = await event_cursor.fetchall()
+        events_by_status = {str(k): int(v) for k, v in event_rows}
+
+        return {
+            "pending_notifications": pending_count,
+            "pending_with_retry": retry_count,
+            "oldest_pending_age_s": oldest_age_s,
+            "proactive_events": events_by_status,
+        }
+
+    async def get_notifications(self, limit: int = 200) -> list[dict[str, Any]]:
+        if not self._db:
+            return []
+        cursor = await self._db.execute(
+            """SELECT id, text, delivery_type, status, source, deliver_at, delivered_at,
+                      delivery_attempts, last_attempt_at, next_retry_at, last_error,
+                      expires_at, created_at, metadata
+               FROM notifications ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "text": r[1],
+                "delivery_type": r[2],
+                "status": r[3],
+                "source": r[4],
+                "deliver_at": r[5],
+                "delivered_at": r[6],
+                "delivery_attempts": r[7],
+                "last_attempt_at": r[8],
+                "next_retry_at": r[9],
+                "last_error": r[10],
+                "expires_at": r[11],
+                "created_at": r[12],
+                "metadata": json.loads(r[13]) if r[13] else {},
+            }
+            for r in rows
+        ]
+
+    async def export_snapshot(self) -> dict[str, Any]:
+        if not self._db:
+            return {}
+
+        facts = await self.get_facts()
+        memories = await self.get_memories(limit=10000)
+        decisions = await self.get_decisions(active_only=False)
+        conversations = await self.get_recent(limit=10000)
+        sessions = await self.get_session_summaries(limit=10000)
+        notifications = await self.get_notifications(limit=10000)
+
+        proactive_cursor = await self._db.execute(
+            """SELECT id, event_id, plugin, event_type, status, decision, delivery_type,
+                      notification_id, error, payload, created_at, updated_at
+               FROM proactive_events ORDER BY created_at DESC LIMIT 10000"""
+        )
+        proactive_rows = await proactive_cursor.fetchall()
+        proactive_events = [
+            {
+                "id": r[0],
+                "event_id": r[1],
+                "plugin": r[2],
+                "event_type": r[3],
+                "status": r[4],
+                "decision": r[5],
+                "delivery_type": r[6],
+                "notification_id": r[7],
+                "error": r[8],
+                "payload": json.loads(r[9]) if r[9] else {},
+                "created_at": r[10],
+                "updated_at": r[11],
+            }
+            for r in proactive_rows
+        ]
+
+        return {
+            "facts": facts,
+            "memories": memories,
+            "decisions": decisions,
+            "conversations": conversations,
+            "sessions": sessions,
+            "notifications": notifications,
+            "proactive_events": proactive_events,
+        }
 
     async def mark_dismissed(self, notification_id: int) -> None:
         """Mark a notification as dismissed (user feedback — feeds into learning loop)."""

@@ -11,6 +11,7 @@ through LLMCore for consistent contracts.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
     from aether.plugins.event import PluginEvent
 
 logger = logging.getLogger(__name__)
+
+MAX_DECISION_RETRIES = 3
+MAX_NOTIFICATION_RETRIES = 3
 
 # Decision prompt — same as EventProcessor but routed through LLMCore
 DECISION_PROMPT = """You are Aether's notification filter. Given an inbound event and the user's known preferences, decide whether to notify the user.
@@ -123,13 +127,13 @@ class NotificationService:
         preferences = await self._get_preferences(event)
 
         # 2. Classify
-        action = await self._classify(event, preferences)
+        action = await self._classify_with_retries(event, preferences)
         logger.info(f"Event decision: {event.plugin}/{event.event_type} → {action}")
 
         # 3. Generate notification if surfacing
         notification = ""
         if action in ("surface", "action_required", "deferred"):
-            notification = await self._generate_notification(event)
+            notification = await self._generate_notification_with_retries(event)
 
         elapsed_ms = round((time.time() - started) * 1000)
         metrics.observe("service.notification.decision_ms", elapsed_ms)
@@ -220,6 +224,28 @@ class NotificationService:
                 return "surface"
             return "archive"
 
+    async def _classify_with_retries(
+        self, event: "PluginEvent", preferences: str
+    ) -> str:
+        last_exc: Exception | None = None
+        for attempt in range(1, MAX_DECISION_RETRIES + 1):
+            try:
+                return await self._classify(event, preferences)
+            except Exception as exc:
+                last_exc = exc
+                metrics.inc(
+                    "service.notification.retry",
+                    labels={"phase": "decide", "attempt": str(attempt)},
+                )
+                await asyncio.sleep(min(0.2 * (2 ** (attempt - 1)), 2.0))
+
+        metrics.inc("service.notification.retry.exhausted", labels={"phase": "decide"})
+        if last_exc is not None:
+            logger.warning("Decision retries exhausted: %s", last_exc)
+        if event.urgency == "high" or event.requires_action:
+            return "surface"
+        return "archive"
+
     async def _generate_notification(self, event: "PluginEvent") -> str:
         """Generate a natural language notification via LLMCore."""
         sender_name = event.sender.get("name", event.sender.get("email", "someone"))
@@ -243,6 +269,20 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Notification generation failed: {e}")
             return event.summary  # Fallback to raw summary
+
+    async def _generate_notification_with_retries(self, event: "PluginEvent") -> str:
+        for attempt in range(1, MAX_NOTIFICATION_RETRIES + 1):
+            text = await self._generate_notification(event)
+            if text.strip():
+                return text
+            metrics.inc(
+                "service.notification.retry",
+                labels={"phase": "compose", "attempt": str(attempt)},
+            )
+            await asyncio.sleep(min(0.2 * (2 ** (attempt - 1)), 2.0))
+
+        metrics.inc("service.notification.retry.exhausted", labels={"phase": "compose"})
+        return event.summary
 
     async def _collect_response(self, envelope: LLMRequestEnvelope) -> str:
         """Collect full text response from LLMCore."""
