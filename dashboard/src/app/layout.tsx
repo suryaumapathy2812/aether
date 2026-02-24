@@ -3,6 +3,7 @@ import { Plus_Jakarta_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import SessionSync from "@/components/SessionSync";
+import RealtimeProvider from "@/components/RealtimeProvider";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -40,15 +41,17 @@ export default function RootLayout({
       <body className="font-sans">
         <TooltipProvider>
           <SessionSync />
-          <main className="app-scene">
-            <div className="app-scene-bg app-scene-bg-animate" />
-            <div className="app-scene-vignette app-scene-vignette-animate" />
-            <div className="app-scene-content">
-              <div className="app-glass-shell app-glass-shell-animate">
-                <div className="app-shell-content">{children}</div>
+          <RealtimeProvider>
+            <main className="app-scene">
+              <div className="app-scene-bg app-scene-bg-animate" />
+              <div className="app-scene-vignette app-scene-vignette-animate" />
+              <div className="app-scene-content">
+                <div className="app-glass-shell app-glass-shell-animate">
+                  <div className="app-shell-content">{children}</div>
+                </div>
               </div>
-            </div>
-          </main>
+            </main>
+          </RealtimeProvider>
           <Toaster />
         </TooltipProvider>
       </body>

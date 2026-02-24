@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { getSessionToken } from "@/lib/api";
+import { useMemo } from "react";
+import { useRealtime } from "@/components/RealtimeProvider";
 
 /**
  * Agent status — what the orb reflects.
@@ -19,51 +19,14 @@ export type AgentStatus =
   | "disconnected"
   | "unknown";
 
-const ORCHESTRATOR_URL =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "";
-
-const POLL_INTERVAL = 10_000; // 10 seconds
-
-/**
- * Poll the orchestrator /health endpoint to determine agent reachability.
- *
- * Used on non-chat pages. Chat page manages its own status via WS events
- * and passes it directly to StatusOrb.
- */
 export function useAgentStatus(): AgentStatus {
-  const [status, setStatus] = useState<AgentStatus>("unknown");
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { connState } = useRealtime();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function check() {
-      const token = getSessionToken();
-      if (!token) {
-        if (!cancelled) setStatus("disconnected");
-        return;
-      }
-
-      try {
-        const res = await fetch(`${ORCHESTRATOR_URL}/api/health`, {
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!cancelled) {
-          setStatus(res.ok ? "connected" : "disconnected");
-        }
-      } catch {
-        if (!cancelled) setStatus("disconnected");
-      }
-    }
-
-    check();
-    intervalRef.current = setInterval(check, POLL_INTERVAL);
-
-    return () => {
-      cancelled = true;
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
-
-  return status;
+  return useMemo<AgentStatus>(() => {
+    if (connState === "thinking") return "thinking";
+    if (connState === "listening") return "listening";
+    if (connState === "connected") return "connected";
+    if (connState === "connecting") return "unknown";
+    return "disconnected";
+  }, [connState]);
 }

@@ -101,7 +101,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # For container management
+      - /var/run/docker.sock:/var/run/docker.sock # For container management
       - ${AGENT_SHARED_MODELS_HOST_PATH:-../.cache/models}:/shared-models
     restart: unless-stopped
 
@@ -114,7 +114,7 @@ services:
       - BETTER_AUTH_URL=https://${DOMAIN:-localhost}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - ORCHESTRATOR_URL=http://orchestrator:9000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:3080}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1483,54 +1483,6 @@ async def proxy_webrtc_ice(request: Request, user_id: str = Depends(get_user_id)
         raise HTTPException(503, "Agent is not reachable for ICE trickle.")
 
 
-# ── Chat Streaming Proxy (Vercel AI SDK) ───────────────────
-
-
-@app.post("/api/chat")
-async def proxy_chat(request: Request, user_id: str = Depends(get_user_id)):
-    """
-    Proxy streaming chat to the user's agent.
-
-    Passes through plain text streaming chunks from the agent directly
-    to the dashboard TextStreamChatTransport.
-    """
-    agent = await _get_agent_for_user(user_id)
-    if not agent:
-        raise HTTPException(404, "No agent assigned")
-
-    body = await request.json()
-    body["user_id"] = user_id
-
-    import httpx
-    from fastapi.responses import StreamingResponse
-
-    async def stream_from_agent():
-        """Forward plain text streaming chunks from the agent."""
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(120.0, connect=10.0)
-        ) as client:
-            async with client.stream(
-                "POST",
-                f"http://{agent['host']}:{agent['port']}/chat",
-                json=body,
-            ) as resp:
-                if resp.status_code != 200:
-                    error_body = await resp.aread()
-                    yield f"[chat proxy error {resp.status_code}] {error_body.decode()}"
-                    return
-                async for chunk in resp.aiter_text():
-                    yield chunk
-
-    return StreamingResponse(
-        stream_from_agent(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-
-
 # ── WebSocket Proxy ────────────────────────────────────────
 
 
