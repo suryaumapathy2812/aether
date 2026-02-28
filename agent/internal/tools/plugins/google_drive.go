@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 const driveAPI = "https://www.googleapis.com/drive/v3"

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	logic "github.com/suryaumapathy/core-ai/agent/internal/plugins/logic"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	logic "github.com/suryaumapathy2812/core-ai/agent/internal/plugins/logic"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 type WebSearchTool struct{}

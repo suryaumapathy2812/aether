@@ -2,8 +2,8 @@
  * Agent / Orchestrator API client.
  *
  * All requests go through the Next.js `/api/go/*` proxy route, which
- * forwards to the upstream defined by AGENT_BASE_URL (agent in dev,
- * orchestrator in prod). To switch the upstream, change AGENT_BASE_URL
+ * forwards to the upstream defined by AGENT_BASE_URL (orchestrator).
+ * To switch environments, change AGENT_BASE_URL
  * in your .env — no frontend code changes needed.
  *
  * Auth: session token from better-auth sent as Authorization: Bearer header.

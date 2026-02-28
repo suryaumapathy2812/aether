@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 type WorldTimeTool struct{}

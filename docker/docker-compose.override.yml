@@ -22,14 +22,11 @@ services:
   orchestrator:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../orchestrator/src:/app/src
+      - ../orchestrator:/app
     environment:
       # Tell agent_manager to mount host source into agent containers
-      - AGENT_DEV_ROOT=${AGENT_DEV_ROOT:-${PWD}/app}
-    command: >
-      uv run uvicorn src.main:app
-      --host 0.0.0.0 --port 9000
-      --reload --reload-dir /app/src
+      - AGENT_DEV_ROOT=${AGENT_DEV_ROOT:-${PWD}/agent}
+    command: go run ./cmd/server
 
   dashboard:
     build:

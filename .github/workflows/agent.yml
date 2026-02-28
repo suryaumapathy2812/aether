@@ -1,6 +1,6 @@
 # Aether Agent - Build and Push to Docker Hub
 #
-# Builds the Python FastAPI agent and pushes to Docker Hub.
+# Builds the Go agent and pushes to Docker Hub.
 # Trigger: push to main branch.
 
 name: Build & Deploy - Agent
@@ -9,7 +9,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'app/**'
+      - 'agent/**'
       - '.github/workflows/agent.yml'
 
 jobs:
@@ -50,8 +50,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: ./app
-          file: ./app/Dockerfile
+          context: ./agent
+          file: ./agent/Dockerfile
           push: true
           platforms: |
             linux/amd64

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL string, useBasicAuth bool) tools.Result {

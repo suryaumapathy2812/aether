@@ -3,7 +3,7 @@ package ws
 import (
 	"context"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 )
 
 // TaskNotifier implements the agent.Notifier interface by broadcasting

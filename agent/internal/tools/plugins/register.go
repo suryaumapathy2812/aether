@@ -3,8 +3,8 @@ package plugins
 import (
 	"strings"
 
-	coreplugins "github.com/suryaumapathy/core-ai/agent/internal/plugins"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	coreplugins "github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 func RegisterAvailable(reg *tools.Registry, manager *coreplugins.Manager) error {

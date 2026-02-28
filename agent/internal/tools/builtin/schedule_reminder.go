@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/reminders"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 type ScheduleReminderTool struct{}

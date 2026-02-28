@@ -5,8 +5,8 @@ Multi-tenant voice agent platform with a web dashboard, orchestrator control pla
 ## Architecture
 
 - `dashboard/` - Next.js app for auth, settings, plugins, and chat controls.
-- `orchestrator/` - FastAPI control plane for auth, plugin config, agent lifecycle, and API routing.
-- `app/` - Runtime agent (FastAPI) with voice pipeline, WebRTC transport, tools, skills, and memory.
+- `orchestrator/` - Go control plane for auth, routing, and per-user agent proxying.
+- `agent/` - Runtime agent (Go) with chat, tools, tasks, memory, websocket notifications, and media.
 - `docker/` - All Docker Compose stacks and Docker env templates.
 
 ### Runtime topology
@@ -21,8 +21,8 @@ Multi-tenant voice agent platform with a web dashboard, orchestrator control pla
 
 ```text
 core-ai/
-  app/                        # Agent service (Python/FastAPI)
-  orchestrator/               # Orchestrator service (Python/FastAPI)
+  agent/                      # Agent service (Go)
+  orchestrator/               # Orchestrator service (Go)
   dashboard/                  # Dashboard service (Next.js)
   client/                     # Client references (web/ios/tui)
   docker/
@@ -69,7 +69,7 @@ docker compose --env-file docker/.env \
 Local build examples:
 
 ```bash
-docker build -t aether-agent:local ./app
+docker build -t aether-agent:local ./agent
 docker build -t aether-orchestrator:local ./orchestrator
 ```
 

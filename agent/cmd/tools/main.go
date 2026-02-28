@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
-	"github.com/suryaumapathy/core-ai/agent/internal/plugins"
-	"github.com/suryaumapathy/core-ai/agent/internal/skills"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools/builtin"
-	plugintools "github.com/suryaumapathy/core-ai/agent/internal/tools/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
+	plugintools "github.com/suryaumapathy2812/core-ai/agent/internal/tools/plugins"
 )
 
 type cfg struct {

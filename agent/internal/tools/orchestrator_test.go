@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
-	"github.com/suryaumapathy/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 )
 
 type pluginEchoTool struct{}

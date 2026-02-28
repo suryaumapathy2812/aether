@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/skills"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 )
 
 type config struct {

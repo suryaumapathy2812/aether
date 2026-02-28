@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 const calendarAPI = "https://www.googleapis.com/calendar/v3"

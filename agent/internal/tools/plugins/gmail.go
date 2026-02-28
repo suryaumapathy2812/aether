@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 const gmailAPI = "https://gmail.googleapis.com/gmail/v1/users/me"

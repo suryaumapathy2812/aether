@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 )
 
 type Notifier interface {

@@ -36,7 +36,7 @@ services:
       rollback_config:
         order: stop-first
 
-  # --- Orchestrator (FastAPI / Python) ---
+  # --- Orchestrator (Go) ---
   orchestrator:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
     environment:
@@ -49,6 +49,8 @@ services:
       - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      - AETHER_AUTO_ASSIGN_FIRST_AGENT=${AETHER_AUTO_ASSIGN_FIRST_AGENT:-true}
+      - AETHER_DEFAULT_AGENT_ID=${AETHER_DEFAULT_AGENT_ID:-}
       # Shared model cache for per-user agent containers
       - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}
       - AGENT_SHARED_MODELS_ORCH_PATH=${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
@@ -121,8 +123,10 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
+      - AGENT_BASE_URL=http://orchestrator:9000
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=
+      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=
     depends_on:
       - postgres
       - orchestrator
@@ -157,7 +161,7 @@ services:
   # Agent containers are provisioned dynamically per user by the orchestrator
   # via Docker SDK. No static agent service here.
   # The agent image must be built and pushed to Docker Hub:
-  #   docker build -t ${DOCKERHUB_USERNAME}/aether-agent:latest ./app
+  #   docker build -t ${DOCKERHUB_USERNAME}/aether-agent:latest ./agent
   #   docker push ${DOCKERHUB_USERNAME}/aether-agent:latest
 
 networks:

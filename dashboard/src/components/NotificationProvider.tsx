@@ -40,7 +40,7 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 // ── Constants ──
 
 const WS_BASE =
-  process.env.NEXT_PUBLIC_AGENT_WS_URL || "ws://localhost:8000";
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_WS_URL || "ws://localhost:9000";
 const MAX_NOTIFICATIONS = 100;
 const PING_INTERVAL = 25_000;
 const APPROVALS_POLL_INTERVAL = 10_000;
@@ -274,9 +274,9 @@ export default function NotificationProvider({
         wsRef.current = null;
       }
 
-      const params = new URLSearchParams({ user_id: userId });
+      const params = new URLSearchParams();
       if (token) params.set("token", token);
-      const url = `${WS_BASE}/ws/notifications?${params.toString()}`;
+      const url = `${WS_BASE}/api/ws/notifications?${params.toString()}`;
 
       try {
         const socket = new WebSocket(url);

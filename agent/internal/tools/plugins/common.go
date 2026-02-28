@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 func pluginConfig(ctx context.Context, call tools.Call) (map[string]string, error) {

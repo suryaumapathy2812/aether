@@ -1,51 +1,54 @@
-# Aether Orchestrator (`orchestrator`)
+# Aether Orchestrator
 
-Control plane for multi-user runtime agents. Handles auth validation, per-user agent lifecycle, plugin config APIs, and proxying to spawned agent containers.
+Go rewrite of the orchestration layer.
 
-## What this service owns
+## Responsibility
 
-- Auth/session verification (Better Auth token validation)
-- Per-user agent container spawn/reuse/reap
-- Device pairing + service key + plugin config endpoints
-- WebRTC signaling proxy and chat/memory proxy routes
-- Shared model bootstrap and periodic background maintenance
+- Dashboard always calls orchestrator.
+- Orchestrator authenticates requests from bearer token.
+- Orchestrator resolves `user_id -> agent host/port` and proxies to the right agent.
 
-## Current architecture
+## Implemented route groups
 
-- API + startup lifecycle: `src/main.py`
-- Agent container manager: `src/agent_manager.py`
-- Auth adapter: `src/auth.py`
-- DB pool + schema bootstrap: `src/db.py`
-- Secret encryption helpers: `src/crypto.py`
+- `GET /health`, `GET /api/health`
+- `POST /api/agents/register`
+- `POST /api/agents/{id}/heartbeat`
+- `POST /api/agents/{id}/assign?user_id=...`
+- `GET /api/agents/health`
+- Authenticated user-routing proxy:
+  - `/v1/*`
+  - `/api/memory/*`
+  - `/api/plugins*`
+  - `/api/push/vapid-key`
+  - `/api/push/subscribe`
+- Realtime-support endpoints:
+  - `GET /api/agent/ready`
+  - `POST /api/webrtc/offer`
+  - `PATCH /api/webrtc/ice`
+  - `WS /api/ws/notifications` (and `WS /api/ws` alias)
+- `GET /api/metrics/latency` (proxy if available, otherwise degraded payload)
 
-## Run locally
+## Behavior guarantees
+
+- Token-derived `user_id` is enforced for routed traffic.
+- For known user-scoped calls, `user_id` query/body fields are rewritten to the
+  authenticated user.
+- HTTP proxy preserves status, content-type, and streaming response bodies.
+- Notification websocket is proxied through orchestrator to the assigned agent.
+
+## Configuration
+
+- `PORT` (default `9000`)
+- `DATABASE_URL` (required)
+- `AGENT_SECRET` (optional; protects agent registration endpoints)
+- `AETHER_LOCAL_AGENT_URL` (optional; single-agent dev mode override)
+- `AGENT_PROXY_TIMEOUT_SECONDS` (default `120`)
+- `AETHER_DEFAULT_AGENT_ID` (optional fallback assignment)
+- `AETHER_AUTO_ASSIGN_FIRST_AGENT` (`true` to assign first running agent when user has no assignment)
+
+## Run
 
 ```bash
-uv sync --dev
-uv run uvicorn src.main:app --host 0.0.0.0 --port 9000 --reload --reload-dir src
+cd orchestrator
+go run ./cmd/server
 ```
-
-## Test
-
-```bash
-uv run pytest
-```
-
-## Build image
-
-```bash
-docker build -t aether-orchestrator:local .
-```
-
-## Important env vars
-
-- Core: `DATABASE_URL`, `CORS_ORIGINS`, `BETTER_AUTH_SECRET`, `AGENT_SECRET`
-- Agent lifecycle: `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_IDLE_TIMEOUT`, `AGENT_DEV_ROOT`
-- Shared models: `AGENT_SHARED_MODELS_HOST_PATH`, `AGENT_SHARED_MODELS_ORCH_PATH`, `AGENT_SHARED_MODELS_CONTAINER_PATH`
-- Provider keys passed to agents: `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
-
-## Current constraints
-
-- If `AGENT_SECRET` is unset, internal agent endpoints become weakly protected.
-- OAuth state storage is currently in-memory (single-process limitation).
-- Dev host-mode agent flow is practical for limited local concurrency.

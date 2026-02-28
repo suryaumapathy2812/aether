@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Proxy route: forwards /api/go/* to the upstream agent (or orchestrator).
+ * Proxy route: forwards /api/go/* to the orchestrator upstream.
  *
- * Set AGENT_BASE_URL in your .env to control the upstream:
- *   - Agent direct:       AGENT_BASE_URL=http://localhost:8000
- *   - Orchestrator:       AGENT_BASE_URL=http://localhost:9000
+ * Set AGENT_BASE_URL in your .env:
+ *   - AGENT_BASE_URL=http://localhost:9000
  *
  * The proxy strips the /api/go prefix and forwards the rest as-is.
  */
 const AGENT_BASE_URL = (
-  process.env.AGENT_BASE_URL || "http://localhost:8000"
+  process.env.AGENT_BASE_URL || "http://localhost:9000"
 ).replace(/\/$/, "");
 
 async function proxy(request: NextRequest, params: { path?: string[] }) {
@@ -64,7 +63,7 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
     return NextResponse.json(
       {
         error: "upstream_unavailable",
-        detail: `Could not reach upstream at ${AGENT_BASE_URL}. Is the agent running?`,
+        detail: `Could not reach upstream at ${AGENT_BASE_URL}. Is the orchestrator running?`,
         code,
       },
       { status: 502 }

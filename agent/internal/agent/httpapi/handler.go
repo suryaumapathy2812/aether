@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
-	"github.com/suryaumapathy/core-ai/agent/internal/media"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 )
 
 type Handler struct {

@@ -3,7 +3,7 @@ package plugins
 import (
 	"context"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 )
 
 // PluginState gives a plugin module scoped access to only its own row.

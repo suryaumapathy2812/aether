@@ -1,6 +1,6 @@
 # Aether Orchestrator - Build and Push to Docker Hub
 #
-# Builds the Python FastAPI orchestrator and pushes to Docker Hub.
+# Builds the Go orchestrator and pushes to Docker Hub.
 # Trigger: push to main branch.
 
 name: Build & Deploy - Orchestrator

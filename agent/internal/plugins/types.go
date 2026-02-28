@@ -2,7 +2,7 @@ package plugins
 
 import "net/http"
 
-import "github.com/suryaumapathy/core-ai/agent/internal/db"
+import "github.com/suryaumapathy2812/core-ai/agent/internal/db"
 
 type SourceType string
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/suryaumapathy/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 )
 
 type Runtime struct {

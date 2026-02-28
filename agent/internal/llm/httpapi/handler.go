@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/suryaumapathy/core-ai/agent/internal/llm"
-	"github.com/suryaumapathy/core-ai/agent/internal/media"
-	"github.com/suryaumapathy/core-ai/agent/internal/memory"
-	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 type Handler struct {

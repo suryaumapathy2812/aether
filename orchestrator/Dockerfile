@@ -1,27 +1,14 @@
-FROM python:3.12-slim
+FROM golang:1.24-alpine
 
 WORKDIR /app
 
-# Install UV
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Copy dependency files first (cache layer)
-COPY pyproject.toml uv.lock .python-version README.md ./
+COPY . .
 
-# Install dependencies to system Python
-ENV UV_SYSTEM_PYTHON=1
-RUN uv sync --frozen --no-dev --no-install-project
-
-# Copy application code
-COPY src/ src/
-
-# Install the project itself to system Python
-RUN uv sync --frozen --no-dev
-
-ENV AETHER_HOST=0.0.0.0 \
-    AETHER_PORT=9000
+RUN go build -o /usr/local/bin/orchestrator-go ./cmd/server
 
 EXPOSE 9000
 
-# Use uv run to activate the environment
-CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "9000"]
+CMD ["orchestrator-go"]

@@ -1,6 +1,6 @@
 # Aether — Docker Compose
 #
-# Core services: Caddy, Postgres, Orchestrator, Dashboard.
+# Core services: Caddy, Postgres, Orchestrator-Go, Dashboard.
 # Agent containers are provisioned dynamically per user by the orchestrator.
 #
 # Usage:
@@ -8,7 +8,7 @@
 #   docker compose -f docker/docker-compose.yml up --build
 #
 # The agent image must be pre-built:
-#   docker build -t core-ai-agent:latest ./app
+#   docker build -t core-ai-agent:latest ./agent
 
 services:
   # --- Caddy (reverse proxy + auto-HTTPS) ---
@@ -19,7 +19,6 @@ services:
       - "${CADDY_HTTPS_PORT:-443}:443"
     volumes:
       - ../docker/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../app/src/aether/static:/srv/agent-static:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -45,11 +44,11 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # --- Orchestrator (FastAPI / Python) ---
+  # --- Orchestrator (Go) ---
   orchestrator:
     build: ../orchestrator
     environment:
-      - DATABASE_URL=postgresql+asyncpg://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
+      - DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD:-aether_dev}@postgres:5432/aether
       - CORS_ORIGINS=https://${DOMAIN:-localhost},http://localhost:3000
       - AETHER_HOST=0.0.0.0
       - AETHER_PORT=9000
@@ -84,6 +83,8 @@ services:
       - AETHER_TURN_MAX_ENDPOINTING_DELAY=${AETHER_TURN_MAX_ENDPOINTING_DELAY:-3.0}
       - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - AETHER_AUTO_ASSIGN_FIRST_AGENT=${AETHER_AUTO_ASSIGN_FIRST_AGENT:-true}
+      - AETHER_DEFAULT_AGENT_ID=${AETHER_DEFAULT_AGENT_ID:-}
       # System-wide fallback API keys (used when user hasn't set their own)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -113,8 +114,10 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN:-localhost}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      - AGENT_BASE_URL=http://orchestrator:9000
       - ORCHESTRATOR_URL=http://orchestrator:9000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:3080}
+      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=${NEXT_PUBLIC_ORCHESTRATOR_WS_URL:-ws://localhost:3080}
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +128,7 @@ services:
   # --- Aether Agent ---
   # Agent containers are provisioned dynamically per user by the orchestrator
   # via Docker SDK. No static agent service here.
-  # The agent image must be pre-built: docker build -t core-ai-agent:latest ./app
+  # The agent image must be pre-built: docker build -t core-ai-agent:latest ./agent
 
 volumes:
   postgres_data:

@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/suryaumapathy/core-ai/agent/internal/tools"
+import "github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 
 func RegisterCore(reg *tools.Registry) error {
 	core := []tools.Tool{
