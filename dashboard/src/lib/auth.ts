@@ -19,7 +19,20 @@ const adapter = new PrismaPg({
 
 const prisma = new PrismaClient({ adapter });
 
+const authSecret =
+  process.env.BETTER_AUTH_SECRET ||
+  process.env.AUTH_SECRET ||
+  `aether-dev-secret-${process.env.USER || "local"}`;
+
+const authBaseURL =
+  process.env.BETTER_AUTH_BASE_URL ||
+  process.env.BETTER_AUTH_URL ||
+  "http://localhost:3000";
+
 export const auth = betterAuth({
+  secret: authSecret,
+  baseURL: authBaseURL,
+
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
@@ -41,7 +54,7 @@ export const auth = betterAuth({
   trustedOrigins: [
     "http://localhost:3000",
     "http://localhost:9000",
-    process.env.BETTER_AUTH_URL || "",
+    authBaseURL,
     // Additional trusted origins (comma-separated) for OrbStack, tunnels, etc.
     ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map(s => s.trim()) || []),
   ].filter(Boolean),

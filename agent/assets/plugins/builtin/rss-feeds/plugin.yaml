@@ -1,0 +1,15 @@
+name: rss-feeds
+display_name: RSS Feeds & Hacker News
+description: Subscribe to and read any RSS/Atom feed. Includes dedicated Hacker News tools for top stories, new posts, and full-text search.
+version: 0.1.0
+
+auth:
+  type: none
+
+tools:
+  - class: FetchFeedTool
+  - class: GetItemContentTool
+  - class: ListSubscribedFeedsTool
+  - class: AddFeedTool
+  - class: GetHackerNewsTopTool
+  - class: SearchHackerNewsTool

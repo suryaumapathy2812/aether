@@ -1,0 +1,311 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/suryaumapathy/core-ai/agent/internal/agent"
+	agenthttp "github.com/suryaumapathy/core-ai/agent/internal/agent/httpapi"
+	"github.com/suryaumapathy/core-ai/agent/internal/cron"
+	"github.com/suryaumapathy/core-ai/agent/internal/db"
+	"github.com/suryaumapathy/core-ai/agent/internal/llm"
+	llmhttp "github.com/suryaumapathy/core-ai/agent/internal/llm/httpapi"
+	"github.com/suryaumapathy/core-ai/agent/internal/media"
+	"github.com/suryaumapathy/core-ai/agent/internal/memory"
+	"github.com/suryaumapathy/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy/core-ai/agent/internal/providers"
+	"github.com/suryaumapathy/core-ai/agent/internal/reminders"
+	"github.com/suryaumapathy/core-ai/agent/internal/skills"
+	"github.com/suryaumapathy/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy/core-ai/agent/internal/tools/builtin"
+	toolhttp "github.com/suryaumapathy/core-ai/agent/internal/tools/httpapi"
+	plugintools "github.com/suryaumapathy/core-ai/agent/internal/tools/plugins"
+	"github.com/suryaumapathy/core-ai/agent/internal/ws"
+)
+
+func main() {
+	loadDotEnvIfPresent()
+
+	assetsDir := assetsRoot()
+	store, err := db.OpenInAssets(assetsDir)
+	if err != nil {
+		log.Fatalf("failed to open db: %v", err)
+	}
+	defer store.Close()
+
+	scheduler := cron.NewScheduler(store, cron.SchedulerOptions{
+		PollInterval: time.Second,
+		LeaseFor:     30 * time.Second,
+		BatchSize:    25,
+		JobTimeout:   60 * time.Second,
+	})
+
+	pluginRegistry := plugins.NewCronRegistry()
+	plugins.RegisterDefaultTokenRotators(pluginRegistry)
+	plugins.RegisterCronHandlers(scheduler, store, pluginRegistry)
+
+	reminderRegistry := reminders.NewRegistry()
+	reminderRegistry.Register(func(ctx context.Context, payload map[string]any) error {
+		msg := ""
+		if payload != nil {
+			if v, ok := payload["message"].(string); ok {
+				msg = v
+			}
+		}
+		if msg == "" {
+			msg = "(empty reminder payload)"
+		}
+		log.Printf("reminder delivered: %s", msg)
+		return nil
+	})
+	reminders.RegisterCronHandlers(scheduler, reminderRegistry)
+
+	skillsManager := skills.NewManager(skills.ManagerOptions{
+		BuiltinDirs: []string{filepath.Join(assetsDir, "skills", "builtin")},
+		UserDir:     filepath.Join(assetsDir, "skills", "user"),
+		ExternalDir: filepath.Join(assetsDir, "skills", "external"),
+	})
+	if _, err := skillsManager.Discover(context.Background()); err != nil {
+		log.Printf("skills discover warning: %v", err)
+	}
+
+	pluginsManager := plugins.NewManager(plugins.ManagerOptions{
+		BuiltinDirs: []string{filepath.Join(assetsDir, "plugins", "builtin")},
+		UserDir:     filepath.Join(assetsDir, "plugins", "user"),
+		ExternalDir: filepath.Join(assetsDir, "plugins", "external"),
+		StateStore:  store,
+	})
+	if _, err := pluginsManager.Discover(context.Background()); err != nil {
+		log.Printf("plugins discover warning: %v", err)
+	}
+
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterAll(toolRegistry); err != nil {
+		log.Fatalf("failed to register core tools: %v", err)
+	}
+	if err := plugintools.RegisterAvailable(toolRegistry, pluginsManager); err != nil {
+		log.Fatalf("failed to register plugin tools: %v", err)
+	}
+	workspaceDir := filepath.Join(assetsDir, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		log.Fatalf("failed to create workspace dir: %v", err)
+	}
+	toolOrchestrator := tools.NewOrchestrator(toolRegistry, tools.ExecContext{
+		WorkingDir: workspaceDir,
+		Store:      store,
+		Skills:     skillsManager,
+		Plugins:    pluginsManager,
+	})
+
+	mux := http.NewServeMux()
+	llmProvider := providers.NewOpenAILLMProviderFromEnv()
+	llmCore := llm.NewCore(llmProvider, toolOrchestrator)
+	mediaService, err := media.NewFromEnv(context.Background())
+	if err != nil {
+		log.Fatalf("failed to init media storage: %v", err)
+	}
+	memoryService := memory.NewService(store, llmCore)
+	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store)
+
+	// WebSocket notification hub + notifier
+	wsHub := ws.NewHub()
+	wsTaskNotifier := ws.NewTaskNotifier(wsHub)
+	agentNotifier := agent.NewNotifierFromEnv(wsTaskNotifier)
+
+	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
+	llmHandler := llmhttp.New(llmhttp.Options{Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService})
+	llmHandler.RegisterRoutes(mux)
+	agentHandler := agenthttp.New(store, mediaService)
+	agentHandler.RegisterRoutes(mux)
+
+	// WebSocket + Web Push endpoints
+	wsHandler := ws.NewHandler(wsHub)
+	wsHandler.RegisterRoutes(mux)
+	pushSender := ws.NewPushSenderFromEnv()
+	pushHandler := ws.NewPushHandler(store, pushSender)
+	pushHandler.RegisterRoutes(mux)
+
+	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store})
+	handler.RegisterRoutes(mux)
+	httpServer := &http.Server{Addr: ":" + strconv.Itoa(httpPort()), Handler: mux}
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("http server error: %v", err)
+		}
+	}()
+	log.Printf("http server listening on %s", httpServer.Addr)
+	logStartupReport(context.Background(), store, skillsManager, pluginsManager, toolRegistry, pluginRegistry, reminderRegistry)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	memoryService.Start(ctx)
+
+	if err := scheduler.Start(ctx); err != nil {
+		log.Fatalf("failed to start scheduler: %v", err)
+	}
+	if err := agentRuntime.Start(ctx); err != nil {
+		log.Fatalf("failed to start agent runtime: %v", err)
+	}
+	log.Printf("server bootstrap started (assets=%s)", assetsDir)
+
+	<-ctx.Done()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := scheduler.Stop(shutdownCtx); err != nil {
+		log.Printf("scheduler stop error: %v", err)
+	}
+	if err := agentRuntime.Stop(shutdownCtx); err != nil {
+		log.Printf("agent runtime stop error: %v", err)
+	}
+	if err := memoryService.Stop(shutdownCtx); err != nil {
+		log.Printf("memory service stop error: %v", err)
+	}
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("http shutdown error: %v", err)
+	}
+	log.Printf("server shutdown complete")
+}
+
+func assetsRoot() string {
+	if v := os.Getenv("AGENT_ASSETS_DIR"); v != "" {
+		return v
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "assets"
+	}
+	return filepath.Clean(filepath.Join(wd, "assets"))
+}
+
+func loadDotEnvIfPresent() {
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(wd, ".env")
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+		eq := strings.Index(line, "=")
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		value := strings.TrimSpace(line[eq+1:])
+		if key == "" {
+			continue
+		}
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
+}
+
+func httpPort() int {
+	if raw := os.Getenv("PORT"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 65535 {
+			return n
+		}
+	}
+	return 8000
+}
+
+func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skills.Manager, pluginsManager *plugins.Manager, toolRegistry *tools.Registry, pluginRegistry *plugins.CronRegistry, reminderRegistry *reminders.Registry) {
+	skillCount := 0
+	if skillsManager != nil {
+		skillCount = len(skillsManager.List())
+	}
+
+	pluginCount := 0
+	enabledPlugins := 0
+	if pluginsManager != nil {
+		pluginCount = len(pluginsManager.List())
+	}
+	if store != nil {
+		if records, err := store.ListPlugins(ctx); err == nil {
+			for _, rec := range records {
+				if rec.Enabled {
+					enabledPlugins++
+				}
+			}
+		}
+	}
+
+	totalTools := 0
+	builtinTools := 0
+	pluginTools := 0
+	if toolRegistry != nil {
+		names := toolRegistry.ToolNames()
+		totalTools = len(names)
+		for _, name := range names {
+			if toolRegistry.PluginForTool(name) == "" {
+				builtinTools++
+			} else {
+				pluginTools++
+			}
+		}
+	}
+
+	cronTotal := 0
+	cronScheduled := 0
+	cronRetry := 0
+	cronRunning := 0
+	if store != nil {
+		if jobs, err := store.ListCronJobs(ctx); err == nil {
+			cronTotal = len(jobs)
+			for _, job := range jobs {
+				switch job.Status {
+				case db.CronStatusScheduled:
+					cronScheduled++
+				case db.CronStatusRetry:
+					cronRetry++
+				case db.CronStatusRunning:
+					cronRunning++
+				}
+			}
+		}
+	}
+
+	rotatorCount := 0
+	renewerCount := 0
+	if pluginRegistry != nil {
+		rotatorCount = pluginRegistry.TokenRotatorCount()
+		renewerCount = pluginRegistry.WatchRenewerCount()
+	}
+	reminderHandler := false
+	if reminderRegistry != nil {
+		reminderHandler = reminderRegistry.HandlerRegistered()
+	}
+
+	log.Printf("startup report: skills=%d plugins=%d enabled_plugins=%d", skillCount, pluginCount, enabledPlugins)
+	log.Printf("startup report: tools_total=%d builtin_tools=%d plugin_tools=%d", totalTools, builtinTools, pluginTools)
+	log.Printf("startup report: cron_jobs_total=%d scheduled=%d retry=%d running=%d", cronTotal, cronScheduled, cronRetry, cronRunning)
+	log.Printf("startup report: cron_handlers token_rotators=%d watch_renewers=%d reminder_handler=%t", rotatorCount, renewerCount, reminderHandler)
+}

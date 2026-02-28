@@ -1,0 +1,11 @@
+name: wikipedia
+display_name: Wikipedia
+description: Search Wikipedia and read articles. Instant access to encyclopaedic knowledge on any topic — people, places, events, science, history, and more.
+version: 0.2.0
+
+auth:
+  type: none
+
+tools:
+  - class: WikipediaSearchTool
+  - class: WikipediaGetArticleTool

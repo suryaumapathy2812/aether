@@ -1,0 +1,16 @@
+name: local-search
+display_name: Local Search
+description: Search nearby places, businesses, and services using Google Places API.
+version: 0.1.0
+
+auth:
+  type: api_key
+  config_fields:
+    - key: google_api_key
+      label: Google Places API Key
+      type: password
+      required: true
+      description: API key for Google Places Text Search endpoint.
+
+tools:
+  - class: LocalSearchTool

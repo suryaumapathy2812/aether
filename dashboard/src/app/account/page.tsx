@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import PushOptIn from "@/components/PushOptIn";
 import { useSession, signOut } from "@/lib/auth-client";
 
 /**
@@ -85,6 +87,13 @@ export default function AccountPage() {
         >
           Log Out
         </Button>
+
+        <Separator className="w-full my-4 opacity-50" />
+
+        {/* Push notification toggle */}
+        <div className="w-full px-1">
+          <PushOptIn />
+        </div>
       </div>
     </PageShell>
   );

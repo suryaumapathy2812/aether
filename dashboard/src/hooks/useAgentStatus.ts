@@ -1,17 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
-import { useRealtime } from "@/components/RealtimeProvider";
+import { useEffect, useState } from "react";
+import { fetchWithAuth } from "@/lib/api";
 
-/**
- * Agent status — what the orb reflects.
- *
- * - "connected"    — agent is reachable and healthy
- * - "thinking"     — agent is processing (set externally by chat page)
- * - "listening"    — agent is listening for input (set externally by chat page)
- * - "disconnected" — agent unreachable or no session
- * - "unknown"      — initial state before first check
- */
 export type AgentStatus =
   | "connected"
   | "thinking"
@@ -20,13 +11,31 @@ export type AgentStatus =
   | "unknown";
 
 export function useAgentStatus(): AgentStatus {
-  const { connState } = useRealtime();
+  const [status, setStatus] = useState<AgentStatus>("unknown");
 
-  return useMemo<AgentStatus>(() => {
-    if (connState === "thinking") return "thinking";
-    if (connState === "listening") return "listening";
-    if (connState === "connected") return "connected";
-    if (connState === "connecting") return "unknown";
-    return "disconnected";
-  }, [connState]);
+  useEffect(() => {
+    let cancelled = false;
+    async function check(): Promise<void> {
+      try {
+        const res = await fetchWithAuth("/health", { method: "GET" });
+        if (cancelled) return;
+        setStatus(res.ok ? "connected" : "disconnected");
+      } catch {
+        if (!cancelled) {
+          setStatus("disconnected");
+        }
+      }
+    }
+
+    void check();
+    const timer = window.setInterval(() => {
+      void check();
+    }, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  return status;
 }

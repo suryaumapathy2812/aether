@@ -4,8 +4,7 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import StatusOrb from "@/components/StatusOrb";
-import { useAgentStatus } from "@/hooks/useAgentStatus";
+import NotificationBell from "@/components/NotificationBell";
 
 /**
  * Page shell — consistent layout for all inner pages.
@@ -26,7 +25,6 @@ export default function PageShell({
   centered?: boolean;
 }) {
   const router = useRouter();
-  const agentStatus = useAgentStatus();
 
   return (
     <div className="h-full flex flex-col w-full px-6 sm:px-8">
@@ -61,8 +59,8 @@ export default function PageShell({
             <X className="size-[14px]" strokeWidth={1.5} />
           </Button>
         ) : (
-          <div className="w-8 min-w-[44px] flex items-center justify-center">
-            <StatusOrb status={agentStatus} size={10} />
+          <div className="w-8 min-w-[44px] flex items-center justify-center -mr-2">
+            <NotificationBell />
           </div>
         )}
       </header>

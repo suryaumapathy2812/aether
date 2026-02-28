@@ -5,14 +5,13 @@ const withPWA = require("next-pwa");
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  allowedDevOrigins: [
-    "dashboard.core-ai.orb.local",
-  ],
+  allowedDevOrigins: ["dashboard.core-ai.orb.local"],
 };
 
 export default withPWA({
   dest: "public",
-  // Only activate service worker in production — avoids cache confusion in dev
+  // Set to `false` to enable SW in dev (needed to test Web Push locally).
+  // Flip back to `process.env.NODE_ENV === "development"` for normal dev work.
   disable: process.env.NODE_ENV === "development",
   // Don't precache Next.js build manifests (they change every build)
   buildExcludes: [/app-build-manifest\.json$/, /middleware-manifest\.json$/],

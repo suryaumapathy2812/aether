@@ -15,7 +15,6 @@ import {
   savePluginConfig,
   enablePlugin,
   disablePlugin,
-  getOAuthStartUrl,
   PluginInfo,
 } from "@/lib/api";
 
@@ -54,7 +53,6 @@ export default function PluginDetailPage() {
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
-  const [connecting, setConnecting] = useState(false);
 
   // Show success message after OAuth redirect
   const justConnected = searchParams.get("connected") === "true";
@@ -113,22 +111,6 @@ export default function PluginDetailPage() {
     return plugin.config_fields
       .filter((f) => f.required && !formValues[f.key]?.trim())
       .map((f) => f.label);
-  }
-
-  /** OAuth2: install silently then redirect to provider */
-  async function handleConnect() {
-    if (!plugin) return;
-    setConnecting(true);
-    setError("");
-    try {
-      if (!plugin.installed) {
-        await installPlugin(pluginName);
-      }
-      window.location.href = getOAuthStartUrl(pluginName);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to connect");
-      setConnecting(false);
-    }
   }
 
   /** api_key: install (if needed) + save config in one shot */
@@ -245,55 +227,24 @@ export default function PluginDetailPage() {
           {/* ── OAuth2 ── */}
           {plugin.auth_type === "oauth2" && (
             <div className="py-4">
-              {plugin.connected ? (
-                <div className="space-y-3">
-                  {/* Connected row */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-[14px] text-secondary-foreground font-light">
-                      {config.account_email
+              <div className="space-y-3">
+                <p className="text-[12px] text-muted-foreground leading-relaxed">
+                  OAuth plugin setup is not available in the Go runtime yet. You can still
+                  view status and enable already configured plugins.
+                </p>
+                <div className="flex items-center justify-between">
+                  <span className="text-[14px] text-secondary-foreground font-light">
+                    {plugin.connected
+                      ? config.account_email
                         ? `Connected as ${config.account_email}`
-                        : "Connected"}
-                    </span>
-                    <Button
-                      variant="aether-link"
-                      size="aether-link"
-                      onClick={handleConnect}
-                      disabled={connecting}
-                      className="text-[11px] tracking-wider"
-                    >
-                      {connecting ? "..." : "reconnect"}
-                    </Button>
-                  </div>
-
-                  {/* Needs reconnect warning */}
-                  {plugin.needs_reconnect && (
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
-                      <span className="text-[12px] text-amber-400 tracking-wide">
-                        New permissions required — reconnect to continue using this plugin
-                      </span>
-                      <Button
-                        variant="aether"
-                        size="aether"
-                        onClick={handleConnect}
-                        disabled={connecting}
-                        className="shrink-0 self-start sm:self-auto"
-                      >
-                        {connecting ? "..." : "reconnect"}
-                      </Button>
-                    </div>
-                  )}
+                        : "Connected"
+                      : "Not connected"}
+                  </span>
+                  <span className="text-[11px] tracking-wider text-muted-foreground">
+                    {plugin.auth_provider || "oauth2"}
+                  </span>
                 </div>
-              ) : (
-                /* Not yet connected — primary CTA */
-                <Button
-                  variant="aether"
-                  size="aether"
-                  onClick={handleConnect}
-                  disabled={connecting}
-                >
-                  {connecting ? "connecting..." : `Connect with ${plugin.auth_provider}`}
-                </Button>
-              )}
+              </div>
               <Separator className="mt-4" />
             </div>
           )}
@@ -330,8 +281,8 @@ export default function PluginDetailPage() {
             </div>
           )}
 
-          {/* ── Enable / Disable (only shown once installed) ── */}
-          {plugin.installed && plugin.auth_type !== "none" && (
+          {/* ── Enable / Disable (shown once installed) ── */}
+          {plugin.installed && (
             <div className="py-2">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
                 <div className="flex flex-col">

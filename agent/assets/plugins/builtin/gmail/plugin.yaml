@@ -1,0 +1,47 @@
+name: gmail
+display_name: Gmail
+description: Monitor and respond to Gmail emails
+version: 0.3.0
+
+auth:
+  type: oauth2
+  provider: google
+  token_refresh_interval: 3000
+  refresh_tool: refresh_gmail_token
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+    - https://www.googleapis.com/auth/gmail.send
+    - https://www.googleapis.com/auth/gmail.modify
+    - https://www.googleapis.com/auth/gmail.compose
+  config_fields:
+    - key: account_email
+      label: Gmail Address
+      type: text
+      required: true
+
+webhook:
+  protocol: pubsub
+  setup_tool: setup_gmail_watch
+  handle_tool: handle_gmail_event
+  renew_interval: 518400
+
+tools:
+  - class: ListUnreadTool
+  - class: ReadEmailTool
+  - class: SendEmailTool
+  - class: SendReplyTool
+  - class: CreateDraftTool
+  - class: ArchiveEmailTool
+  - class: SearchEmailTool
+  - class: ReplyAllTool
+  - class: GetThreadTool
+  - class: TrashEmailTool
+  - class: MarkReadTool
+  - class: MarkUnreadTool
+  - class: ListLabelsTool
+  - class: AddLabelTool
+  - class: RemoveLabelTool
+  - class: RefreshGmailTokenTool
+  - class: SetupGmailWatchTool
+  - class: RenewGmailWatchTool
+  - class: HandleGmailEventTool
