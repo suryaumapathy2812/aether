@@ -128,7 +128,7 @@ func telegramRequest(ctx context.Context, call tools.Call, method string, payloa
 	if err != nil {
 		return nil, err
 	}
-	botToken, err := requireString(cfg, "bot_token")
+	botToken, err := requireString(ctx, call, cfg, "bot_token")
 	if err != nil {
 		return nil, fmt.Errorf("Telegram is not configured: %w", err)
 	}

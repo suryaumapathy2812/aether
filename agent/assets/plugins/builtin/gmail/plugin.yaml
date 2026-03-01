@@ -14,10 +14,20 @@ auth:
     - https://www.googleapis.com/auth/gmail.modify
     - https://www.googleapis.com/auth/gmail.compose
   config_fields:
+    - key: client_id
+      label: Google OAuth Client ID
+      type: text
+      required: true
+      description: OAuth 2.0 client ID from Google Cloud console.
+    - key: client_secret
+      label: Google OAuth Client Secret
+      type: password
+      required: true
+      description: OAuth 2.0 client secret from Google Cloud console.
     - key: account_email
       label: Gmail Address
       type: text
-      required: true
+      required: false
 
 webhook:
   protocol: pubsub
@@ -42,6 +52,3 @@ tools:
   - class: AddLabelTool
   - class: RemoveLabelTool
   - class: RefreshGmailTokenTool
-  - class: SetupGmailWatchTool
-  - class: RenewGmailWatchTool
-  - class: HandleGmailEventTool

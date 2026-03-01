@@ -47,6 +47,11 @@ func oauthTokenRotator(tokenURL string, useBasicAuth bool) TokenRotator {
 
 		clientID := firstNonEmpty(cfg["client_id"], cfg["google_client_id"], cfg["spotify_client_id"])
 		clientSecret := firstNonEmpty(cfg["client_secret"], cfg["google_client_secret"], cfg["spotify_client_secret"])
+		if strings.HasPrefix(strings.TrimSpace(clientSecret), "enc:v1:") {
+			if decrypted, decErr := maybeDecrypt(state, clientSecret); decErr == nil {
+				clientSecret = decrypted
+			}
+		}
 		if strings.TrimSpace(clientID) == "" || strings.TrimSpace(clientSecret) == "" {
 			err := fmt.Errorf("missing client_id or client_secret")
 			_ = persistRefreshFailure(ctx, state, cfg, "failed", err.Error())

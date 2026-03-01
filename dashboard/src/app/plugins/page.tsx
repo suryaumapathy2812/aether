@@ -130,7 +130,7 @@ function PluginStatus({ plugin }: { plugin: PluginInfo }) {
   }
 
   // Installed but needs reconnect
-  if (plugin.needs_reconnect) {
+  if (plugin.needs_reconnect || (plugin.auth_type === "oauth2" && !plugin.connected)) {
     return (
       <Link href={`/plugins/${plugin.name}`} className="block">
         <span className="text-[11px] tracking-wider px-2 py-1 rounded-full bg-amber-500/10 text-amber-400">

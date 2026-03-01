@@ -1,16 +1,24 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
+
+const maskedSecretValue = "__configured__"
 
 type Handler struct {
 	registry     *tools.Registry
@@ -218,6 +226,11 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		manifest, manifestErr := h.plugins.ReadManifest(name)
+		if manifestErr != nil {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		if err := h.store.SetPluginEnabled(ctx, name, true); err != nil {
 			if err == db.ErrNotFound {
 				writeError(w, http.StatusNotFound, "plugin not found")
@@ -225,6 +238,9 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if rec, err := h.store.GetPlugin(ctx, name); err == nil {
+			_ = h.ensurePluginCronJobs(ctx, manifest, rec.Config)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "enabled"})
 		return
@@ -255,7 +271,12 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, rec.Config)
+			manifest, err := h.plugins.ReadManifest(name)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plugin not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, scrubSecretConfig(rec.Config, secretConfigKeys(manifest)))
 			return
 		case http.MethodPost:
 			var req struct {
@@ -268,7 +289,22 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			if req.Config == nil {
 				req.Config = map[string]string{}
 			}
-			if err := h.store.SetPluginConfig(ctx, name, req.Config); err != nil {
+			rec, err := h.store.GetPlugin(ctx, name)
+			if err != nil {
+				if err == db.ErrNotFound {
+					writeError(w, http.StatusNotFound, "plugin not found")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			manifest, err := h.plugins.ReadManifest(name)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plugin not found")
+				return
+			}
+			merged := mergePluginConfig(rec.Config, req.Config, secretConfigKeys(manifest))
+			if err := h.store.SetPluginConfig(ctx, name, encryptSecretConfig(merged, h.store, secretConfigKeys(manifest))); err != nil {
 				if err == db.ErrNotFound {
 					writeError(w, http.StatusNotFound, "plugin not found")
 					return
@@ -278,11 +314,12 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			}
 
 			autoEnabled := false
+			authType, _, _ := pluginAuthDetails(manifest)
 			required, reqErr := h.plugins.RequiredConfigKeys(name)
-			if reqErr == nil && len(required) > 0 {
+			if authType == "api_key" && reqErr == nil && len(required) > 0 {
 				complete := true
 				for _, key := range required {
-					if strings.TrimSpace(req.Config[key]) == "" {
+					if strings.TrimSpace(merged[key]) == "" {
 						complete = false
 						break
 					}
@@ -301,9 +338,11 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	case "oauth":
 		if len(parts) == 3 && parts[2] == "start" && r.Method == http.MethodGet {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{
-				"detail": "OAuth setup is not yet available in the Go runtime. Configure API-key plugins from the dashboard.",
-			})
+			h.handlePluginOAuthStart(w, r, name)
+			return
+		}
+		if len(parts) == 3 && parts[2] == "callback" && r.Method == http.MethodPost {
+			h.handlePluginOAuthCallback(w, r, name)
 			return
 		}
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -400,6 +439,566 @@ func (h *Handler) handlePluginInstallCompat(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plugin_id": name, "status": "installed"})
+}
+
+func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+	manifest, err := h.plugins.ReadManifest(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	authType, provider, _ := pluginAuthDetails(manifest)
+	if authType != "oauth2" {
+		writeError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		return
+	}
+
+	if err := h.ensurePluginInstalled(ctx, manifest); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rec, err := h.store.GetPlugin(ctx, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	clientID := strings.TrimSpace(rec.Config["client_id"])
+	if clientID == "" {
+		writeError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
+		return
+	}
+	clientSecret, err := maybeDecryptStoredSecret(rec.Config["client_secret"], h.store)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid oauth client_secret")
+		return
+	}
+	if strings.TrimSpace(clientSecret) == "" {
+		writeError(w, http.StatusBadRequest, "missing oauth client_secret in plugin config")
+		return
+	}
+
+	state, err := generateOAuthState()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create oauth state")
+		return
+	}
+	redirectURI := oauthRedirectURI(r, name)
+	oauthCfg := oauthProviderConfig(provider)
+	if oauthCfg.AuthURL == "" || oauthCfg.TokenURL == "" {
+		writeError(w, http.StatusBadRequest, "unsupported oauth provider")
+		return
+	}
+
+	cfg := cloneConfig(rec.Config)
+	cfg["oauth_provider"] = provider
+	cfg["oauth_state"] = state
+	cfg["oauth_state_expires_at"] = strconv.FormatInt(time.Now().UTC().Add(10*time.Minute).Unix(), 10)
+	cfg["oauth_redirect_uri"] = redirectURI
+	cfg["oauth_token_url"] = oauthCfg.TokenURL
+	if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	scopes := oauthScopes(manifest)
+	v := url.Values{}
+	v.Set("client_id", clientID)
+	v.Set("redirect_uri", redirectURI)
+	v.Set("response_type", "code")
+	v.Set("state", state)
+	if len(scopes) > 0 {
+		v.Set("scope", strings.Join(scopes, " "))
+	}
+	for k, val := range oauthCfg.AuthParams {
+		v.Set(k, val)
+	}
+	authURL := oauthCfg.AuthURL + "?" + v.Encode()
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+	manifest, err := h.plugins.ReadManifest(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	authType, provider, _ := pluginAuthDetails(manifest)
+	if authType != "oauth2" {
+		writeError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		return
+	}
+
+	var req struct {
+		Code  string `json:"code"`
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		writeError(w, http.StatusBadRequest, "missing oauth code")
+		return
+	}
+
+	rec, err := h.store.GetPlugin(ctx, name)
+	if err != nil {
+		if err == db.ErrNotFound {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	cfg := cloneConfig(rec.Config)
+	if !validOAuthState(cfg, req.State) {
+		writeError(w, http.StatusBadRequest, "invalid or expired oauth state")
+		return
+	}
+
+	oauthCfg := oauthProviderConfig(provider)
+	tokenURL := firstNonEmpty(strings.TrimSpace(cfg["oauth_token_url"]), oauthCfg.TokenURL)
+	redirectURI := firstNonEmpty(strings.TrimSpace(cfg["oauth_redirect_uri"]), oauthRedirectURI(r, name))
+	clientID := strings.TrimSpace(cfg["client_id"])
+	clientSecret, err := maybeDecryptStoredSecret(cfg["client_secret"], h.store)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid oauth client_secret")
+		return
+	}
+	if tokenURL == "" || clientID == "" || strings.TrimSpace(clientSecret) == "" {
+		writeError(w, http.StatusBadRequest, "oauth plugin config missing token endpoint or client credentials")
+		return
+	}
+
+	tokenResp, err := exchangeOAuthCode(ctx, tokenURL, clientID, clientSecret, redirectURI, strings.TrimSpace(req.Code), provider == "spotify")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	now := time.Now().UTC()
+	expiresIn := tokenResp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	expiresAt := now.Add(time.Duration(expiresIn) * time.Second)
+
+	cfg["access_token"] = encryptIfPossible(tokenResp.AccessToken, h.store)
+	if strings.TrimSpace(tokenResp.RefreshToken) != "" {
+		cfg["refresh_token"] = encryptIfPossible(tokenResp.RefreshToken, h.store)
+	}
+	if strings.TrimSpace(tokenResp.TokenType) != "" {
+		cfg["token_type"] = tokenResp.TokenType
+	}
+	if strings.TrimSpace(tokenResp.Scope) != "" {
+		cfg["scope"] = tokenResp.Scope
+	}
+	cfg["expires_at"] = strconv.FormatInt(expiresAt.Unix(), 10)
+	cfg["last_refresh_at"] = now.Format(time.RFC3339)
+	cfg["last_refresh_status"] = "ok"
+	cfg["last_refresh_error"] = ""
+	cfg["refresh_fail_count"] = "0"
+	cfg["next_refresh_at"] = expiresAt.Add(-5 * time.Minute).Format(time.RFC3339)
+	cfg["needs_reconnect"] = "false"
+	cfg["oauth_state"] = ""
+	cfg["oauth_state_expires_at"] = ""
+
+	if email, err := lookupOAuthAccountEmail(ctx, provider, tokenResp.AccessToken); err == nil && strings.TrimSpace(email) != "" {
+		cfg["account_email"] = email
+	}
+
+	if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.store.SetPluginEnabled(ctx, name, true); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = h.ensurePluginCronJobs(ctx, manifest, cfg)
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "connected", "plugin": name})
+}
+
+type oauthProvider struct {
+	AuthURL    string
+	TokenURL   string
+	AuthParams map[string]string
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope"`
+	Error        string `json:"error"`
+	Description  string `json:"error_description"`
+}
+
+func oauthProviderConfig(provider string) oauthProvider {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "google":
+		return oauthProvider{
+			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL: "https://oauth2.googleapis.com/token",
+			AuthParams: map[string]string{
+				"access_type":            "offline",
+				"prompt":                 "consent",
+				"include_granted_scopes": "true",
+			},
+		}
+	case "spotify":
+		return oauthProvider{
+			AuthURL:  "https://accounts.spotify.com/authorize",
+			TokenURL: "https://accounts.spotify.com/api/token",
+			AuthParams: map[string]string{
+				"show_dialog": "true",
+			},
+		}
+	default:
+		return oauthProvider{}
+	}
+}
+
+func oauthScopes(manifest plugins.PluginManifest) []string {
+	raw, ok := manifest.Auth["scopes"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, _ := v.(string)
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func oauthRedirectURI(r *http.Request, pluginName string) string {
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if host != "" {
+		if proto == "" {
+			proto = "https"
+		}
+		return fmt.Sprintf("%s://%s/plugins/%s/oauth/callback", proto, host, url.PathEscape(pluginName))
+	}
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		return strings.TrimRight(origin, "/") + "/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+	}
+	if ref := strings.TrimSpace(r.Header.Get("Referer")); ref != "" {
+		if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host + "/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+		}
+	}
+	return "http://localhost:3000/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+}
+
+func generateOAuthState() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func validOAuthState(cfg map[string]string, state string) bool {
+	if strings.TrimSpace(state) == "" {
+		return false
+	}
+	expected := strings.TrimSpace(cfg["oauth_state"])
+	if expected == "" || state != expected {
+		return false
+	}
+	expiresRaw := strings.TrimSpace(cfg["oauth_state_expires_at"])
+	if expiresRaw == "" {
+		return true
+	}
+	expiresUnix, err := strconv.ParseInt(expiresRaw, 10, 64)
+	if err != nil {
+		return false
+	}
+	return time.Now().UTC().Unix() <= expiresUnix
+}
+
+func exchangeOAuthCode(ctx context.Context, tokenURL, clientID, clientSecret, redirectURI, code string, useBasicAuth bool) (oauthTokenResponse, error) {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", redirectURI)
+	if !useBasicAuth {
+		form.Set("client_id", clientID)
+		form.Set("client_secret", clientSecret)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return oauthTokenResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if useBasicAuth {
+		req.SetBasicAuth(clientID, clientSecret)
+	}
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return oauthTokenResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	var out oauthTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return oauthTokenResponse{}, fmt.Errorf("failed to decode oauth token response")
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(out.Error)
+		if strings.TrimSpace(out.Description) != "" {
+			msg = strings.TrimSpace(out.Description)
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("token endpoint status %d", resp.StatusCode)
+		}
+		return oauthTokenResponse{}, fmt.Errorf("oauth exchange failed: %s", msg)
+	}
+	if strings.TrimSpace(out.AccessToken) == "" {
+		return oauthTokenResponse{}, fmt.Errorf("oauth exchange failed: missing access_token")
+	}
+	return out, nil
+}
+
+func lookupOAuthAccountEmail(ctx context.Context, provider, accessToken string) (string, error) {
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return "", fmt.Errorf("missing access token")
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	endpoint := ""
+	switch provider {
+	case "google":
+		endpoint = "https://www.googleapis.com/oauth2/v2/userinfo"
+	case "spotify":
+		endpoint = "https://api.spotify.com/v1/me"
+	default:
+		return "", fmt.Errorf("unsupported provider")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("userinfo status %d", resp.StatusCode)
+	}
+	var obj map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
+		return "", err
+	}
+	email, _ := obj["email"].(string)
+	return strings.TrimSpace(email), nil
+}
+
+func (h *Handler) ensurePluginInstalled(ctx context.Context, manifest plugins.PluginManifest) error {
+	if _, err := h.store.GetPlugin(ctx, manifest.Name); err == nil {
+		return nil
+	} else if err != db.ErrNotFound {
+		return err
+	}
+	return h.store.UpsertPlugin(ctx, db.PluginRecord{
+		Name:        manifest.Name,
+		DisplayName: manifest.DisplayName,
+		Description: manifest.Description,
+		Version:     manifest.Version,
+		PluginType:  manifest.PluginType,
+		Location:    manifest.Location,
+		Source:      string(manifest.Source),
+		HasSkill:    strings.TrimSpace(manifest.SkillPath) != "",
+		Config:      map[string]string{},
+	})
+}
+
+func (h *Handler) ensurePluginCronJobs(ctx context.Context, manifest plugins.PluginManifest, cfg map[string]string) error {
+	scope := h.store.ScopeCronModule(plugins.CronModulePlugins)
+	jobs, err := scope.List(ctx)
+	if err != nil {
+		return err
+	}
+
+	rotateInterval := int64FromAny(manifest.Auth["token_refresh_interval"])
+	if rotateInterval > 0 {
+		runAt := time.Now().UTC().Add(time.Duration(rotateInterval) * time.Second)
+		if next := strings.TrimSpace(cfg["next_refresh_at"]); next != "" {
+			if t, err := time.Parse(time.RFC3339, next); err == nil && t.After(time.Now().UTC()) {
+				runAt = t
+			}
+		}
+		if !hasActivePluginCronJob(jobs, manifest.Name, plugins.CronJobTypeRotate) {
+			_, _ = scope.ScheduleRecurring(ctx, plugins.CronJobTypeRotate, map[string]any{"plugin": manifest.Name}, runAt, rotateInterval, 5)
+		}
+	}
+
+	renewInterval := int64FromAny(manifest.Webhook["renew_interval"])
+	if renewInterval > 0 {
+		runAt := time.Now().UTC().Add(time.Duration(renewInterval) * time.Second)
+		if !hasActivePluginCronJob(jobs, manifest.Name, plugins.CronJobTypeRenewWatch) {
+			_, _ = scope.ScheduleRecurring(ctx, plugins.CronJobTypeRenewWatch, map[string]any{"plugin": manifest.Name}, runAt, renewInterval, 5)
+		}
+	}
+	return nil
+}
+
+func hasActivePluginCronJob(jobs []db.CronJobRecord, pluginName, jobType string) bool {
+	for _, job := range jobs {
+		if job.JobType != jobType || !job.Enabled {
+			continue
+		}
+		if !jobPayloadHasPlugin(job.PayloadJSON, pluginName) {
+			continue
+		}
+		if job.Status == db.CronStatusCancelled || job.Status == db.CronStatusDone || job.Status == db.CronStatusFailed {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func jobPayloadHasPlugin(payloadJSON, pluginName string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return false
+	}
+	v, ok := payload["plugin"].(string)
+	if !ok || strings.TrimSpace(v) == "" {
+		v, _ = payload["plugin_name"].(string)
+	}
+	return strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(pluginName))
+}
+
+func int64FromAny(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case string:
+		i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
+func cloneConfig(src map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func secretConfigKeys(manifest plugins.PluginManifest) map[string]bool {
+	keys := map[string]bool{}
+	if raw, ok := manifest.Auth["config_fields"].([]any); ok {
+		for _, entry := range raw {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			key, _ := m["key"].(string)
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			fieldType, _ := m["type"].(string)
+			if strings.EqualFold(strings.TrimSpace(fieldType), "password") {
+				keys[key] = true
+			}
+		}
+	}
+	for _, key := range []string{"access_token", "refresh_token", "oauth_refresh_token", "client_secret", "google_client_secret", "spotify_client_secret", "auth_token", "bot_token", "secret_token", "api_key", "wolfram_app_id", "exchangerate_api_key", "google_api_key", "google_places_api_key"} {
+		keys[key] = true
+	}
+	return keys
+}
+
+func scrubSecretConfig(cfg map[string]string, secretKeys map[string]bool) map[string]string {
+	out := cloneConfig(cfg)
+	for key := range secretKeys {
+		if strings.TrimSpace(out[key]) != "" {
+			out[key] = maskedSecretValue
+		}
+	}
+	return out
+}
+
+func mergePluginConfig(existing, incoming map[string]string, secretKeys map[string]bool) map[string]string {
+	merged := cloneConfig(existing)
+	for k, v := range incoming {
+		if secretKeys[k] && v == maskedSecretValue {
+			continue
+		}
+		merged[k] = v
+	}
+	return merged
+}
+
+func encryptSecretConfig(cfg map[string]string, store *db.Store, secretKeys map[string]bool) map[string]string {
+	out := cloneConfig(cfg)
+	for key := range secretKeys {
+		value := strings.TrimSpace(out[key])
+		if value == "" || strings.HasPrefix(value, "enc:v1:") {
+			continue
+		}
+		if enc, err := store.EncryptString(value); err == nil {
+			out[key] = enc
+		}
+	}
+	return out
+}
+
+func maybeDecryptStoredSecret(value string, store *db.Store) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "enc:v1:") {
+		return value, nil
+	}
+	return store.DecryptString(value)
+}
+
+func encryptIfPossible(value string, store *db.Store) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "enc:v1:") {
+		return value
+	}
+	if enc, err := store.EncryptString(value); err == nil {
+		return enc
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func pluginAuthDetails(manifest plugins.PluginManifest) (string, string, []map[string]any) {

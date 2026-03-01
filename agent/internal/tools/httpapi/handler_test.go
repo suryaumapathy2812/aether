@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -96,5 +97,110 @@ func TestPluginsStatusEndpoint(t *testing.T) {
 	}
 	if resp.Count != 1 {
 		t.Fatalf("expected one plugin, got %d", resp.Count)
+	}
+}
+
+func TestPluginConfigMasksSecrets(t *testing.T) {
+	ctx := context.Background()
+	assets := t.TempDir()
+	builtin := filepath.Join(assets, "plugins", "builtin")
+	if err := os.MkdirAll(filepath.Join(builtin, "brave-search"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: brave-search\ndisplay_name: Brave Search\ndescription: test\nauth:\n  type: api_key\n  config_fields:\n    - key: api_key\n      type: password\n      required: true\n"
+	if err := os.WriteFile(filepath.Join(builtin, "brave-search", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	store, err := db.Open(filepath.Join(assets, "state.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	if _, err := pm.Discover(ctx); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if err := store.SetPluginConfig(ctx, "brave-search", map[string]string{"api_key": "secret-123", "country": "IN"}); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+
+	h := New(Options{Registry: tools.NewRegistry(), Orchestrator: tools.NewOrchestrator(tools.NewRegistry(), tools.ExecContext{}), Plugins: pm, Store: store})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins/brave-search/config", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var out map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["api_key"] != maskedSecretValue {
+		t.Fatalf("expected masked api_key, got %q", out["api_key"])
+	}
+	if out["country"] != "IN" {
+		t.Fatalf("expected country passthrough, got %q", out["country"])
+	}
+}
+
+func TestPluginOAuthStartRedirect(t *testing.T) {
+	ctx := context.Background()
+	assets := t.TempDir()
+	builtin := filepath.Join(assets, "plugins", "builtin")
+	if err := os.MkdirAll(filepath.Join(builtin, "google-calendar"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: google-calendar\ndisplay_name: Google Calendar\ndescription: test\nauth:\n  type: oauth2\n  provider: google\n  scopes:\n    - https://www.googleapis.com/auth/calendar.readonly\n  config_fields:\n    - key: client_id\n      type: text\n      required: true\n    - key: client_secret\n      type: password\n      required: true\n"
+	if err := os.WriteFile(filepath.Join(builtin, "google-calendar", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
+	store, err := db.Open(filepath.Join(assets, "state.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	if _, err := pm.Discover(ctx); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "google-calendar", DisplayName: "Google Calendar"}); err != nil {
+		t.Fatalf("upsert plugin: %v", err)
+	}
+	secret, err := store.EncryptString("client-secret")
+	if err != nil {
+		t.Fatalf("encrypt secret: %v", err)
+	}
+	if err := store.SetPluginConfig(ctx, "google-calendar", map[string]string{"client_id": "client-id", "client_secret": secret}); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+
+	r := tools.NewRegistry()
+	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Plugins: pm, Store: store})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins/google-calendar/oauth/start", nil)
+	req.Header.Set("X-Forwarded-Host", "app.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d body=%s", w.Code, w.Body.String())
+	}
+	location := w.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://accounts.google.com/o/oauth2/v2/auth?") {
+		t.Fatalf("unexpected oauth redirect: %s", location)
+	}
+	if !strings.Contains(location, "redirect_uri=https%3A%2F%2Fapp.example.com%2Fplugins%2Fgoogle-calendar%2Foauth%2Fcallback") {
+		t.Fatalf("redirect missing callback uri: %s", location)
 	}
 }

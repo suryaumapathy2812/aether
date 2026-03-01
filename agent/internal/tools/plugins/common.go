@@ -23,10 +23,13 @@ func pluginConfig(ctx context.Context, call tools.Call) (map[string]string, erro
 	return cfg, nil
 }
 
-func requireString(cfg map[string]string, key string) (string, error) {
+func requireString(ctx context.Context, call tools.Call, cfg map[string]string, key string) (string, error) {
 	v := strings.TrimSpace(cfg[key])
 	if v == "" {
 		return "", fmt.Errorf("missing required config key: %s", key)
+	}
+	if strings.HasPrefix(v, "enc:v1:") {
+		return maybeDecryptFromState(ctx, call, v)
 	}
 	return v, nil
 }
@@ -43,11 +46,11 @@ func maybeDecryptFromState(ctx context.Context, call tools.Call, value string) (
 }
 
 func requireToken(ctx context.Context, call tools.Call, cfg map[string]string) (string, error) {
-	raw, err := requireString(cfg, "access_token")
+	raw, err := requireString(ctx, call, cfg, "access_token")
 	if err != nil {
 		return "", err
 	}
-	return maybeDecryptFromState(ctx, call, raw)
+	return raw, nil
 }
 
 func base64URL(s string) string {

@@ -25,7 +25,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, call tools.Call) tools.Resu
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	key, err := requireString(cfg, "api_key")
+	key, err := requireString(ctx, call, cfg, "api_key")
 	if err != nil {
 		return tools.Fail("Brave Search not connected: missing api_key", nil)
 	}
@@ -56,7 +56,7 @@ func (t *NewsSearchTool) Execute(ctx context.Context, call tools.Call) tools.Res
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	key, err := requireString(cfg, "api_key")
+	key, err := requireString(ctx, call, cfg, "api_key")
 	if err != nil {
 		return tools.Fail("Brave Search not connected: missing api_key", nil)
 	}
@@ -92,7 +92,7 @@ func (t *LLMContextSearchTool) Execute(ctx context.Context, call tools.Call) too
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	key, err := requireString(cfg, "api_key")
+	key, err := requireString(ctx, call, cfg, "api_key")
 	if err != nil {
 		return tools.Fail("Brave Search not connected: missing api_key", nil)
 	}

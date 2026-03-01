@@ -8,6 +8,19 @@ auth:
   provider: google
   token_refresh_interval: 3000
   refresh_tool: refresh_google_contacts_token
+  scopes:
+    - https://www.googleapis.com/auth/contacts.readonly
+  config_fields:
+    - key: client_id
+      label: Google OAuth Client ID
+      type: text
+      required: true
+      description: OAuth 2.0 client ID from Google Cloud console.
+    - key: client_secret
+      label: Google OAuth Client Secret
+      type: password
+      required: true
+      description: OAuth 2.0 client secret from Google Cloud console.
 
 tools:
   - class: SearchContactsTool

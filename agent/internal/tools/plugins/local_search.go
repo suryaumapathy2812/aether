@@ -42,9 +42,15 @@ func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Re
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	googleKey := strings.TrimSpace(cfg["google_api_key"])
+	googleKey, err := maybeDecryptFromState(ctx, call, strings.TrimSpace(cfg["google_api_key"]))
+	if err != nil {
+		return tools.Fail("Local search failed to decrypt google_api_key", nil)
+	}
 	if googleKey == "" {
-		googleKey = strings.TrimSpace(cfg["google_places_api_key"])
+		googleKey, err = maybeDecryptFromState(ctx, call, strings.TrimSpace(cfg["google_places_api_key"]))
+		if err != nil {
+			return tools.Fail("Local search failed to decrypt google_places_api_key", nil)
+		}
 	}
 	if googleKey == "" {
 		return tools.Fail("Local search requires Google Places API key. Set plugin config key `google_api_key`.", nil)

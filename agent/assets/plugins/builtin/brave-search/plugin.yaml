@@ -15,5 +15,4 @@ auth:
 tools:
   - class: WebSearchTool
   - class: NewsSearchTool
-  - class: LlmContextSearchTool
-  - class: ImageSearchTool
+  - class: LLMContextSearchTool

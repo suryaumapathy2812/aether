@@ -21,11 +21,15 @@ func (t *WolframQueryTool) Execute(ctx context.Context, call tools.Call) tools.R
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	appID := cfg["wolfram_app_id"]
+	appID, err := maybeDecryptFromState(ctx, call, cfg["wolfram_app_id"])
+	if err != nil {
+		return tools.Fail("Wolfram is not configured: invalid wolfram_app_id", nil)
+	}
 	if appID == "" {
 		return tools.Fail("Wolfram is not configured: missing wolfram_app_id", nil)
 	}
-	client := logic.WolframClient{WolframAppID: appID, ExchangeRateKey: cfg["exchangerate_api_key"]}
+	exchangeKey, _ := maybeDecryptFromState(ctx, call, cfg["exchangerate_api_key"])
+	client := logic.WolframClient{WolframAppID: appID, ExchangeRateKey: exchangeKey}
 	ans, err := client.Query(ctx, query)
 	if err != nil {
 		return tools.Fail("Wolfram query failed: "+err.Error(), nil)
@@ -45,7 +49,9 @@ func (t *CurrencyConvertTool) Execute(ctx context.Context, call tools.Call) tool
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	client := logic.WolframClient{WolframAppID: cfg["wolfram_app_id"], ExchangeRateKey: cfg["exchangerate_api_key"]}
+	appID, _ := maybeDecryptFromState(ctx, call, cfg["wolfram_app_id"])
+	exchangeKey, _ := maybeDecryptFromState(ctx, call, cfg["exchangerate_api_key"])
+	client := logic.WolframClient{WolframAppID: appID, ExchangeRateKey: exchangeKey}
 	res, err := client.CurrencyConvert(ctx, float64(amountInt), from, to)
 	if err != nil {
 		return tools.Fail("Currency conversion failed: "+err.Error(), nil)

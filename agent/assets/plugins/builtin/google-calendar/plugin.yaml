@@ -11,6 +11,17 @@ auth:
   scopes:
     - https://www.googleapis.com/auth/calendar.readonly
     - https://www.googleapis.com/auth/calendar.events
+  config_fields:
+    - key: client_id
+      label: Google OAuth Client ID
+      type: text
+      required: true
+      description: OAuth 2.0 client ID from Google Cloud console.
+    - key: client_secret
+      label: Google OAuth Client Secret
+      type: password
+      required: true
+      description: OAuth 2.0 client secret from Google Cloud console.
 
 webhook:
   protocol: http
@@ -24,6 +35,3 @@ tools:
   - class: CreateEventTool
   - class: GetEventTool
   - class: RefreshGoogleCalendarTokenTool
-  - class: SetupCalendarWatchTool
-  - class: RenewCalendarWatchTool
-  - class: HandleCalendarEventTool

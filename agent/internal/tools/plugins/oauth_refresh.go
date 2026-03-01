@@ -32,6 +32,11 @@ func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL stri
 
 	clientID := firstNonEmpty(cfg["client_id"], cfg["google_client_id"], cfg["spotify_client_id"])
 	clientSecret := firstNonEmpty(cfg["client_secret"], cfg["google_client_secret"], cfg["spotify_client_secret"])
+	if strings.HasPrefix(strings.TrimSpace(clientSecret), "enc:v1:") {
+		if decrypted, decErr := maybeDecryptFromState(ctx, call, clientSecret); decErr == nil {
+			clientSecret = decrypted
+		}
+	}
 	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(clientSecret) == "" {
 		return tools.Fail("Missing client_id/client_secret in plugin config", nil)
 	}

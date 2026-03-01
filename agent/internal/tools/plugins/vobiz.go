@@ -26,15 +26,15 @@ func (t *MakePhoneCallTool) Execute(ctx context.Context, call tools.Call) tools.
 	if err != nil {
 		return tools.Fail(err.Error(), nil)
 	}
-	authID, err := requireString(cfg, "auth_id")
+	authID, err := requireString(ctx, call, cfg, "auth_id")
 	if err != nil {
 		return tools.Fail("Vobiz is not configured: missing auth_id", nil)
 	}
-	authToken, err := requireString(cfg, "auth_token")
+	authToken, err := requireString(ctx, call, cfg, "auth_token")
 	if err != nil {
 		return tools.Fail("Vobiz is not configured: missing auth_token", nil)
 	}
-	fromNumber, err := requireString(cfg, "from_number")
+	fromNumber, err := requireString(ctx, call, cfg, "from_number")
 	if err != nil {
 		return tools.Fail("Vobiz is not configured: missing from_number", nil)
 	}

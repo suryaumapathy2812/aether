@@ -15,6 +15,7 @@ import {
   savePluginConfig,
   enablePlugin,
   disablePlugin,
+  getOAuthStartUrl,
   PluginInfo,
 } from "@/lib/api";
 
@@ -56,6 +57,7 @@ export default function PluginDetailPage() {
 
   // Show success message after OAuth redirect
   const justConnected = searchParams.get("connected") === "true";
+  const oauthError = searchParams.get("error") || "";
 
   useEffect(() => {
     if (isPending) return;
@@ -223,15 +225,55 @@ export default function PluginDetailPage() {
               {error}
             </div>
           )}
+          {!!oauthError && (
+            <div className="py-3 text-[12px] text-red-400 tracking-wider">
+              OAuth error: {oauthError}
+            </div>
+          )}
 
           {/* ── OAuth2 ── */}
           {plugin.auth_type === "oauth2" && (
             <div className="py-4">
               <div className="space-y-3">
                 <p className="text-[12px] text-muted-foreground leading-relaxed">
-                  OAuth plugin setup is not available in the Go runtime yet. You can still
-                  view status and enable already configured plugins.
+                  Save OAuth app credentials, then connect this plugin to your account.
                 </p>
+                {plugin.config_fields?.length ? (
+                  <div className="space-y-4">
+                    {plugin.config_fields.map((field) => (
+                      <MinimalInput
+                        key={field.key}
+                        label={field.label}
+                        type={field.type === "password" ? "password" : "text"}
+                        value={formValues[field.key] || ""}
+                        onChange={(v) =>
+                          setFormValues({ ...formValues, [field.key]: v })
+                        }
+                        placeholder={field.description || field.label}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="aether"
+                    size="aether"
+                    onClick={handleSave}
+                    disabled={saving || !hasRequiredConfig()}
+                  >
+                    {saving ? "..." : plugin.installed ? "save settings" : "save & install"}
+                  </Button>
+                  <Button
+                    variant="aether-link"
+                    size="aether-link"
+                    onClick={() => {
+                      window.location.href = getOAuthStartUrl(pluginName);
+                    }}
+                    disabled={!hasRequiredConfig()}
+                  >
+                    connect with {plugin.auth_provider || "oauth2"}
+                  </Button>
+                </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[14px] text-secondary-foreground font-light">
                     {plugin.connected
