@@ -36,6 +36,7 @@ func Load() Config {
 	idleTimeout := time.Duration(EnvInt("AGENT_IDLE_TIMEOUT", 1800)) * time.Second
 	healthTimeout := time.Duration(EnvInt("AGENT_HEALTH_TIMEOUT", 30)) * time.Second
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	databaseURL = stripWrappingQuotes(databaseURL)
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL is required")
 	}
@@ -43,23 +44,23 @@ func Load() Config {
 	return Config{
 		Port:                 port,
 		DatabaseURL:          databaseURL,
-		AgentSecret:          strings.TrimSpace(os.Getenv("AGENT_SECRET")),
-		LocalAgentURL:        strings.TrimSpace(os.Getenv("AETHER_LOCAL_AGENT_URL")),
+		AgentSecret:          stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_SECRET"))),
+		LocalAgentURL:        stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_LOCAL_AGENT_URL"))),
 		ProxyTimeout:         proxyTimeout,
-		DefaultAgentID:       strings.TrimSpace(os.Getenv("AETHER_DEFAULT_AGENT_ID")),
+		DefaultAgentID:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_DEFAULT_AGENT_ID"))),
 		AutoAssignFirstAgent: strings.EqualFold(strings.TrimSpace(os.Getenv("AETHER_AUTO_ASSIGN_FIRST_AGENT")), "true"),
 
 		AgentImage:         defaultString("AGENT_IMAGE", "suryaumapathy2812/aether-agent:latest"),
-		AgentNetwork:       strings.TrimSpace(os.Getenv("AGENT_NETWORK")),
+		AgentNetwork:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_NETWORK"))),
 		AgentIdleTimeout:   idleTimeout,
 		AgentPort:          EnvInt("AGENT_PORT", 8000),
 		AgentHealthTimeout: healthTimeout,
 
-		AgentOpenAIAPIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
-		AgentOpenAIBaseURL: strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
-		AgentOpenAIModel:   strings.TrimSpace(os.Getenv("OPENAI_MODEL")),
-		AgentUpdateRepo:    strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO")),
-		AgentUpdateToken:   strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN")),
+		AgentOpenAIAPIKey:  stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))),
+		AgentOpenAIBaseURL: stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))),
+		AgentOpenAIModel:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_MODEL"))),
+		AgentUpdateRepo:    stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO"))),
+		AgentUpdateToken:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN"))),
 	}
 }
 
@@ -77,8 +78,19 @@ func EnvInt(name string, fallback int) int {
 
 func defaultString(name, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(name))
+	v = stripWrappingQuotes(v)
 	if v == "" {
 		return fallback
+	}
+	return v
+}
+
+func stripWrappingQuotes(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			return strings.TrimSpace(v[1 : len(v)-1])
+		}
 	}
 	return v
 }

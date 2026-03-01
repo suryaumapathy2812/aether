@@ -96,7 +96,7 @@ func NewManager(ctx context.Context, db *pgxpool.Pool, cfg ManagerConfig) (*Mana
 	}
 
 	if err := m.ensureImage(ctx, m.cfg.Image); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to initialize agent image %q: %w", m.cfg.Image, err)
 	}
 	return m, nil
 }

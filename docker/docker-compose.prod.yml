@@ -43,7 +43,7 @@ services:
       - PORT=4000
       - DATABASE_URL=${DATABASE_URL}
       - AGENT_SECRET=${AGENT_SECRET}
-      - AGENT_IMAGE=${AGENT_IMAGE:-${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest}
+      - AGENT_IMAGE=${AGENT_IMAGE:-suryaumapathy2812/aether-agent:latest}
       - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
       - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-1800}
       - AGENT_HEALTH_TIMEOUT=${AGENT_HEALTH_TIMEOUT:-30}
@@ -89,8 +89,8 @@ services:
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
       - AGENT_BASE_URL=http://orchestrator:4000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=
-      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-https://${DOMAIN}}
+      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=${NEXT_PUBLIC_ORCHESTRATOR_WS_URL:-wss://${DOMAIN}}
     depends_on:
       - postgres
       - orchestrator
@@ -124,6 +124,8 @@ services:
   # --- Aether Agent ---
   # Agent containers are provisioned dynamically per user by the orchestrator
   # via Docker SDK. No static agent service here.
+  # Each provisioned user-agent gets a dedicated persistent volume mounted at
+  # /app/assets (this includes the user's persistent SQLite state.db).
   # The agent image must be built and pushed to Docker Hub:
   #   docker build -t ${DOCKERHUB_USERNAME}/aether-agent:latest ./agent
   #   docker push ${DOCKERHUB_USERNAME}/aether-agent:latest
