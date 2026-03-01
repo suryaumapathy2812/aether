@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ const requestIDKey ctxKey = "request_id"
 
 var (
 	forensicMode  atomic.Bool
+	verboseMode   atomic.Bool
 	bodyLimitByte atomic.Int64
 )
 
@@ -47,6 +49,13 @@ func Init(service string) {
 		}
 	}
 	forensicMode.Store(forensic)
+	verbose := false
+	if raw := strings.TrimSpace(os.Getenv("LOG_VERBOSE_MODE")); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			verbose = v
+		}
+	}
+	verboseMode.Store(verbose)
 	limit := int64(1 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("LOG_BODY_MAX_BYTES")); raw != "" {
 		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
@@ -54,7 +63,29 @@ func Init(service string) {
 		}
 	}
 	bodyLimitByte.Store(limit)
-	log.Info().Str("event", "logger_initialized").Str("level", level.String()).Bool("forensic_mode", forensic).Int64("body_max_bytes", limit).Msg("logger ready")
+	log.Info().Str("event", "logger_initialized").Str("level", level.String()).Bool("forensic_mode", forensic).Bool("verbose_mode", verboseMode.Load()).Int64("body_max_bytes", limit).Msg("logger ready")
+}
+
+func VerboseEnabled() bool {
+	return verboseMode.Load()
+}
+
+func ShouldLogNoisySQL(sql string, hasErr bool) bool {
+	if hasErr {
+		return true
+	}
+	if VerboseEnabled() {
+		return true
+	}
+	q := strings.ToUpper(strings.TrimSpace(sql))
+	switch q {
+	case "BEGIN", "COMMIT", "ROLLBACK":
+		return false
+	}
+	if strings.HasPrefix(q, "SAVEPOINT") || strings.HasPrefix(q, "RELEASE SAVEPOINT") {
+		return false
+	}
+	return true
 }
 
 func Middleware(next http.Handler) http.Handler {
@@ -108,6 +139,11 @@ func PGXTraceLogger() *tracelog.TraceLog {
 type pgxLogger struct{}
 
 func (pgxLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]interface{}) {
+	hasErr := level == tracelog.LogLevelError
+	sqlText := firstSQLValue(data)
+	if !ShouldLogNoisySQL(sqlText, hasErr) {
+		return
+	}
 	e := log.Debug().Str("event", "pgx_query").Str("level", level.String()).Str("msg", msg)
 	if reqID := RequestID(ctx); reqID != "" {
 		e.Str("request_id", reqID)
@@ -203,6 +239,10 @@ func (t *transportLogger) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func parseLevel(raw string) zerolog.Level {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "verbose" {
+		return zerolog.DebugLevel
+	}
 	if raw == "" {
 		return zerolog.DebugLevel
 	}
@@ -272,4 +312,26 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "...(truncated)"
+}
+
+func firstSQLValue(data map[string]interface{}) string {
+	if data == nil {
+		return ""
+	}
+	for _, key := range []string{"sql", "query", "stmt", "statement"} {
+		if v, ok := data[key]; ok {
+			return strings.TrimSpace(toString(v))
+		}
+	}
+	return ""
+}
+
+func toString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", v))
 }

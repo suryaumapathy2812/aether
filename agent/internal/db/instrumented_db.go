@@ -58,6 +58,9 @@ func (d *instrumentedDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql
 }
 
 func logDB(ctx context.Context, op string, query string, args []any, duration time.Duration, err error) {
+	if !observability.ShouldLogDBQuery(query, err != nil) {
+		return
+	}
 	e := log.Debug().Str("event", "db_query").Str("operation", op).Str("query", compactSQL(query)).Dur("duration", duration)
 	if requestID := observability.RequestID(ctx); strings.TrimSpace(requestID) != "" {
 		e.Str("request_id", requestID)

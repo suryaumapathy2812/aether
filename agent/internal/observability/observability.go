@@ -26,6 +26,7 @@ const requestIDKey ctxKey = "request_id"
 var (
 	serviceName   atomic.Value
 	forensicMode  atomic.Bool
+	verboseMode   atomic.Bool
 	bodyLimitByte atomic.Int64
 )
 
@@ -52,6 +53,13 @@ func Init(service string) {
 		}
 	}
 	forensicMode.Store(forensic)
+	verbose := false
+	if raw := strings.TrimSpace(os.Getenv("LOG_VERBOSE_MODE")); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			verbose = v
+		}
+	}
+	verboseMode.Store(verbose)
 
 	limit := int64(1 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("LOG_BODY_MAX_BYTES")); raw != "" {
@@ -61,7 +69,29 @@ func Init(service string) {
 	}
 	bodyLimitByte.Store(limit)
 
-	log.Info().Str("event", "logger_initialized").Str("level", level.String()).Bool("forensic_mode", forensicMode.Load()).Int64("body_max_bytes", bodyLimitByte.Load()).Msg("logger ready")
+	log.Info().Str("event", "logger_initialized").Str("level", level.String()).Bool("forensic_mode", forensicMode.Load()).Bool("verbose_mode", verboseMode.Load()).Int64("body_max_bytes", bodyLimitByte.Load()).Msg("logger ready")
+}
+
+func VerboseEnabled() bool {
+	return verboseMode.Load()
+}
+
+func ShouldLogDBQuery(query string, hasErr bool) bool {
+	if hasErr {
+		return true
+	}
+	if VerboseEnabled() {
+		return true
+	}
+	q := strings.ToUpper(strings.TrimSpace(query))
+	switch q {
+	case "BEGIN", "COMMIT", "ROLLBACK":
+		return false
+	}
+	if strings.HasPrefix(q, "SAVEPOINT") || strings.HasPrefix(q, "RELEASE SAVEPOINT") {
+		return false
+	}
+	return true
 }
 
 func WrapTransport(base http.RoundTripper) http.RoundTripper {
@@ -114,6 +144,10 @@ func RequestID(ctx context.Context) string {
 }
 
 func parseLevel(raw string) zerolog.Level {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "verbose" {
+		return zerolog.DebugLevel
+	}
 	if raw == "" {
 		return zerolog.DebugLevel
 	}
