@@ -27,7 +27,7 @@ var (
 )
 
 type Store struct {
-	db   *sql.DB
+	db   *instrumentedDB
 	aead cipher.AEAD
 }
 
@@ -182,7 +182,7 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: newInstrumentedDB(db)}
 	if err := store.configureCryptoFromEnv(); err != nil {
 		_ = db.Close()
 		return nil, err

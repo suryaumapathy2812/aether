@@ -24,6 +24,7 @@ import (
 	llmhttp "github.com/suryaumapathy2812/core-ai/agent/internal/llm/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/observability"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
@@ -38,6 +39,8 @@ import (
 
 func main() {
 	loadDotEnvIfPresent()
+	observability.Init("agent")
+	http.DefaultTransport = observability.WrapTransport(http.DefaultTransport)
 
 	assetsDir := assetsRoot()
 	store, err := db.OpenInAssets(assetsDir)
@@ -171,7 +174,7 @@ func main() {
 		Plugins: pluginsManager,
 	})
 	adminHandler.RegisterRoutes(mux)
-	httpServer := &http.Server{Addr: ":" + strconv.Itoa(httpPort()), Handler: mux}
+	httpServer := &http.Server{Addr: ":" + strconv.Itoa(httpPort()), Handler: observability.Middleware(mux)}
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("http server error: %v", err)

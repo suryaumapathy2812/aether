@@ -14,15 +14,24 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/agent"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/config"
+	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/observability"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/schema"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/server"
 )
 
 func main() {
 	_ = godotenv.Load()
+	observability.Init("orchestrator")
+	http.DefaultTransport = observability.WrapTransport(http.DefaultTransport)
 	cfg := config.Load()
 
-	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	pgxCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("failed to parse postgres config: %v", err)
+	}
+	pgxCfg.ConnConfig.Tracer = observability.PGXTraceLogger()
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), pgxCfg)
 	if err != nil {
 		log.Fatalf("failed to open postgres pool: %v", err)
 	}
@@ -74,7 +83,7 @@ func main() {
 	s := server.New(cfg, pool, mgr)
 	httpServer := &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Port),
-		Handler: s.Handler(),
+		Handler: observability.Middleware(s.Handler()),
 	}
 
 	go func() {
