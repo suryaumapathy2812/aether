@@ -55,6 +55,9 @@ Go rewrite of the orchestration layer.
 - `AGENT_HEALTH_TIMEOUT` (seconds, default `30`)
 - `AGENT_PORT` (default `8000`)
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` (forwarded into provisioned agents)
+- `AGENT_STATE_KEY` (optional; forwarded for agent SQLite encryption)
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (optional; forwarded for web push)
+- `S3_BUCKET`, `S3_BUCKET_TEMPLATE`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_PUBLIC_BASE_URL`, `S3_FORCE_PATH_STYLE`, `S3_PUT_URL_TTL_SECONDS`, `S3_GET_URL_TTL_SECONDS` (forwarded into provisioned agents)
 - `AGENT_UPDATE_REPO` (default `suryaumapathy2812/aether`)
 - `AGENT_UPDATE_TOKEN` (optional GitHub token for private releases)
 

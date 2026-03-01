@@ -26,6 +26,20 @@ type Config struct {
 	AgentOpenAIAPIKey  string
 	AgentOpenAIBaseURL string
 	AgentOpenAIModel   string
+	AgentStateKey      string
+	VapidPublicKey     string
+	VapidPrivateKey    string
+	VapidSubject       string
+	S3Bucket           string
+	S3BucketTemplate   string
+	S3Region           string
+	S3AccessKeyID      string
+	S3SecretAccessKey  string
+	S3Endpoint         string
+	S3PublicBaseURL    string
+	S3ForcePathStyle   string
+	S3PutURLTTLSeconds string
+	S3GetURLTTLSeconds string
 	AgentUpdateRepo    string
 	AgentUpdateToken   string
 }
@@ -59,6 +73,20 @@ func Load() Config {
 		AgentOpenAIAPIKey:  stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))),
 		AgentOpenAIBaseURL: stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))),
 		AgentOpenAIModel:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_MODEL"))),
+		AgentStateKey:      stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_STATE_KEY"))),
+		VapidPublicKey:     stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_PUBLIC_KEY"))),
+		VapidPrivateKey:    stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_PRIVATE_KEY"))),
+		VapidSubject:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_SUBJECT"))),
+		S3Bucket:           stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_BUCKET"))),
+		S3BucketTemplate:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_BUCKET_TEMPLATE"))),
+		S3Region:           stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_REGION"))),
+		S3AccessKeyID:      stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID"))),
+		S3SecretAccessKey:  stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY"))),
+		S3Endpoint:         stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_ENDPOINT"))),
+		S3PublicBaseURL:    stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_PUBLIC_BASE_URL"))),
+		S3ForcePathStyle:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_FORCE_PATH_STYLE"))),
+		S3PutURLTTLSeconds: stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_PUT_URL_TTL_SECONDS"))),
+		S3GetURLTTLSeconds: stripWrappingQuotes(strings.TrimSpace(os.Getenv("S3_GET_URL_TTL_SECONDS"))),
 		AgentUpdateRepo:    stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO"))),
 		AgentUpdateToken:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN"))),
 	}

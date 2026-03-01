@@ -41,6 +41,20 @@ type ManagerConfig struct {
 	OpenAIAPIKey  string
 	OpenAIBaseURL string
 	OpenAIModel   string
+	AgentStateKey string
+	VapidPublic   string
+	VapidPrivate  string
+	VapidSubject  string
+	S3Bucket      string
+	S3Template    string
+	S3Region      string
+	S3AccessKey   string
+	S3SecretKey   string
+	S3Endpoint    string
+	S3PublicBase  string
+	S3ForcePath   string
+	S3PutTTL      string
+	S3GetTTL      string
 	UpdateRepo    string
 	UpdateToken   string
 }
@@ -338,6 +352,48 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 	}
 	if m.cfg.OpenAIModel != "" {
 		env = append(env, "OPENAI_MODEL="+m.cfg.OpenAIModel)
+	}
+	if strings.TrimSpace(m.cfg.AgentStateKey) != "" {
+		env = append(env, "AGENT_STATE_KEY="+strings.TrimSpace(m.cfg.AgentStateKey))
+	}
+	if strings.TrimSpace(m.cfg.VapidPublic) != "" {
+		env = append(env, "VAPID_PUBLIC_KEY="+strings.TrimSpace(m.cfg.VapidPublic))
+	}
+	if strings.TrimSpace(m.cfg.VapidPrivate) != "" {
+		env = append(env, "VAPID_PRIVATE_KEY="+strings.TrimSpace(m.cfg.VapidPrivate))
+	}
+	if strings.TrimSpace(m.cfg.VapidSubject) != "" {
+		env = append(env, "VAPID_SUBJECT="+strings.TrimSpace(m.cfg.VapidSubject))
+	}
+	if strings.TrimSpace(m.cfg.S3Bucket) != "" {
+		env = append(env, "S3_BUCKET="+strings.TrimSpace(m.cfg.S3Bucket))
+	}
+	if strings.TrimSpace(m.cfg.S3Template) != "" {
+		env = append(env, "S3_BUCKET_TEMPLATE="+strings.TrimSpace(m.cfg.S3Template))
+	}
+	if strings.TrimSpace(m.cfg.S3Region) != "" {
+		env = append(env, "S3_REGION="+strings.TrimSpace(m.cfg.S3Region))
+	}
+	if strings.TrimSpace(m.cfg.S3AccessKey) != "" {
+		env = append(env, "S3_ACCESS_KEY_ID="+strings.TrimSpace(m.cfg.S3AccessKey))
+	}
+	if strings.TrimSpace(m.cfg.S3SecretKey) != "" {
+		env = append(env, "S3_SECRET_ACCESS_KEY="+strings.TrimSpace(m.cfg.S3SecretKey))
+	}
+	if strings.TrimSpace(m.cfg.S3Endpoint) != "" {
+		env = append(env, "S3_ENDPOINT="+strings.TrimSpace(m.cfg.S3Endpoint))
+	}
+	if strings.TrimSpace(m.cfg.S3PublicBase) != "" {
+		env = append(env, "S3_PUBLIC_BASE_URL="+strings.TrimSpace(m.cfg.S3PublicBase))
+	}
+	if strings.TrimSpace(m.cfg.S3ForcePath) != "" {
+		env = append(env, "S3_FORCE_PATH_STYLE="+strings.TrimSpace(m.cfg.S3ForcePath))
+	}
+	if strings.TrimSpace(m.cfg.S3PutTTL) != "" {
+		env = append(env, "S3_PUT_URL_TTL_SECONDS="+strings.TrimSpace(m.cfg.S3PutTTL))
+	}
+	if strings.TrimSpace(m.cfg.S3GetTTL) != "" {
+		env = append(env, "S3_GET_URL_TTL_SECONDS="+strings.TrimSpace(m.cfg.S3GetTTL))
 	}
 	if strings.TrimSpace(m.cfg.UpdateRepo) != "" {
 		env = append(env, "AGENT_UPDATE_REPO="+strings.TrimSpace(m.cfg.UpdateRepo))
