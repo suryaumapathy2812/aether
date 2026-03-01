@@ -4,12 +4,12 @@ import { NextRequest, NextResponse } from "next/server";
  * Proxy route: forwards /api/go/* to the orchestrator upstream.
  *
  * Set AGENT_BASE_URL in your .env:
- *   - AGENT_BASE_URL=http://localhost:9000
+ *   - AGENT_BASE_URL=http://localhost:4000
  *
  * The proxy strips the /api/go prefix and forwards the rest as-is.
  */
 const AGENT_BASE_URL = (
-  process.env.AGENT_BASE_URL || "http://localhost:9000"
+  process.env.AGENT_BASE_URL || "http://localhost:4000"
 ).replace(/\/$/, "");
 
 async function proxy(request: NextRequest, params: { path?: string[] }) {

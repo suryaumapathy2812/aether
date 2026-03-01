@@ -40,60 +40,23 @@ services:
   orchestrator:
     image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
     environment:
+      - PORT=4000
       - DATABASE_URL=${DATABASE_URL}
-      - CORS_ORIGINS=https://${DOMAIN},http://localhost:3000
-      - AETHER_HOST=0.0.0.0
-      - AETHER_PORT=9000
-      # Agent provisioning (per-user containers via Docker SDK)
-      - AGENT_IMAGE=${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest
-      - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
-      - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-30}
       - AGENT_SECRET=${AGENT_SECRET}
+      - AGENT_IMAGE=${AGENT_IMAGE:-${DOCKERHUB_USERNAME:-yourusername}/aether-agent:latest}
+      - AGENT_NETWORK=${AGENT_NETWORK:-aether_network}
+      - AGENT_IDLE_TIMEOUT=${AGENT_IDLE_TIMEOUT:-1800}
+      - AGENT_HEALTH_TIMEOUT=${AGENT_HEALTH_TIMEOUT:-30}
+      - AGENT_PORT=${AGENT_PORT:-8000}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
       - AETHER_AUTO_ASSIGN_FIRST_AGENT=${AETHER_AUTO_ASSIGN_FIRST_AGENT:-true}
       - AETHER_DEFAULT_AGENT_ID=${AETHER_DEFAULT_AGENT_ID:-}
-      # Shared model cache for per-user agent containers
-      - AGENT_SHARED_MODELS_HOST_PATH=${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}
-      - AGENT_SHARED_MODELS_ORCH_PATH=${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
-      - AGENT_SHARED_MODELS_CONTAINER_PATH=${AGENT_SHARED_MODELS_CONTAINER_PATH:-/models}
-      # VAD / turn detector defaults
-      - AETHER_VAD_MODE_DEFAULT=${AETHER_VAD_MODE_DEFAULT:-off}
-      - AETHER_VAD_MODEL_RELATIVE_PATH=${AETHER_VAD_MODEL_RELATIVE_PATH:-silero/silero_vad.onnx}
-      - AETHER_VAD_MODEL_URL=${AETHER_VAD_MODEL_URL:-}
-      - AETHER_VAD_MODEL_SHA256=${AETHER_VAD_MODEL_SHA256:-}
-      - AETHER_TURN_DETECTION_MODE_DEFAULT=${AETHER_TURN_DETECTION_MODE_DEFAULT:-off}
-      - AETHER_TURN_MODEL_TYPE=${AETHER_TURN_MODEL_TYPE:-en}
-      - AETHER_TURN_MODEL_REPO=${AETHER_TURN_MODEL_REPO:-livekit/turn-detector}
-      - AETHER_TURN_MODEL_REVISION=${AETHER_TURN_MODEL_REVISION:-v1.2.2-en}
-      - AETHER_TURN_MODEL_FILENAME=${AETHER_TURN_MODEL_FILENAME:-model.onnx}
-      - AETHER_TURN_MODEL_RELATIVE_DIR=${AETHER_TURN_MODEL_RELATIVE_DIR:-turn-detector}
-      - AETHER_TURN_MODEL_FILES=${AETHER_TURN_MODEL_FILES:-onnx/model.onnx,languages.json,tokenizer.json,tokenizer_config.json,special_tokens_map.json,added_tokens.json,merges.txt,vocab.json}
-      - AETHER_TURN_MIN_ENDPOINTING_DELAY=${AETHER_TURN_MIN_ENDPOINTING_DELAY:-0.5}
-      - AETHER_TURN_MAX_ENDPOINTING_DELAY=${AETHER_TURN_MAX_ENDPOINTING_DELAY:-3.0}
-      - AETHER_TURN_INFERENCE_TIMEOUT_SECONDS=${AETHER_TURN_INFERENCE_TIMEOUT_SECONDS:-2.0}
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      # System-wide fallback API keys
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
-      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
-      # Google OAuth2
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      # Spotify OAuth2
-      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
-      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
-      # GCP / Pub/Sub — forwarded into agent containers for Gmail push notifications
-      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
-      - GMAIL_PUBSUB_TOPIC=${GMAIL_PUBSUB_TOPIC:-}
-      # Public HTTPS URL of the orchestrator — forwarded into agent containers
-      # for Google Calendar HTTP push webhooks (Google requires HTTPS)
-      - PUBLIC_HOOK_URL=${PUBLIC_HOOK_URL:-}
     depends_on:
       - postgres
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_SHARED_MODELS_HOST_PATH:-/opt/aether/models}:${AGENT_SHARED_MODELS_ORCH_PATH:-/shared-models}
     networks:
       - aether_network
       - traefik-public
@@ -112,7 +75,7 @@ services:
         - "traefik.http.routers.orchestrator.entrypoints=websecure"
         - "traefik.http.routers.orchestrator.tls=true"
         - "traefik.http.routers.orchestrator.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-suryaumapathyresolver}"
-        - "traefik.http.services.orchestrator.loadbalancer.server.port=9000"
+        - "traefik.http.services.orchestrator.loadbalancer.server.port=4000"
         - "traefik.http.routers.orchestrator.priority=100"
 
   # --- Dashboard (Next.js) ---
@@ -123,8 +86,7 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
-      - AGENT_BASE_URL=http://orchestrator:9000
-      - ORCHESTRATOR_URL=http://orchestrator:9000
+      - AGENT_BASE_URL=http://orchestrator:4000
       - NEXT_PUBLIC_ORCHESTRATOR_URL=
       - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=
     depends_on:

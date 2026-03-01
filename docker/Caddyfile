@@ -3,5 +3,5 @@
 }
 
 :3080 {
-  reverse_proxy orchestrator:9000
+  reverse_proxy orchestrator:4000
 }

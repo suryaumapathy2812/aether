@@ -40,7 +40,7 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 // ── Constants ──
 
 const WS_BASE =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_WS_URL || "ws://localhost:9000";
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_WS_URL || "ws://localhost:4000";
 const MAX_NOTIFICATIONS = 100;
 const PING_INTERVAL = 25_000;
 const APPROVALS_POLL_INTERVAL = 10_000;

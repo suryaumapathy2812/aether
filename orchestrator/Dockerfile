@@ -9,6 +9,6 @@ COPY . .
 
 RUN go build -o /usr/local/bin/orchestrator-go ./cmd/server
 
-EXPOSE 9000
+EXPOSE 4000
 
 CMD ["orchestrator-go"]

@@ -4,8 +4,7 @@
 # To run production without these overrides:
 #   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up --build
 #
-# Agent containers provisioned by the orchestrator also get
-# hot-reload mounts via AGENT_DEV_ROOT (see agent_manager).
+# Agent containers are provisioned on-demand per user.
 
 services:
   caddy:
@@ -21,11 +20,7 @@ services:
 
   orchestrator:
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ../orchestrator:/app
-    environment:
-      # Tell agent_manager to mount host source into agent containers
-      - AGENT_DEV_ROOT=${AGENT_DEV_ROOT:-${PWD}/agent}
     command: go run ./cmd/server
 
   dashboard:

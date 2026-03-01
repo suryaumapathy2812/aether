@@ -38,7 +38,7 @@ Go rewrite of the orchestration layer.
 
 ## Configuration
 
-- `PORT` (default `9000`)
+- `PORT` (default `4000`)
 - `DATABASE_URL` (required)
 - `AGENT_SECRET` (optional; protects agent registration endpoints)
 - `AETHER_LOCAL_AGENT_URL` (optional; single-agent dev mode override)
