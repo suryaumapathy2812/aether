@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -62,6 +64,9 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/agents/register", s.handleRegisterAgent)
 	mux.HandleFunc("/api/agents/health", s.handleListAgents)
+	mux.HandleFunc("/api/agents/version", s.handleAgentVersionAdmin)
+	mux.HandleFunc("/api/agents/reload", s.handleAgentReloadAdmin)
+	mux.HandleFunc("/api/agents/upgrade", s.handleAgentUpgradeAdmin)
 	mux.HandleFunc("/api/agents/", s.handleAgentsByID)
 
 	mux.HandleFunc("/api/agent/ready", s.requireIdentity(s.handleAgentReady))
@@ -233,6 +238,93 @@ func (s *Server) handleAgentsByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+}
+
+func (s *Server) handleAgentVersionAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.verifyAgentSecret(r); err != nil {
+		writeError(w, err.status, err.msg)
+		return
+	}
+	targets, err := s.resolveAdminTargets(r.Context(), strings.TrimSpace(r.URL.Query().Get("user_id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	results := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		status, payload, callErr := s.callAgentAdmin(r.Context(), t.Host, t.Port, http.MethodGet, "/admin/version", nil)
+		results = append(results, map[string]any{
+			"user_id": t.UserID,
+			"host":    t.Host,
+			"port":    t.Port,
+			"status":  status,
+			"result":  payload,
+			"error":   errString(callErr),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": results})
+}
+
+func (s *Server) handleAgentReloadAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.verifyAgentSecret(r); err != nil {
+		writeError(w, err.status, err.msg)
+		return
+	}
+	targets, err := s.resolveAdminTargets(r.Context(), strings.TrimSpace(r.URL.Query().Get("user_id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	results := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		status, payload, callErr := s.callAgentAdmin(r.Context(), t.Host, t.Port, http.MethodPost, "/admin/reload", map[string]any{})
+		results = append(results, map[string]any{
+			"user_id": t.UserID,
+			"host":    t.Host,
+			"port":    t.Port,
+			"status":  status,
+			"result":  payload,
+			"error":   errString(callErr),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": results})
+}
+
+func (s *Server) handleAgentUpgradeAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.verifyAgentSecret(r); err != nil {
+		writeError(w, err.status, err.msg)
+		return
+	}
+	targets, err := s.resolveAdminTargets(r.Context(), strings.TrimSpace(r.URL.Query().Get("user_id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	results := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		status, payload, callErr := s.callAgentAdmin(r.Context(), t.Host, t.Port, http.MethodPost, "/admin/update/apply", map[string]any{})
+		results = append(results, map[string]any{
+			"user_id": t.UserID,
+			"host":    t.Host,
+			"port":    t.Port,
+			"status":  status,
+			"result":  payload,
+			"error":   errString(callErr),
+		})
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"agents": results})
 }
 
 func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request, id auth.Identity) {
@@ -464,6 +556,98 @@ func (s *Server) verifyAgentSecret(r *http.Request) *authErr {
 		return &authErr{status: http.StatusForbidden, msg: "invalid agent secret"}
 	}
 	return nil
+}
+
+type adminTarget struct {
+	UserID string
+	Host   string
+	Port   int
+}
+
+func (s *Server) resolveAdminTargets(ctx context.Context, userID string) ([]adminTarget, error) {
+	if strings.TrimSpace(userID) != "" {
+		target, err := s.resolveAgent(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		return []adminTarget{{UserID: userID, Host: target.Host, Port: target.Port}}, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT COALESCE(user_id,''), host, port
+		FROM agents
+		WHERE status = 'running'
+		ORDER BY last_health DESC NULLS LAST
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]adminTarget, 0)
+	for rows.Next() {
+		var t adminTarget
+		if err := rows.Scan(&t.UserID, &t.Host, &t.Port); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(t.Host) == "" || t.Port <= 0 {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no running agents found")
+	}
+	return out, nil
+}
+
+func (s *Server) callAgentAdmin(ctx context.Context, host string, port int, method string, path string, payload map[string]any) (int, map[string]any, error) {
+	urlStr := fmt.Sprintf("http://%s:%d%s", host, port, path)
+	var body io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return 0, nil, err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if strings.TrimSpace(s.cfg.AgentSecret) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(s.cfg.AgentSecret))
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	out := map[string]any{}
+	if len(b) > 0 {
+		if err := json.Unmarshal(b, &out); err != nil {
+			out["raw"] = strings.TrimSpace(string(b))
+		}
+	}
+	if resp.StatusCode >= 400 {
+		return resp.StatusCode, out, fmt.Errorf("agent admin call failed: %s", resp.Status)
+	}
+	return resp.StatusCode, out, nil
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

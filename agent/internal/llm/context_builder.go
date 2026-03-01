@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
@@ -20,6 +21,7 @@ type ContextBuilder struct {
 	plugins      *plugins.Manager
 	store        *db.Store
 	systemPrompt string
+	mu           sync.RWMutex
 }
 
 func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, pluginsManager *plugins.Manager, store *db.Store) *ContextBuilder {
@@ -64,8 +66,9 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 	}
 	promptParts := []string{}
 	if b != nil {
-		if strings.TrimSpace(b.systemPrompt) != "" {
-			promptParts = append(promptParts, b.systemPrompt)
+		basePrompt := b.SystemPrompt()
+		if strings.TrimSpace(basePrompt) != "" {
+			promptParts = append(promptParts, basePrompt)
 		}
 		if section := b.skillsPromptSection(); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
@@ -109,6 +112,34 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		env.Policy["temperature"] = 0.2
 	}
 	return env.Normalize()
+}
+
+func (b *ContextBuilder) SystemPrompt() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.systemPrompt
+}
+
+func (b *ContextBuilder) ReloadSystemPrompt() string {
+	if b == nil {
+		return ""
+	}
+	basePrompt := strings.TrimSpace(os.Getenv("AGENT_SYSTEM_PROMPT"))
+	if basePrompt == "" {
+		basePrompt = strings.TrimSpace(loadPromptFromFile())
+	}
+	if basePrompt == "" {
+		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
+	}
+	basePrompt += "\n\nExecution policy:\n- For reminders or alarms, use schedule_reminder exactly once and then respond with confirmation.\n- For long multi-step work, or when user explicitly asks to test/try delegation, use delegate_task and return the task_id.\n- Avoid repeatedly calling the same tool with similar arguments; if a tool fails, explain the failure and stop."
+
+	b.mu.Lock()
+	b.systemPrompt = basePrompt
+	b.mu.Unlock()
+	return basePrompt
 }
 
 func (b *ContextBuilder) decisionsPromptSection(userID string) string {

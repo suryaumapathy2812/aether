@@ -15,6 +15,10 @@ Go rewrite of the orchestration layer.
 - `POST /api/agents/{id}/heartbeat`
 - `POST /api/agents/{id}/assign?user_id=...`
 - `GET /api/agents/health`
+- Admin endpoints (require `AGENT_SECRET` bearer when configured):
+  - `GET /api/agents/version`
+  - `POST /api/agents/reload`
+  - `POST /api/agents/upgrade`
 - Authenticated user-routing proxy:
   - `/v1/*`
   - `/api/memory/*`
@@ -45,6 +49,20 @@ Go rewrite of the orchestration layer.
 - `AGENT_PROXY_TIMEOUT_SECONDS` (default `120`)
 - `AETHER_DEFAULT_AGENT_ID` (optional fallback assignment)
 - `AETHER_AUTO_ASSIGN_FIRST_AGENT` (`true` to assign first running agent when user has no assignment)
+- `AGENT_IMAGE` (default `suryaumapathy2812/aether-agent:latest`)
+- `AGENT_NETWORK` (optional; auto-detected when running in Docker)
+- `AGENT_IDLE_TIMEOUT` (seconds, default `1800`)
+- `AGENT_HEALTH_TIMEOUT` (seconds, default `30`)
+- `AGENT_PORT` (default `8000`)
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` (forwarded into provisioned agents)
+- `AGENT_UPDATE_REPO` (default `suryaumapathy2812/aether`)
+- `AGENT_UPDATE_TOKEN` (optional GitHub token for private releases)
+
+## Per-user persistence
+
+- Each user gets one dedicated agent container.
+- Each agent mounts a dedicated persistent Docker volume at `/app/assets`.
+- The user's SQLite DB (`state.db`) lives in that volume and survives container restarts/upgrades.
 
 ## Run
 

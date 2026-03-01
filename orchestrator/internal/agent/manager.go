@@ -36,10 +36,13 @@ type ManagerConfig struct {
 	IdleTimeout   time.Duration
 	AgentPort     int
 	HealthTimeout time.Duration
+	AdminToken    string
 
 	OpenAIAPIKey  string
 	OpenAIBaseURL string
 	OpenAIModel   string
+	UpdateRepo    string
+	UpdateToken   string
 }
 
 type Manager struct {
@@ -324,6 +327,9 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 	}
 
 	env := []string{"PORT=" + strconv.Itoa(m.cfg.AgentPort)}
+	if strings.TrimSpace(m.cfg.AdminToken) != "" {
+		env = append(env, "AGENT_ADMIN_TOKEN="+strings.TrimSpace(m.cfg.AdminToken))
+	}
 	if m.cfg.OpenAIAPIKey != "" {
 		env = append(env, "OPENAI_API_KEY="+m.cfg.OpenAIAPIKey)
 	}
@@ -332,6 +338,12 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 	}
 	if m.cfg.OpenAIModel != "" {
 		env = append(env, "OPENAI_MODEL="+m.cfg.OpenAIModel)
+	}
+	if strings.TrimSpace(m.cfg.UpdateRepo) != "" {
+		env = append(env, "AGENT_UPDATE_REPO="+strings.TrimSpace(m.cfg.UpdateRepo))
+	}
+	if strings.TrimSpace(m.cfg.UpdateToken) != "" {
+		env = append(env, "AGENT_UPDATE_TOKEN="+strings.TrimSpace(m.cfg.UpdateToken))
 	}
 
 	resp, err := m.docker.ContainerCreate(
@@ -342,6 +354,8 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 			Labels: map[string]string{"managed-by": "aether-orchestrator", "user-id": userID},
 		},
 		&container.HostConfig{
+			// Each user gets a dedicated persistent SQLite volume at /app/assets.
+			// This keeps state.db across container restarts/reprovisioning.
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volumeName, Target: "/app/assets"}},
 		},
 		&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{m.cfg.Network: {}}},

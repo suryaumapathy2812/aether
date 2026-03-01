@@ -43,9 +43,12 @@ func main() {
 			IdleTimeout:   cfg.AgentIdleTimeout,
 			AgentPort:     cfg.AgentPort,
 			HealthTimeout: cfg.AgentHealthTimeout,
+			AdminToken:    cfg.AgentSecret,
 			OpenAIAPIKey:  cfg.AgentOpenAIAPIKey,
 			OpenAIBaseURL: cfg.AgentOpenAIBaseURL,
 			OpenAIModel:   cfg.AgentOpenAIModel,
+			UpdateRepo:    cfg.AgentUpdateRepo,
+			UpdateToken:   cfg.AgentUpdateToken,
 		})
 		if err != nil {
 			log.Printf("agent manager disabled: %v", err)

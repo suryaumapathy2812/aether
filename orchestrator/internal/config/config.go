@@ -26,6 +26,8 @@ type Config struct {
 	AgentOpenAIAPIKey  string
 	AgentOpenAIBaseURL string
 	AgentOpenAIModel   string
+	AgentUpdateRepo    string
+	AgentUpdateToken   string
 }
 
 func Load() Config {
@@ -56,6 +58,8 @@ func Load() Config {
 		AgentOpenAIAPIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 		AgentOpenAIBaseURL: strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
 		AgentOpenAIModel:   strings.TrimSpace(os.Getenv("OPENAI_MODEL")),
+		AgentUpdateRepo:    strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO")),
+		AgentUpdateToken:   strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN")),
 	}
 }
 

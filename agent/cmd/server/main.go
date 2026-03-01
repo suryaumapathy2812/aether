@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	adminhttp "github.com/suryaumapathy2812/core-ai/agent/internal/admin/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/agent"
 	agenthttp "github.com/suryaumapathy2812/core-ai/agent/internal/agent/httpapi"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
@@ -29,6 +31,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
 	toolhttp "github.com/suryaumapathy2812/core-ai/agent/internal/tools/httpapi"
 	plugintools "github.com/suryaumapathy2812/core-ai/agent/internal/tools/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/updater"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/ws"
 )
 
@@ -136,6 +139,20 @@ func main() {
 
 	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store})
 	handler.RegisterRoutes(mux)
+
+	up := updater.New(updater.Config{
+		CurrentVersion: buildinfo.Version,
+		Repo:           strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO")),
+		Token:          strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN")),
+		AssetsDir:      assetsDir,
+	})
+	adminHandler := adminhttp.New(adminhttp.Options{
+		Updater: up,
+		Builder: llmBuilder,
+		Skills:  skillsManager,
+		Plugins: pluginsManager,
+	})
+	adminHandler.RegisterRoutes(mux)
 	httpServer := &http.Server{Addr: ":" + strconv.Itoa(httpPort()), Handler: mux}
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
