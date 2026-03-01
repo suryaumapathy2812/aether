@@ -25,6 +25,8 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
   if (contentType) headers.set("content-type", contentType);
   const authorization = request.headers.get("authorization");
   if (authorization) headers.set("authorization", authorization);
+  const cookie = request.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
   const origin = request.headers.get("origin");
   if (origin) headers.set("origin", origin);
   const referer = request.headers.get("referer");
@@ -41,11 +43,19 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
       headers,
       body: hasBody ? await request.text() : undefined,
       cache: "no-store",
+      redirect: "manual",
     });
 
     const responseHeaders = new Headers();
     const upstreamType = response.headers.get("content-type");
     if (upstreamType) responseHeaders.set("content-type", upstreamType);
+    const location = response.headers.get("location");
+    if (location) responseHeaders.set("location", location);
+    if (!location && response.redirected && response.url) {
+      responseHeaders.set("x-upstream-final-url", response.url);
+    }
+    const setCookie = response.headers.get("set-cookie");
+    if (setCookie) responseHeaders.set("set-cookie", setCookie);
 
     return new Response(response.body, {
       status: response.status,

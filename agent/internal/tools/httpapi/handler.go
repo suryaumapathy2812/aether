@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,9 +45,120 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/internal/tools", h.handleTools)
 	mux.HandleFunc("/internal/tools/schemas/openai", h.handleOpenAISchemas)
 	mux.HandleFunc("/internal/tools/execute", h.handleExecute)
+	mux.HandleFunc("/internal/hooks/", h.handleInternalHooks)
 	mux.HandleFunc("/internal/plugins/status", h.handlePluginsStatus)
 	mux.HandleFunc("/api/plugins", h.handlePluginsAPI)
 	mux.HandleFunc("/api/plugins/", h.handlePluginsAPI)
+}
+
+func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.store == nil {
+		writeError(w, http.StatusInternalServerError, "store unavailable")
+		return
+	}
+
+	pluginName := strings.Trim(strings.TrimPrefix(r.URL.Path, "/internal/hooks/"), "/")
+	if pluginName == "" {
+		writeError(w, http.StatusBadRequest, "plugin name is required")
+		return
+	}
+	userID := strings.TrimSpace(r.Header.Get("X-Aether-User-ID"))
+	if userID == "" {
+		userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
+	}
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, "missing user id")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 2*1024*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	if rec, recErr := h.store.GetPlugin(r.Context(), pluginName); recErr == nil {
+		if !rec.Enabled {
+			writeError(w, http.StatusConflict, "plugin is disabled")
+			return
+		}
+	}
+
+	webhookReq := plugins.WebhookRequest{
+		Plugin:   pluginName,
+		UserID:   userID,
+		DeviceID: strings.TrimSpace(r.Header.Get("X-Aether-Device-ID")),
+		Body:     body,
+		Header:   r.Header,
+	}
+	task, err := plugins.DefaultWebhookRegistry().BuildTask(r.Context(), webhookReq)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if task == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		return
+	}
+
+	if strings.TrimSpace(task.SessionID) == "" {
+		task.SessionID = pluginName + "-webhook"
+	}
+	if strings.TrimSpace(task.Title) == "" {
+		task.Title = "Process " + pluginName + " webhook"
+	}
+	if strings.TrimSpace(task.Goal) == "" {
+		writeError(w, http.StatusBadRequest, "webhook task goal is empty")
+		return
+	}
+
+	metadata := cloneAnyMap(task.Metadata)
+	metadata["source"] = firstNonEmptyString(metadata["source"], "plugin_webhook")
+	metadata["plugin"] = pluginName
+	metadata["device_id"] = webhookReq.DeviceID
+	metadata["headers"] = map[string]any{
+		"content_type": strings.TrimSpace(r.Header.Get("Content-Type")),
+	}
+
+	created, err := h.store.CreateAgentTask(r.Context(), db.AgentTaskCreate{
+		UserID:    userID,
+		SessionID: task.SessionID,
+		Title:     task.Title,
+		Goal:      task.Goal,
+		Priority:  80,
+		MaxSteps:  12,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":  "queued",
+		"task_id": created.ID,
+		"plugin":  pluginName,
+	})
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func firstNonEmptyString(v any, fallback string) string {
+	s, _ := v.(string)
+	if strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	return fallback
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -463,15 +576,35 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	cfg := cloneConfig(rec.Config)
 
-	clientID := strings.TrimSpace(rec.Config["client_id"])
-	if clientID == "" {
-		writeError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
-		return
-	}
-	clientSecret, err := maybeDecryptStoredSecret(rec.Config["client_secret"], h.store)
+	clientID := strings.TrimSpace(cfg["client_id"])
+	clientSecret, err := maybeDecryptStoredSecret(cfg["client_secret"], h.store)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid oauth client_secret")
+		return
+	}
+	envClientID, envClientSecret := oauthProviderEnvCredentials(provider)
+	updated := false
+	if clientID == "" && strings.TrimSpace(envClientID) != "" {
+		clientID = strings.TrimSpace(envClientID)
+		cfg["client_id"] = clientID
+		updated = true
+	}
+	if strings.TrimSpace(clientSecret) == "" && strings.TrimSpace(envClientSecret) != "" {
+		clientSecret = strings.TrimSpace(envClientSecret)
+		cfg["client_secret"] = encryptIfPossible(clientSecret, h.store)
+		updated = true
+	}
+	if updated {
+		if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	if clientID == "" {
+		writeError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
 		return
 	}
 	if strings.TrimSpace(clientSecret) == "" {
@@ -491,7 +624,6 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	cfg := cloneConfig(rec.Config)
 	cfg["oauth_provider"] = provider
 	cfg["oauth_state"] = state
 	cfg["oauth_state_expires_at"] = strconv.FormatInt(time.Now().UTC().Add(10*time.Minute).Unix(), 10)
@@ -661,6 +793,17 @@ func oauthProviderConfig(provider string) oauthProvider {
 		}
 	default:
 		return oauthProvider{}
+	}
+}
+
+func oauthProviderEnvCredentials(provider string) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "google":
+		return strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")), strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
+	case "spotify":
+		return strings.TrimSpace(os.Getenv("SPOTIFY_CLIENT_ID")), strings.TrimSpace(os.Getenv("SPOTIFY_CLIENT_SECRET"))
+	default:
+		return "", ""
 	}
 }
 

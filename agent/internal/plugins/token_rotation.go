@@ -22,6 +22,117 @@ func RegisterDefaultTokenRotators(registry *CronRegistry) {
 	registry.RegisterTokenRotator("spotify", oauthTokenRotator("https://accounts.spotify.com/api/token", true))
 }
 
+func RegisterDefaultWatchRenewers(registry *CronRegistry) {
+	if registry == nil {
+		return
+	}
+	registry.RegisterWatchRenewer("gmail", gmailWatchRenewer())
+}
+
+func gmailWatchRenewer() WatchRenewer {
+	return func(ctx context.Context, state PluginState, payload map[string]any) error {
+		cfg, err := state.Config(ctx)
+		if err != nil {
+			return err
+		}
+		if cfg == nil {
+			cfg = map[string]string{}
+		}
+
+		accessToken, err := maybeDecrypt(state, cfg["access_token"])
+		if err != nil {
+			return fmt.Errorf("failed to decrypt access token: %w", err)
+		}
+		if strings.TrimSpace(accessToken) == "" {
+			return fmt.Errorf("missing access token for gmail watch renewal")
+		}
+
+		topicName := firstNonEmpty(
+			cfg["pubsub_topic"],
+			cfg["topic_name"],
+			cfg["gmail_topic"],
+		)
+		if strings.TrimSpace(topicName) == "" {
+			if payload != nil {
+				topicName = firstNonEmpty(anyString(payload["topic_name"]), anyString(payload["pubsub_topic"]))
+			}
+		}
+		if strings.TrimSpace(topicName) == "" {
+			return fmt.Errorf("missing Gmail Pub/Sub topic (config key pubsub_topic/topic_name)")
+		}
+
+		requestBody := map[string]any{"topicName": strings.TrimSpace(topicName)}
+		if raw := strings.TrimSpace(cfg["watch_label_ids"]); raw != "" {
+			labels := []string{}
+			for _, part := range strings.Split(raw, ",") {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					labels = append(labels, part)
+				}
+			}
+			if len(labels) > 0 {
+				requestBody["labelIds"] = labels
+			}
+		}
+
+		b, err := json.Marshal(requestBody)
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://gmail.googleapis.com/gmail/v1/users/me/watch", strings.NewReader(string(b)))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		var watchResp struct {
+			HistoryID  string `json:"historyId"`
+			Expiration string `json:"expiration"`
+			Error      struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&watchResp)
+
+		if resp.StatusCode >= 300 {
+			if strings.TrimSpace(watchResp.Error.Message) != "" {
+				return fmt.Errorf("gmail watch renewal failed: %s", strings.TrimSpace(watchResp.Error.Message))
+			}
+			return fmt.Errorf("gmail watch renewal failed with status %d", resp.StatusCode)
+		}
+
+		now := time.Now().UTC()
+		cfg["pubsub_topic"] = strings.TrimSpace(topicName)
+		cfg["watch_last_renew_at"] = now.Format(time.RFC3339)
+		cfg["watch_last_renew_status"] = "ok"
+		cfg["watch_last_renew_error"] = ""
+		if strings.TrimSpace(watchResp.HistoryID) != "" {
+			cfg["watch_history_id"] = strings.TrimSpace(watchResp.HistoryID)
+		}
+		if strings.TrimSpace(watchResp.Expiration) != "" {
+			cfg["watch_expires_at"] = strings.TrimSpace(watchResp.Expiration)
+		}
+		return state.SetConfig(ctx, cfg)
+	}
+}
+
+func anyString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", v))
+}
+
 func oauthTokenRotator(tokenURL string, useBasicAuth bool) TokenRotator {
 	return func(ctx context.Context, state PluginState, payload map[string]any) error {
 		_ = payload

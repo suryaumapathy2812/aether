@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -52,22 +53,41 @@ func main() {
 		JobTimeout:   60 * time.Second,
 	})
 
+	// Notification infrastructure is needed by reminder delivery callbacks.
+	wsHub := ws.NewHub()
+	pushSender := ws.NewPushSenderFromEnv()
+
 	pluginRegistry := plugins.NewCronRegistry()
 	plugins.RegisterDefaultTokenRotators(pluginRegistry)
+	plugins.RegisterDefaultWatchRenewers(pluginRegistry)
 	plugins.RegisterCronHandlers(scheduler, store, pluginRegistry)
 
 	reminderRegistry := reminders.NewRegistry()
 	reminderRegistry.Register(func(ctx context.Context, payload map[string]any) error {
-		msg := ""
-		if payload != nil {
-			if v, ok := payload["message"].(string); ok {
-				msg = v
-			}
+		userID := strings.TrimSpace(anyToString(payload["user_id"]))
+		if userID == "" {
+			userID = strings.TrimSpace(anyToString(payload["target_user_id"]))
 		}
+		msg := strings.TrimSpace(anyToString(payload["message"]))
 		if msg == "" {
 			msg = "(empty reminder payload)"
 		}
-		log.Printf("reminder delivered: %s", msg)
+		if userID != "" {
+			wsHub.Broadcast(userID, ws.Message{Type: "reminder", Payload: map[string]any{"message": msg, "payload": payload}})
+			if pushSender != nil {
+				if subs, err := store.GetPushSubscriptions(ctx, userID); err == nil && len(subs) > 0 {
+					pushSubs := make([]ws.PushSubscription, 0, len(subs))
+					for _, sub := range subs {
+						pushSubs = append(pushSubs, ws.PushSubscription{Endpoint: sub.Endpoint, Keys: struct {
+							P256dh string `json:"p256dh"`
+							Auth   string `json:"auth"`
+						}{P256dh: sub.KeyP256dh, Auth: sub.KeyAuth}})
+					}
+					pushSender.SendToAll(pushSubs, ws.PushPayload{Title: "Reminder", Body: msg, Tag: "reminder"})
+				}
+			}
+		}
+		log.Printf("reminder delivered: user=%s message=%s", userID, msg)
 		return nil
 	})
 	reminders.RegisterCronHandlers(scheduler, reminderRegistry)
@@ -120,7 +140,6 @@ func main() {
 	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store)
 
 	// WebSocket notification hub + notifier
-	wsHub := ws.NewHub()
 	wsTaskNotifier := ws.NewTaskNotifier(wsHub)
 	agentNotifier := agent.NewNotifierFromEnv(wsTaskNotifier)
 
@@ -133,7 +152,6 @@ func main() {
 	// WebSocket + Web Push endpoints
 	wsHandler := ws.NewHandler(wsHub)
 	wsHandler.RegisterRoutes(mux)
-	pushSender := ws.NewPushSenderFromEnv()
 	pushHandler := ws.NewPushHandler(store, pushSender)
 	pushHandler.RegisterRoutes(mux)
 
@@ -252,6 +270,17 @@ func httpPort() int {
 		}
 	}
 	return 8000
+}
+
+func anyToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	s, ok := v.(string)
+	if ok {
+		return s
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", v))
 }
 
 func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skills.Manager, pluginsManager *plugins.Manager, toolRegistry *tools.Registry, pluginRegistry *plugins.CronRegistry, reminderRegistry *reminders.Registry) {

@@ -19,26 +19,6 @@ import {
   PluginInfo,
 } from "@/lib/api";
 
-/**
- * Plugin detail / setup page.
- *
- * UX intent — no "installed but not configured" limbo:
- *
- *   auth_type = "oauth2"
- *     Not installed → show "Connect with <provider>" button.
- *     Clicking it silently installs then redirects to OAuth.
- *     After OAuth callback → plugin is installed + connected + enabled.
- *
- *   auth_type = "api_key"
- *     Not installed → show config form immediately.
- *     Saving silently installs then saves config in one shot.
- *     Auto-enable fires server-side when all required fields are present.
- *
- *   auth_type = "none"
- *     Not installed → silently install + enable on page load.
- *
- * The user only ever sees "set up" or "active" — never "installed, disabled".
- */
 export default function PluginDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -75,7 +55,7 @@ export default function PluginDetailPage() {
       const plugins = await listPlugins();
       const found = plugins.find((p) => p.name === pluginName);
       if (!found) {
-        setError("Plugin not found");
+        setError("Connection not found");
         return;
       }
       setPlugin(found);
@@ -95,27 +75,83 @@ export default function PluginDetailPage() {
         if (updated) setPlugin(updated);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to load plugin");
+      setError(e instanceof Error ? e.message : "Could not load this connection right now");
     } finally {
       setLoading(false);
     }
   }
 
   function hasRequiredConfig(): boolean {
-    if (!plugin?.config_fields) return true;
-    return plugin.config_fields
-      .filter((f) => f.required)
-      .every((f) => formValues[f.key]?.trim());
+    return getRequiredFieldsForSetup().every((f) => formValues[f.key]?.trim());
   }
 
   function getMissingFields(): string[] {
-    if (!plugin?.config_fields) return [];
-    return plugin.config_fields
-      .filter((f) => f.required && !formValues[f.key]?.trim())
+    return getRequiredFieldsForSetup()
+      .filter((f) => !formValues[f.key]?.trim())
       .map((f) => f.label);
   }
 
-  /** api_key: install (if needed) + save config in one shot */
+  function getRequiredFieldsForSetup() {
+    if (!plugin?.config_fields) return [];
+    return plugin.config_fields.filter(
+      (f) =>
+        f.required &&
+        !(plugin.auth_type === "oauth2" && f.key === "account_email")
+    );
+  }
+
+  function getEditableConfigFields() {
+    if (!plugin?.config_fields) return [];
+    return plugin.config_fields.filter((f) => f.key !== "account_email");
+  }
+
+  function getOAuthSetupFields() {
+    if (!plugin || plugin.auth_type !== "oauth2") return [];
+    const editable = getEditableConfigFields();
+    if (editable.length > 0) return editable;
+    const providerName =
+      plugin.auth_provider === "google"
+        ? "Google"
+        : plugin.auth_provider === "spotify"
+          ? "Spotify"
+          : "OAuth";
+    return [
+      {
+        key: "client_id",
+        label: `${providerName} Client ID`,
+        type: "text",
+        required: true,
+        description: "",
+      },
+      {
+        key: "client_secret",
+        label: `${providerName} Client Secret`,
+        type: "password",
+        required: true,
+        description: "",
+      },
+    ];
+  }
+
+  function hasOAuthSetupValues(): boolean {
+    const fields = getOAuthSetupFields();
+    if (fields.length === 0) return true;
+    return fields.every((f) => formValues[f.key]?.trim());
+  }
+
+  async function handleOAuthConnect() {
+    if (!plugin) return;
+    setError("");
+    try {
+      if (!plugin.installed) {
+        await installPlugin(pluginName);
+      }
+      window.location.href = getOAuthStartUrl(pluginName);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not start connection");
+    }
+  }
+
   async function handleSave() {
     if (!plugin) return;
     setSaving(true);
@@ -130,12 +166,12 @@ export default function PluginDetailPage() {
       setConfig(formValues);
       if (result.auto_enabled) {
         setPlugin((p) => p ? { ...p, installed: true, enabled: true, connected: true } : p);
-        setSuccess("Configuration saved — plugin enabled");
+        setSuccess("Saved and turned on");
       } else {
-        setSuccess("Configuration saved");
+        setSuccess("Saved");
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to save config");
+      setError(e instanceof Error ? e.message : "Could not save right now");
     } finally {
       setSaving(false);
     }
@@ -149,9 +185,9 @@ export default function PluginDetailPage() {
     try {
       await enablePlugin(pluginName);
       setPlugin({ ...plugin, enabled: true });
-      setSuccess("Plugin enabled");
+      setSuccess("Turned on");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to enable plugin");
+      setError(e instanceof Error ? e.message : "Could not turn this on right now");
     } finally {
       setToggling(false);
     }
@@ -165,9 +201,9 @@ export default function PluginDetailPage() {
     try {
       await disablePlugin(pluginName);
       setPlugin({ ...plugin, enabled: false });
-      setSuccess("Plugin disabled");
+      setSuccess("Turned off");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to disable plugin");
+      setError(e instanceof Error ? e.message : "Could not turn this off right now");
     } finally {
       setToggling(false);
     }
@@ -176,14 +212,27 @@ export default function PluginDetailPage() {
   if (isPending || !session) return null;
 
   const missingFields = getMissingFields();
+  const editableConfigFields = getEditableConfigFields();
+  const oauthSetupFields = getOAuthSetupFields();
   const canEnable =
     plugin?.auth_type === "none" ||
     (plugin?.auth_type === "oauth2" && plugin.connected) ||
     (plugin?.auth_type === "api_key" && hasRequiredConfig());
+  const oauthSetupError =
+    oauthError.includes("needs+setup+details") ||
+    oauthError.includes("needs setup details");
+
+  const blockedReason = !canEnable && !plugin?.enabled
+    ? missingFields.length > 0
+        ? `Please add: ${missingFields.join(", ")}`
+        : plugin?.auth_type === "oauth2"
+          ? "Connect first"
+        : "Finish setup first"
+    : "";
 
   return (
     <PageShell
-      title={plugin?.display_name || "Plugin"}
+      title={plugin?.display_name || "Connection"}
       back="/plugins"
       centered={loading || !!error}
     >
@@ -195,11 +244,11 @@ export default function PluginDetailPage() {
         <div>
           <p className="text-muted-foreground text-xs mb-4">{error}</p>
           <Button variant="aether" size="aether" onClick={loadPluginData}>
-            retry
+            try again
           </Button>
         </div>
       ) : !plugin ? (
-        <p className="text-muted-foreground text-xs">plugin not found</p>
+        <p className="text-muted-foreground text-xs">Connection not found</p>
       ) : (
         <div className="space-y-6">
           {/* Description */}
@@ -217,7 +266,7 @@ export default function PluginDetailPage() {
           )}
           {justConnected && !success && (
             <div className="py-3 text-[12px] text-green-400 tracking-wider animate-[fade-in_0.3s_ease]">
-              connected successfully
+              Connected
             </div>
           )}
           {error && (
@@ -227,78 +276,69 @@ export default function PluginDetailPage() {
           )}
           {!!oauthError && (
             <div className="py-3 text-[12px] text-red-400 tracking-wider">
-              OAuth error: {oauthError}
+              {oauthSetupError
+                ? "Add your app details once, then connect."
+                : "Could not finish connection. Please try again."}
             </div>
           )}
 
-          {/* ── OAuth2 ── */}
           {plugin.auth_type === "oauth2" && (
             <div className="py-4">
-              <div className="space-y-3">
-                <p className="text-[12px] text-muted-foreground leading-relaxed">
-                  Save OAuth app credentials, then connect this plugin to your account.
+              <div className="space-y-4">
+                <p className="text-xs text-muted-foreground leading-relaxed max-w-[70ch]">
+                  Connect your account once to start using this app with Aether.
                 </p>
-                {plugin.config_fields?.length ? (
-                  <div className="space-y-4">
-                    {plugin.config_fields.map((field) => (
-                      <MinimalInput
-                        key={field.key}
-                        label={field.label}
-                        type={field.type === "password" ? "password" : "text"}
-                        value={formValues[field.key] || ""}
-                        onChange={(v) =>
-                          setFormValues({ ...formValues, [field.key]: v })
-                        }
-                        placeholder={field.description || field.label}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    variant="aether"
-                    size="aether"
-                    onClick={handleSave}
-                    disabled={saving || !hasRequiredConfig()}
-                  >
-                    {saving ? "..." : plugin.installed ? "save settings" : "save & install"}
-                  </Button>
-                  <Button
-                    variant="aether-link"
-                    size="aether-link"
-                    onClick={() => {
-                      window.location.href = getOAuthStartUrl(pluginName);
-                    }}
-                    disabled={!hasRequiredConfig()}
-                  >
-                    connect with {plugin.auth_provider || "oauth2"}
-                  </Button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[14px] text-secondary-foreground font-light">
-                    {plugin.connected
-                      ? config.account_email
-                        ? `Connected as ${config.account_email}`
-                        : "Connected"
-                      : "Not connected"}
+                {oauthSetupFields.length > 0 && (
+                  <>
+                    <div className="space-y-4">
+                      {oauthSetupFields.map((field) => (
+                        <MinimalInput
+                          key={field.key}
+                          label={field.label}
+                          type={field.type === "password" ? "password" : "text"}
+                          value={formValues[field.key] || ""}
+                          onChange={(v) =>
+                            setFormValues({ ...formValues, [field.key]: v })
+                          }
+                          placeholder={field.description || field.label}
+                        />
+                      ))}
+                    </div>
+                    <Button
+                      variant="aether"
+                      size="aether"
+                      onClick={handleSave}
+                      disabled={saving || !hasOAuthSetupValues()}
+                    >
+                      {saving ? "..." : "Save details"}
+                    </Button>
+                  </>
+                )}
+                <Button
+                  variant="aether"
+                  size="aether"
+                  onClick={handleOAuthConnect}
+                  disabled={!hasRequiredConfig()}
+                >
+                  {plugin.connected ? "Reconnect" : "Connect"}
+                </Button>
+                {plugin.connected && (
+                  <span className="block text-[12px] text-green-400 tracking-wider">
+                    Connected
                   </span>
-                  <span className="text-[11px] tracking-wider text-muted-foreground">
-                    {plugin.auth_provider || "oauth2"}
-                  </span>
-                </div>
+                )}
               </div>
               <Separator className="mt-4" />
             </div>
           )}
 
-          {/* ── API key config ── */}
           {plugin.auth_type === "api_key" && (
             <div className="space-y-4">
               <h2 className="text-xs tracking-widest text-muted-foreground uppercase font-normal">
-                Configuration
+                Set up
               </h2>
               <div className="space-y-4">
-                {plugin.config_fields?.map((field) => (
+                {editableConfigFields.map((field) => (
                   <MinimalInput
                     key={field.key}
                     label={field.label}
@@ -311,31 +351,28 @@ export default function PluginDetailPage() {
                   />
                 ))}
               </div>
-              <Button
-                variant="aether"
-                size="aether"
-                onClick={handleSave}
-                disabled={saving || !hasRequiredConfig()}
-              >
-                {saving ? "..." : plugin.installed ? "save configuration" : "save & activate"}
-              </Button>
+                <Button
+                  variant="aether"
+                  size="aether"
+                  onClick={handleSave}
+                  disabled={saving || !hasRequiredConfig()}
+                >
+                  {saving ? "..." : plugin.installed ? "Save" : "Save and turn on"}
+                </Button>
               {plugin.installed && <Separator className="mt-4" />}
             </div>
           )}
 
-          {/* ── Enable / Disable (shown once installed) ── */}
           {plugin.installed && (
             <div className="py-2">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
                 <div className="flex flex-col">
                   <span className="text-[11px] tracking-[0.12em] uppercase text-muted-foreground font-medium">
-                    Status
+                    App status
                   </span>
                   {!canEnable && !plugin.enabled && (
                     <span className="text-[10px] text-red-400/80 mt-1">
-                      {missingFields.length > 0
-                        ? `Missing: ${missingFields.join(", ")}`
-                        : "Configuration required"}
+                      {blockedReason}
                     </span>
                   )}
                 </div>
@@ -345,7 +382,7 @@ export default function PluginDetailPage() {
                       plugin.enabled ? "text-green-400" : "text-muted-foreground"
                     }`}
                   >
-                    {toggling ? "..." : plugin.enabled ? "enabled" : "disabled"}
+                    {toggling ? "..." : plugin.enabled ? "On" : "Off"}
                   </span>
                   {plugin.enabled ? (
                     <Button
@@ -355,7 +392,7 @@ export default function PluginDetailPage() {
                       disabled={toggling}
                       className="text-red-400/80 hover:text-red-400"
                     >
-                      disable
+                      turn off
                     </Button>
                   ) : (
                     <Button
@@ -364,7 +401,7 @@ export default function PluginDetailPage() {
                       onClick={handleEnable}
                       disabled={toggling || !canEnable}
                     >
-                      {toggling ? "..." : "enable"}
+                      {toggling ? "..." : "turn on"}
                     </Button>
                   )}
                 </div>
@@ -372,12 +409,11 @@ export default function PluginDetailPage() {
             </div>
           )}
 
-          {/* Not available in catalogue */}
           {!plugin.installed && plugin.auth_type !== "oauth2" && plugin.auth_type !== "api_key" && plugin.auth_type !== "none" && (
             <div className="text-[12px] text-muted-foreground">
-              Install this plugin from the{" "}
+              This app can be set up from the{" "}
               <Link href="/plugins" className="text-secondary-foreground hover:underline">
-                plugins page
+                connections page
               </Link>
               .
             </div>

@@ -29,9 +29,14 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 			token TEXT UNIQUE NOT NULL,
 			name TEXT DEFAULT 'Unknown Device',
 			device_type TEXT DEFAULT 'ios',
+			plugin_name TEXT DEFAULT '',
+			config_json TEXT DEFAULT '{}',
 			paired_at TIMESTAMPTZ DEFAULT now(),
 			last_seen TIMESTAMPTZ
 		);
+
+		ALTER TABLE devices ADD COLUMN IF NOT EXISTS plugin_name TEXT DEFAULT '';
+		ALTER TABLE devices ADD COLUMN IF NOT EXISTS config_json TEXT DEFAULT '{}';
 
 		CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY,
@@ -50,6 +55,7 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 		CREATE INDEX IF NOT EXISTS idx_agents_user_status ON agents(user_id, status, last_health DESC);
 		CREATE INDEX IF NOT EXISTS idx_session_token_expires ON session(token, expires_at);
 		CREATE INDEX IF NOT EXISTS idx_devices_token ON devices(token);
+		CREATE INDEX IF NOT EXISTS idx_devices_user_type ON devices(user_id, device_type, plugin_name);
 	`)
 	return err
 }

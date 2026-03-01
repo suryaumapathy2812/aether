@@ -204,3 +204,64 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 		t.Fatalf("redirect missing callback uri: %s", location)
 	}
 }
+
+func TestPluginOAuthStartUsesProviderEnvCredentials(t *testing.T) {
+	ctx := context.Background()
+	assets := t.TempDir()
+	builtin := filepath.Join(assets, "plugins", "builtin")
+	if err := os.MkdirAll(filepath.Join(builtin, "spotify"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: spotify\ndisplay_name: Spotify\ndescription: test\nauth:\n  type: oauth2\n  provider: spotify\n  scopes:\n    - user-read-email\n"
+	if err := os.WriteFile(filepath.Join(builtin, "spotify", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
+	t.Setenv("SPOTIFY_CLIENT_ID", "env-client-id")
+	t.Setenv("SPOTIFY_CLIENT_SECRET", "env-client-secret")
+	store, err := db.Open(filepath.Join(assets, "state.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	if _, err := pm.Discover(ctx); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	r := tools.NewRegistry()
+	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Plugins: pm, Store: store})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins/spotify/oauth/start", nil)
+	req.Header.Set("X-Forwarded-Host", "app.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d body=%s", w.Code, w.Body.String())
+	}
+	location := w.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://accounts.spotify.com/authorize?") {
+		t.Fatalf("unexpected oauth redirect: %s", location)
+	}
+
+	rec, err := store.GetPlugin(ctx, "spotify")
+	if err != nil {
+		t.Fatalf("get plugin: %v", err)
+	}
+	if strings.TrimSpace(rec.Config["client_id"]) != "env-client-id" {
+		t.Fatalf("expected env client_id persisted, got %q", rec.Config["client_id"])
+	}
+	secret, err := store.DecryptString(rec.Config["client_secret"])
+	if err != nil {
+		t.Fatalf("decrypt client_secret: %v", err)
+	}
+	if secret != "env-client-secret" {
+		t.Fatalf("expected env client_secret persisted, got %q", secret)
+	}
+}

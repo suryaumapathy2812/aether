@@ -17,7 +17,11 @@ func HTTPStream(client *http.Client, w http.ResponseWriter, incoming *http.Reque
 	if err != nil {
 		return false
 	}
-	resp, err := client.Do(upstreamReq)
+	proxyClient := *client
+	proxyClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := proxyClient.Do(upstreamReq)
 	if err != nil {
 		return false
 	}

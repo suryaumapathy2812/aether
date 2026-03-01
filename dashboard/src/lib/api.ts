@@ -603,9 +603,9 @@ export async function resumeAgentTask(input: {
 // ── OAuth / WebSocket URLs ──
 
 export function getOAuthStartUrl(pluginName: string): string {
-  const base = API_BASE || "";
   const token = _sessionToken || "";
-  return `${base}/api/plugins/${pluginName}/oauth/start?token=${encodeURIComponent(token)}`;
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `/plugins/${pluginName}/oauth/start${qs}`;
 }
 
 export function getWsUrl(): string {

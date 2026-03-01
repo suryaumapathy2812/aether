@@ -75,6 +75,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/webrtc/ice", s.requireIdentity(s.handleWebRTCIce))
 	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
 	mux.HandleFunc("/api/ws", s.requireIdentity(s.handleNotificationsWS))
+	mux.HandleFunc("/api/devices", s.requireIdentity(s.handleDevices))
+	mux.HandleFunc("/api/devices/telegram", s.requireIdentity(s.handleTelegramDevice))
+	mux.HandleFunc("/api/devices/", s.requireIdentity(s.handleDeviceByID))
+	mux.HandleFunc("/api/hooks/", s.handlePluginWebhookIngress)
 
 	mux.HandleFunc("/v1/", s.requireIdentity(s.handleV1Proxy))
 	mux.HandleFunc("/api/memory/", s.requireIdentity(s.handleMemoryProxy))
