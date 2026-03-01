@@ -163,8 +163,13 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 		return Target{}, err
 	}
 
-	target := Target{Host: containerName, Port: m.cfg.AgentPort}
-	if err := m.waitHealthy(ctx, target.Host, target.Port); err != nil {
+	inspect, err := m.docker.ContainerInspect(ctx, ctrID)
+	if err != nil {
+		return Target{}, err
+	}
+	host := m.agentHostFromInspect(inspect, containerName)
+	target := Target{Host: host, Port: m.cfg.AgentPort}
+	if err := m.waitHealthy(ctx, ctrID, target.Host, target.Port); err != nil {
 		return Target{}, err
 	}
 
@@ -263,7 +268,7 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 		if t.Host == "" || t.Port <= 0 {
 			return Target{}, false, nil
 		}
-		if err := m.waitHealthy(ctx, t.Host, t.Port); err != nil {
+		if err := m.waitHealthy(ctx, "", t.Host, t.Port); err != nil {
 			return Target{}, false, nil
 		}
 		return t, true, nil
@@ -283,20 +288,16 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 		}
 	}
 
-	host := strings.TrimSpace(rec.Host)
+	host := m.agentHostFromInspect(inspect, containerNameForUser(rec.UserID))
 	if host == "" {
-		host = strings.TrimSpace(inspect.Name)
-		host = strings.TrimPrefix(host, "/")
-	}
-	if host == "" {
-		host = containerNameForUser(rec.UserID)
+		host = strings.TrimSpace(rec.Host)
 	}
 	port := rec.Port
 	if port <= 0 {
 		port = m.cfg.AgentPort
 	}
 
-	if err := m.waitHealthy(ctx, host, port); err != nil {
+	if err := m.waitHealthy(ctx, rec.ContainerID, host, port); err != nil {
 		return Target{}, false, err
 	}
 
@@ -448,7 +449,7 @@ func (m *Manager) ensureContainerStarted(ctx context.Context, id string) error {
 	return nil
 }
 
-func (m *Manager) waitHealthy(ctx context.Context, host string, port int) error {
+func (m *Manager) waitHealthy(ctx context.Context, containerID string, host string, port int) error {
 	timeout := m.cfg.HealthTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -471,7 +472,65 @@ func (m *Manager) waitHealthy(ctx context.Context, host string, port int) error 
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	detail := ""
+	if strings.TrimSpace(containerID) != "" {
+		detail = m.containerDebugState(ctx, containerID)
+	}
+	if detail != "" {
+		return fmt.Errorf("agent failed health check before timeout: %s (%s)", healthURL, detail)
+	}
 	return fmt.Errorf("agent failed health check before timeout: %s", healthURL)
+}
+
+func (m *Manager) agentHostFromInspect(inspect container.InspectResponse, fallback string) string {
+	if inspect.NetworkSettings != nil && inspect.NetworkSettings.Networks != nil {
+		if netCfg, ok := inspect.NetworkSettings.Networks[m.cfg.Network]; ok {
+			if ip := strings.TrimSpace(netCfg.IPAddress); ip != "" {
+				return ip
+			}
+		}
+		for _, netCfg := range inspect.NetworkSettings.Networks {
+			if ip := strings.TrimSpace(netCfg.IPAddress); ip != "" {
+				return ip
+			}
+		}
+	}
+	if name := strings.TrimPrefix(strings.TrimSpace(inspect.Name), "/"); name != "" {
+		return name
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func (m *Manager) containerDebugState(ctx context.Context, containerID string) string {
+	inspect, err := m.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return ""
+	}
+	state := "unknown"
+	if inspect.State != nil {
+		state = inspect.State.Status
+		if inspect.State.Error != "" {
+			state += ", error=" + inspect.State.Error
+		}
+		exit := inspect.State.ExitCode
+		if exit != 0 {
+			state += fmt.Sprintf(", exit_code=%d", exit)
+		}
+	}
+	logs, err := m.docker.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "20"})
+	if err != nil {
+		return state
+	}
+	defer logs.Close()
+	b, err := io.ReadAll(io.LimitReader(logs, 8192))
+	if err != nil || len(b) == 0 {
+		return state
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) > 0 {
+		state += ", last_log=" + strings.TrimSpace(lines[len(lines)-1])
+	}
+	return state
 }
 
 func (m *Manager) stopAndRemoveContainer(ctx context.Context, id string) error {
