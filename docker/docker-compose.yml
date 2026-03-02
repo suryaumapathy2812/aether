@@ -120,8 +120,6 @@ services:
       - BETTER_AUTH_URL=https://${DOMAIN:-localhost}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - AGENT_BASE_URL=http://orchestrator:4000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-http://localhost:3080}
-      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=${NEXT_PUBLIC_ORCHESTRATOR_WS_URL:-ws://localhost:3080}
     depends_on:
       postgres:
         condition: service_healthy

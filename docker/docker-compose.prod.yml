@@ -126,8 +126,6 @@ services:
       - BETTER_AUTH_URL=https://${DOMAIN}
       - BETTER_AUTH_TRUSTED_ORIGINS=https://${DOMAIN}
       - AGENT_BASE_URL=http://orchestrator:4000
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=${NEXT_PUBLIC_ORCHESTRATOR_URL:-https://${DOMAIN}}
-      - NEXT_PUBLIC_ORCHESTRATOR_WS_URL=${NEXT_PUBLIC_ORCHESTRATOR_WS_URL:-wss://${DOMAIN}}
     depends_on:
       - postgres
       - orchestrator

@@ -1,10 +1,9 @@
 /**
  * Agent / Orchestrator API client.
  *
- * All requests go through the Next.js `/api/go/*` proxy route, which
- * forwards to the upstream defined by AGENT_BASE_URL (orchestrator).
- * To switch environments, change AGENT_BASE_URL
- * in your .env — no frontend code changes needed.
+ * Browser-based calls use same-origin URLs which Traefik proxies to the orchestrator.
+ * In production: /api/* routes → Traefik → orchestrator
+ * In development: /api/* routes → Caddy → orchestrator
  *
  * Auth: session token from better-auth sent as Authorization: Bearer header.
  */
@@ -716,15 +715,4 @@ export function getOAuthStartUrl(pluginName: string): string {
   const token = _sessionToken || "";
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
   return `/plugins/${pluginName}/oauth/start${qs}`;
-}
-
-export function getWsUrl(): string {
-  const token = _sessionToken || "";
-  // Same-origin: derive WS URL from current page
-  if (typeof window !== "undefined") {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/api/ws/notifications?token=${token}`;
-  }
-  // SSR fallback
-  return `ws://localhost:3000/api/ws?token=${token}`;
 }
