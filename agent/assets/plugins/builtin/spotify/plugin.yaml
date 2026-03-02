@@ -16,16 +16,6 @@ auth:
     - playlist-read-private
     - user-read-email
   config_fields:
-    - key: client_id
-      label: Spotify Client ID
-      type: text
-      required: true
-      description: Client ID from Spotify Developer Dashboard.
-    - key: client_secret
-      label: Spotify Client Secret
-      type: password
-      required: true
-      description: Client secret from Spotify Developer Dashboard.
     - key: account_email
       label: Spotify Account
       type: text

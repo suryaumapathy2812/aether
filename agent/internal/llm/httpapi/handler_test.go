@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
@@ -107,9 +108,12 @@ func (p *roundTripProvider) StreamWithTools(ctx context.Context, opts providers.
 
 func buildHandler() *Handler {
 	r := tools.NewRegistry()
-	b := llm.NewContextBuilder(r, nil, nil, nil)
+	b := llm.NewContextBuilder(r, nil, nil, nil, llm.ContextBuilderConfig{})
 	c := llm.NewCore(&fakeProvider{}, tools.NewOrchestrator(r, tools.ExecContext{}))
-	return New(Options{Core: c, Builder: b})
+	return New(Options{Core: c, Builder: b, Model: "test-model", MediaLimits: agentcfg.MediaLimitsConfig{
+		MaxImageBytes: 5 * 1024 * 1024, MaxAudioBytes: 12 * 1024 * 1024,
+		MaxTotalMediaBytes: 20 * 1024 * 1024, MaxMediaParts: 4,
+	}})
 }
 
 func TestModelsEndpoint(t *testing.T) {
@@ -240,9 +244,12 @@ func TestChatCompletionsToolCallRoundTrip(t *testing.T) {
 		t.Fatalf("register tool: %v", err)
 	}
 	p := &roundTripProvider{test: t}
-	b := llm.NewContextBuilder(r, nil, nil, nil)
+	b := llm.NewContextBuilder(r, nil, nil, nil, llm.ContextBuilderConfig{})
 	c := llm.NewCore(p, tools.NewOrchestrator(r, tools.ExecContext{}))
-	h := New(Options{Core: c, Builder: b})
+	h := New(Options{Core: c, Builder: b, Model: "test-model", MediaLimits: agentcfg.MediaLimitsConfig{
+		MaxImageBytes: 5 * 1024 * 1024, MaxAudioBytes: 12 * 1024 * 1024,
+		MaxTotalMediaBytes: 20 * 1024 * 1024, MaxMediaParts: 4,
+	}})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 

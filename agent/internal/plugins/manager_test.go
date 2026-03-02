@@ -109,7 +109,7 @@ func TestDiscoverSyncsPluginsToStateStore(t *testing.T) {
 		"version":      "0.1.0",
 	})
 
-	store, err := db.Open(statePath)
+	store, err := db.Open(statePath, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

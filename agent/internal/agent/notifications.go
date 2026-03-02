@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -81,11 +80,11 @@ func (n MultiNotifier) OnTaskUpdate(ctx context.Context, task db.AgentTaskRecord
 	}
 }
 
-// NewNotifierFromEnv creates a MultiNotifier from environment config.
-// Pass optional extra notifiers (e.g. a WebSocketNotifier) to include them.
-func NewNotifierFromEnv(extra ...Notifier) Notifier {
+// NewNotifier creates a MultiNotifier with the given webhook URL and optional
+// extra notifiers (e.g. a WebSocketNotifier).
+func NewNotifier(webhookURL string, extra ...Notifier) Notifier {
 	notifiers := []Notifier{LogNotifier{}}
-	if webhook := strings.TrimSpace(os.Getenv("AGENT_TASK_WEBHOOK_URL")); webhook != "" {
+	if webhook := strings.TrimSpace(webhookURL); webhook != "" {
 		notifiers = append(notifiers, NewWebhookNotifier(webhook))
 	}
 	notifiers = append(notifiers, extra...)

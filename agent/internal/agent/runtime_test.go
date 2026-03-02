@@ -30,7 +30,7 @@ func (p *staticProvider) StreamWithTools(ctx context.Context, opts providers.Gen
 
 func TestRuntimeCompletesQueuedTask(t *testing.T) {
 	ctx := context.Background()
-	store, err := db.Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := db.Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestRuntimeCompletesQueuedTask(t *testing.T) {
 	registry := tools.NewRegistry()
 	orchestrator := tools.NewOrchestrator(registry, tools.ExecContext{Store: store})
 	core := llm.NewCore(&staticProvider{}, orchestrator)
-	builder := llm.NewContextBuilder(registry, nil, nil, store)
+	builder := llm.NewContextBuilder(registry, nil, nil, store, llm.ContextBuilderConfig{})
 	runtime := NewRuntime(RuntimeOptions{Store: store, Core: core, Builder: builder, Workers: 1, PollEvery: 20 * time.Millisecond})
 
 	task, err := store.CreateAgentTask(ctx, db.AgentTaskCreate{UserID: "u1", Title: "Plan", Goal: "Do the thing", MaxSteps: 5})

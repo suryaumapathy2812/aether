@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -15,21 +14,23 @@ import (
 )
 
 type Handler struct {
-	updater *updater.Updater
-	builder *llm.ContextBuilder
-	skills  *skills.Manager
-	plugins *plugins.Manager
+	updater    *updater.Updater
+	builder    *llm.ContextBuilder
+	skills     *skills.Manager
+	plugins    *plugins.Manager
+	adminToken string
 }
 
 type Options struct {
-	Updater *updater.Updater
-	Builder *llm.ContextBuilder
-	Skills  *skills.Manager
-	Plugins *plugins.Manager
+	Updater    *updater.Updater
+	Builder    *llm.ContextBuilder
+	Skills     *skills.Manager
+	Plugins    *plugins.Manager
+	AdminToken string
 }
 
 func New(opts Options) *Handler {
-	return &Handler{updater: opts.Updater, builder: opts.Builder, skills: opts.Skills, plugins: opts.Plugins}
+	return &Handler{updater: opts.Updater, builder: opts.Builder, skills: opts.Skills, plugins: opts.Plugins, adminToken: opts.AdminToken}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -44,7 +45,7 @@ func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := requireAdminAuth(r); err != nil {
+	if err := h.requireAdminAuth(r); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -60,7 +61,7 @@ func (h *Handler) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := requireAdminAuth(r); err != nil {
+	if err := h.requireAdminAuth(r); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -85,7 +86,7 @@ func (h *Handler) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := requireAdminAuth(r); err != nil {
+	if err := h.requireAdminAuth(r); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -126,7 +127,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := requireAdminAuth(r); err != nil {
+	if err := h.requireAdminAuth(r); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -156,8 +157,8 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func requireAdminAuth(r *http.Request) error {
-	secret := strings.TrimSpace(os.Getenv("AGENT_ADMIN_TOKEN"))
+func (h *Handler) requireAdminAuth(r *http.Request) error {
+	secret := strings.TrimSpace(h.adminToken)
 	if secret == "" {
 		return nil
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/agent"
 	agenthttp "github.com/suryaumapathy2812/core-ai/agent/internal/agent/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
@@ -42,8 +43,14 @@ func main() {
 	observability.Init("agent")
 	http.DefaultTransport = observability.WrapTransport(http.DefaultTransport)
 
-	assetsDir := assetsRoot()
-	store, err := db.OpenInAssets(assetsDir)
+	// ── Load & validate centralized config ──────────────────────────
+	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed:\n%v", err)
+	}
+
+	// ── Database ────────────────────────────────────────────────────
+	store, err := db.OpenInAssets(cfg.AssetsDir, cfg.StateKey)
 	if err != nil {
 		log.Fatalf("failed to open db: %v", err)
 	}
@@ -56,9 +63,9 @@ func main() {
 		JobTimeout:   60 * time.Second,
 	})
 
-	// Notification infrastructure is needed by reminder delivery callbacks.
+	// ── Notification infrastructure ─────────────────────────────────
 	wsHub := ws.NewHub()
-	pushSender := ws.NewPushSenderFromEnv()
+	pushSender := ws.NewPushSender(cfg.VAPID)
 
 	pluginRegistry := plugins.NewCronRegistry()
 	plugins.RegisterDefaultTokenRotators(pluginRegistry)
@@ -95,25 +102,27 @@ func main() {
 	})
 	reminders.RegisterCronHandlers(scheduler, reminderRegistry)
 
+	// ── Skills & Plugins ────────────────────────────────────────────
 	skillsManager := skills.NewManager(skills.ManagerOptions{
-		BuiltinDirs: []string{filepath.Join(assetsDir, "skills", "builtin")},
-		UserDir:     filepath.Join(assetsDir, "skills", "user"),
-		ExternalDir: filepath.Join(assetsDir, "skills", "external"),
+		BuiltinDirs: []string{filepath.Join(cfg.AssetsDir, "skills", "builtin")},
+		UserDir:     filepath.Join(cfg.AssetsDir, "skills", "user"),
+		ExternalDir: filepath.Join(cfg.AssetsDir, "skills", "external"),
 	})
 	if _, err := skillsManager.Discover(context.Background()); err != nil {
 		log.Printf("skills discover warning: %v", err)
 	}
 
 	pluginsManager := plugins.NewManager(plugins.ManagerOptions{
-		BuiltinDirs: []string{filepath.Join(assetsDir, "plugins", "builtin")},
-		UserDir:     filepath.Join(assetsDir, "plugins", "user"),
-		ExternalDir: filepath.Join(assetsDir, "plugins", "external"),
+		BuiltinDirs: []string{filepath.Join(cfg.AssetsDir, "plugins", "builtin")},
+		UserDir:     filepath.Join(cfg.AssetsDir, "plugins", "user"),
+		ExternalDir: filepath.Join(cfg.AssetsDir, "plugins", "external"),
 		StateStore:  store,
 	})
 	if _, err := pluginsManager.Discover(context.Background()); err != nil {
 		log.Printf("plugins discover warning: %v", err)
 	}
 
+	// ── Tools ───────────────────────────────────────────────────────
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterAll(toolRegistry); err != nil {
 		log.Fatalf("failed to register core tools: %v", err)
@@ -121,7 +130,7 @@ func main() {
 	if err := plugintools.RegisterAvailable(toolRegistry, pluginsManager); err != nil {
 		log.Fatalf("failed to register plugin tools: %v", err)
 	}
-	workspaceDir := filepath.Join(assetsDir, "workspace")
+	workspaceDir := filepath.Join(cfg.AssetsDir, "workspace")
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		log.Fatalf("failed to create workspace dir: %v", err)
 	}
@@ -132,22 +141,31 @@ func main() {
 		Plugins:    pluginsManager,
 	})
 
+	// ── LLM & Media ────────────────────────────────────────────────
 	mux := http.NewServeMux()
-	llmProvider := providers.NewOpenAILLMProviderFromEnv()
+	llmProvider := providers.NewOpenAILLMProvider(cfg.LLM)
 	llmCore := llm.NewCore(llmProvider, toolOrchestrator)
-	mediaService, err := media.NewFromEnv(context.Background())
+	mediaService, err := media.New(context.Background(), cfg.S3)
 	if err != nil {
 		log.Fatalf("failed to init media storage: %v", err)
 	}
 	memoryService := memory.NewService(store, llmCore)
-	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store)
+	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store, llm.ContextBuilderConfig{
+		SystemPrompt: cfg.SystemPrompt,
+		PromptFile:   cfg.PromptFile,
+		AssetsDir:    cfg.AssetsDir,
+	})
 
-	// WebSocket notification hub + notifier
+	// ── Agent notifier ──────────────────────────────────────────────
 	wsTaskNotifier := ws.NewTaskNotifier(wsHub)
-	agentNotifier := agent.NewNotifierFromEnv(wsTaskNotifier)
+	agentNotifier := agent.NewNotifier(cfg.TaskWebhookURL, wsTaskNotifier)
 
+	// ── HTTP handlers ───────────────────────────────────────────────
 	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
-	llmHandler := llmhttp.New(llmhttp.Options{Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService})
+	llmHandler := llmhttp.New(llmhttp.Options{
+		Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService,
+		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
+	})
 	llmHandler.RegisterRoutes(mux)
 	agentHandler := agenthttp.New(store, mediaService)
 	agentHandler.RegisterRoutes(mux)
@@ -163,18 +181,21 @@ func main() {
 
 	up := updater.New(updater.Config{
 		CurrentVersion: buildinfo.Version,
-		Repo:           strings.TrimSpace(os.Getenv("AGENT_UPDATE_REPO")),
-		Token:          strings.TrimSpace(os.Getenv("AGENT_UPDATE_TOKEN")),
-		AssetsDir:      assetsDir,
+		Repo:           cfg.UpdateRepo,
+		Token:          cfg.UpdateToken,
+		AssetsDir:      cfg.AssetsDir,
 	})
 	adminHandler := adminhttp.New(adminhttp.Options{
-		Updater: up,
-		Builder: llmBuilder,
-		Skills:  skillsManager,
-		Plugins: pluginsManager,
+		Updater:    up,
+		Builder:    llmBuilder,
+		Skills:     skillsManager,
+		Plugins:    pluginsManager,
+		AdminToken: cfg.AdminToken,
 	})
 	adminHandler.RegisterRoutes(mux)
-	httpServer := &http.Server{Addr: ":" + strconv.Itoa(httpPort()), Handler: observability.Middleware(mux)}
+
+	// ── Start server ────────────────────────────────────────────────
+	httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: observability.Middleware(mux)}
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("http server error: %v", err)
@@ -193,7 +214,7 @@ func main() {
 	if err := agentRuntime.Start(ctx); err != nil {
 		log.Fatalf("failed to start agent runtime: %v", err)
 	}
-	log.Printf("server bootstrap started (assets=%s)", assetsDir)
+	log.Printf("server bootstrap started (assets=%s)", cfg.AssetsDir)
 
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -211,17 +232,6 @@ func main() {
 		log.Printf("http shutdown error: %v", err)
 	}
 	log.Printf("server shutdown complete")
-}
-
-func assetsRoot() string {
-	if v := os.Getenv("AGENT_ASSETS_DIR"); v != "" {
-		return v
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return "assets"
-	}
-	return filepath.Clean(filepath.Join(wd, "assets"))
 }
 
 func loadDotEnvIfPresent() {
@@ -264,15 +274,6 @@ func loadDotEnvIfPresent() {
 		}
 		_ = os.Setenv(key, value)
 	}
-}
-
-func httpPort() int {
-	if raw := os.Getenv("PORT"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 65535 {
-			return n
-		}
-	}
-	return 8000
 }
 
 func anyToString(v any) string {

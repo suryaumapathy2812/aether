@@ -157,7 +157,9 @@ type AgentTaskEvent struct {
 	CreatedAt   time.Time
 }
 
-func Open(path string) (*Store, error) {
+// Open opens the SQLite database at path and configures encryption using
+// stateKey (pass "" to disable encryption).
+func Open(path, stateKey string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("db path is required")
 	}
@@ -183,7 +185,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{db: newInstrumentedDB(db)}
-	if err := store.configureCryptoFromEnv(); err != nil {
+	if err := store.ConfigureCrypto(stateKey); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -194,11 +196,12 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
-func OpenInAssets(assetsDir string) (*Store, error) {
+// OpenInAssets opens the SQLite database in the given assets directory.
+func OpenInAssets(assetsDir, stateKey string) (*Store, error) {
 	if assetsDir == "" {
 		return nil, fmt.Errorf("assets directory is required")
 	}
-	return Open(filepath.Join(assetsDir, "state.db"))
+	return Open(filepath.Join(assetsDir, "state.db"), stateKey)
 }
 
 func (s *Store) Close() error {
@@ -1770,8 +1773,10 @@ func (s *Store) DecryptString(ciphertext string) (string, error) {
 	return string(plain), nil
 }
 
-func (s *Store) configureCryptoFromEnv() error {
-	raw := strings.TrimSpace(os.Getenv("AGENT_STATE_KEY"))
+// ConfigureCrypto sets up AES-256-GCM encryption for secrets.
+// Pass an empty key to disable encryption.
+func (s *Store) ConfigureCrypto(stateKey string) error {
+	raw := strings.TrimSpace(stateKey)
 	if raw == "" {
 		s.aead = nil
 		return nil

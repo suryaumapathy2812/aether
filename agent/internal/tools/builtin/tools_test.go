@@ -127,7 +127,7 @@ func TestManagementTools(t *testing.T) {
 func openStore(t *testing.T) *db.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := db.Open(path)
+	s, err := db.Open(path, "")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

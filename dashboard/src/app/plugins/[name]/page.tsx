@@ -107,30 +107,10 @@ export default function PluginDetailPage() {
 
   function getOAuthSetupFields() {
     if (!plugin || plugin.auth_type !== "oauth2") return [];
-    const editable = getEditableConfigFields();
-    if (editable.length > 0) return editable;
-    const providerName =
-      plugin.auth_provider === "google"
-        ? "Google"
-        : plugin.auth_provider === "spotify"
-          ? "Spotify"
-          : "OAuth";
-    return [
-      {
-        key: "client_id",
-        label: `${providerName} Client ID`,
-        type: "text",
-        required: true,
-        description: "",
-      },
-      {
-        key: "client_secret",
-        label: `${providerName} Client Secret`,
-        type: "password",
-        required: true,
-        description: "",
-      },
-    ];
+    // When the backend has env-backed credentials (e.g. GOOGLE_CLIENT_ID),
+    // it filters client_id/client_secret out of config_fields.
+    // In that case, no setup fields are needed — just show the Connect button.
+    return getEditableConfigFields();
   }
 
   function hasOAuthSetupValues(): boolean {

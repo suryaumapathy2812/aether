@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -121,4 +122,69 @@ func stripWrappingQuotes(v string) string {
 		}
 	}
 	return v
+}
+
+// Validate checks that all required environment variables are present.
+// Returns an error listing every missing variable, or nil if all are set.
+func (c Config) Validate() error {
+	var missing []string
+
+	// DATABASE_URL is already fatal in Load(), but include for completeness.
+	if c.DatabaseURL == "" {
+		missing = append(missing, "DATABASE_URL")
+	}
+
+	// LLM credentials — required for agents to function.
+	if c.AgentOpenAIAPIKey == "" {
+		missing = append(missing, "OPENAI_API_KEY")
+	}
+
+	// Agent secret — required for orchestrator ↔ agent auth.
+	if c.AgentSecret == "" {
+		missing = append(missing, "AGENT_SECRET")
+	}
+
+	// S3/MinIO — required (media is a core feature).
+	if c.S3Bucket == "" && c.S3BucketTemplate == "" {
+		missing = append(missing, "S3_BUCKET or S3_BUCKET_TEMPLATE (at least one)")
+	}
+	if c.S3Bucket != "" || c.S3BucketTemplate != "" {
+		if c.S3AccessKeyID == "" {
+			missing = append(missing, "S3_ACCESS_KEY_ID")
+		}
+		if c.S3SecretAccessKey == "" {
+			missing = append(missing, "S3_SECRET_ACCESS_KEY")
+		}
+		if c.S3Endpoint == "" {
+			missing = append(missing, "S3_ENDPOINT")
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("missing required environment variables:\n  - %s", strings.Join(missing, "\n  - "))
+}
+
+// CollectOAuthEnvVars returns all environment variables matching
+// *_CLIENT_ID or *_CLIENT_SECRET as "KEY=VALUE" strings.
+// These are forwarded to agent containers so OAuth plugins can
+// resolve credentials from env vars without user-supplied config.
+func CollectOAuthEnvVars() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		eqIdx := strings.IndexByte(kv, '=')
+		if eqIdx <= 0 {
+			continue
+		}
+		key := kv[:eqIdx]
+		val := stripWrappingQuotes(strings.TrimSpace(kv[eqIdx+1:]))
+		if val == "" {
+			continue
+		}
+		if strings.HasSuffix(key, "_CLIENT_ID") || strings.HasSuffix(key, "_CLIENT_SECRET") {
+			out = append(out, key+"="+val)
+		}
+	}
+	return out
 }

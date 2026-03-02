@@ -163,7 +163,7 @@ func mustStore(cfg config) *db.Store {
 	if assetsDir == "" {
 		assetsDir = defaultAssetsDir()
 	}
-	store, err := db.OpenInAssets(assetsDir)
+	store, err := db.OpenInAssets(assetsDir, "")
 	if err != nil {
 		exitWith(err.Error())
 	}

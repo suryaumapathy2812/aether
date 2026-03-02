@@ -3,10 +3,10 @@ package ws
 import (
 	"encoding/json"
 	"log"
-	"os"
 	"strings"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
 )
 
 // PushSender sends Web Push notifications using VAPID.
@@ -16,12 +16,12 @@ type PushSender struct {
 	vapidSubject    string // mailto: or https: URL
 }
 
-// NewPushSenderFromEnv creates a PushSender from environment variables.
+// NewPushSender creates a PushSender from centralized config.
 // Returns nil if VAPID keys are not configured.
-func NewPushSenderFromEnv() *PushSender {
-	pub := strings.TrimSpace(os.Getenv("VAPID_PUBLIC_KEY"))
-	priv := strings.TrimSpace(os.Getenv("VAPID_PRIVATE_KEY"))
-	subject := strings.TrimSpace(os.Getenv("VAPID_SUBJECT"))
+func NewPushSender(cfg config.VAPIDConfig) *PushSender {
+	pub := strings.TrimSpace(cfg.PublicKey)
+	priv := strings.TrimSpace(cfg.PrivateKey)
+	subject := strings.TrimSpace(cfg.Subject)
 	if pub == "" || priv == "" {
 		log.Printf("ws push: VAPID keys not configured — web push disabled")
 		return nil

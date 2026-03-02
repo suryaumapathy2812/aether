@@ -15,7 +15,7 @@ import (
 
 func TestTaskEndpoints(t *testing.T) {
 	ctx := context.Background()
-	store, err := db.Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := db.Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

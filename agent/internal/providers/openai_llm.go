@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
 )
 
 type OpenAILLMProvider struct {
@@ -22,31 +23,23 @@ type OpenAILLMProvider struct {
 	provider string
 }
 
-func NewOpenAILLMProviderFromEnv() *OpenAILLMProvider {
-	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("AETHER_LLM_API_KEY"))
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
-	if baseURL == "" {
-		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AETHER_LLM_BASE_URL")), "/")
-	}
+// NewOpenAILLMProvider creates a provider from centralized config.
+func NewOpenAILLMProvider(cfg config.LLMConfig) *OpenAILLMProvider {
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
-	model := strings.TrimSpace(os.Getenv("OPENAI_MODEL"))
-	if model == "" {
-		model = strings.TrimSpace(os.Getenv("AETHER_LLM_MODEL"))
-	}
+	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
 
 	headers := map[string]string{}
-	if site := strings.TrimSpace(os.Getenv("OPENROUTER_SITE_URL")); site != "" {
+	if site := strings.TrimSpace(cfg.OpenRouterSiteURL); site != "" {
 		headers["HTTP-Referer"] = site
 	}
-	if title := strings.TrimSpace(os.Getenv("OPENROUTER_APP_NAME")); title != "" {
+	if title := strings.TrimSpace(cfg.OpenRouterAppName); title != "" {
 		headers["X-Title"] = title
 	}
 

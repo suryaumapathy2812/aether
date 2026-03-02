@@ -24,6 +24,9 @@ func main() {
 	observability.Init("orchestrator")
 	http.DefaultTransport = observability.WrapTransport(http.DefaultTransport)
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed:\n%v", err)
+	}
 
 	pgxCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
@@ -72,6 +75,7 @@ func main() {
 			S3GetTTL:      cfg.S3GetURLTTLSeconds,
 			UpdateRepo:    cfg.AgentUpdateRepo,
 			UpdateToken:   cfg.AgentUpdateToken,
+			OAuthEnvVars:  config.CollectOAuthEnvVars(),
 		})
 		if err != nil {
 			log.Printf("agent manager disabled: %v", err)

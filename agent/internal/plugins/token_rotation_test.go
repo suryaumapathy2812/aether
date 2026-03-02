@@ -13,7 +13,6 @@ import (
 )
 
 func TestOAuthTokenRotatorUpdatesConfig(t *testing.T) {
-	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
 	store := openTokenStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -65,7 +64,7 @@ func TestOAuthTokenRotatorUpdatesConfig(t *testing.T) {
 func openTokenStore(t *testing.T) *db.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	store, err := db.Open(path)
+	store, err := db.Open(path, "12345678901234567890123456789012")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

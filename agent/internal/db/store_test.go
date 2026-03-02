@@ -109,9 +109,9 @@ func TestScopeMissingPlugin(t *testing.T) {
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
 	key := []byte("12345678901234567890123456789012")
-	t.Setenv("AGENT_STATE_KEY", base64.StdEncoding.EncodeToString(key))
+	stateKey := base64.StdEncoding.EncodeToString(key)
 
-	store := openTestStore(t)
+	store := openTestStoreWithKey(t, stateKey)
 	defer store.Close()
 
 	enc, err := store.EncryptString("super-secret-token")
@@ -144,8 +144,8 @@ func TestEncryptUnavailableWithoutKey(t *testing.T) {
 
 func TestDecryptInvalidCiphertext(t *testing.T) {
 	key := []byte("12345678901234567890123456789012")
-	t.Setenv("AGENT_STATE_KEY", base64.StdEncoding.EncodeToString(key))
-	store := openTestStore(t)
+	stateKey := base64.StdEncoding.EncodeToString(key)
+	store := openTestStoreWithKey(t, stateKey)
 	defer store.Close()
 
 	_, err := store.DecryptString("not-encrypted")
@@ -156,8 +156,13 @@ func TestDecryptInvalidCiphertext(t *testing.T) {
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
+	return openTestStoreWithKey(t, "")
+}
+
+func openTestStoreWithKey(t *testing.T, stateKey string) *Store {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	store, err := Open(path)
+	store, err := Open(path, stateKey)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

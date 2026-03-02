@@ -77,7 +77,7 @@ func bootstrap(c cfg) (*tools.Orchestrator, *tools.Registry, *db.Store, func()) 
 	if assets == "" {
 		assets = defaultAssetsDir()
 	}
-	store, err := db.OpenInAssets(assets)
+	store, err := db.OpenInAssets(assets, "")
 	must(err)
 
 	skillsManager := skills.NewManager(skills.ManagerOptions{

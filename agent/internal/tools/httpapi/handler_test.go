@@ -64,7 +64,7 @@ func TestPluginsStatusEndpoint(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	store, err := db.Open(filepath.Join(assets, "state.db"))
+	store, err := db.Open(filepath.Join(assets, "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestPluginConfigMasksSecrets(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	store, err := db.Open(filepath.Join(assets, "state.db"))
+	store, err := db.Open(filepath.Join(assets, "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -160,8 +160,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
-	store, err := db.Open(filepath.Join(assets, "state.db"))
+	store, err := db.Open(filepath.Join(assets, "state.db"), "12345678901234567890123456789012")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -217,10 +216,9 @@ func TestPluginOAuthStartUsesProviderEnvCredentials(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
 	t.Setenv("SPOTIFY_CLIENT_ID", "env-client-id")
 	t.Setenv("SPOTIFY_CLIENT_SECRET", "env-client-secret")
-	store, err := db.Open(filepath.Join(assets, "state.db"))
+	store, err := db.Open(filepath.Join(assets, "state.db"), "12345678901234567890123456789012")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

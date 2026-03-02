@@ -43,7 +43,7 @@ func TestReminderCronHandler(t *testing.T) {
 func openReminderStore(t *testing.T) *db.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	store, err := db.Open(path)
+	store, err := db.Open(path, "")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

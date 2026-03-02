@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
@@ -21,18 +21,13 @@ import (
 )
 
 type Handler struct {
-	core    *llm.Core
-	builder *llm.ContextBuilder
-	memory  *memory.Service
-	media   *media.Service
+	core        *llm.Core
+	builder     *llm.ContextBuilder
+	memory      *memory.Service
+	media       *media.Service
+	model       string
+	mediaLimits agentcfg.MediaLimitsConfig
 }
-
-const (
-	defaultMaxImageBytes      = 5 * 1024 * 1024
-	defaultMaxAudioBytes      = 12 * 1024 * 1024
-	defaultMaxTotalMediaBytes = 20 * 1024 * 1024
-	defaultMaxMediaParts      = 4
-)
 
 var (
 	allowedImageMIMEs = map[string]bool{
@@ -57,14 +52,23 @@ var (
 )
 
 type Options struct {
-	Core    *llm.Core
-	Builder *llm.ContextBuilder
-	Memory  *memory.Service
-	Media   *media.Service
+	Core        *llm.Core
+	Builder     *llm.ContextBuilder
+	Memory      *memory.Service
+	Media       *media.Service
+	Model       string
+	MediaLimits agentcfg.MediaLimitsConfig
 }
 
 func New(opts Options) *Handler {
-	return &Handler{core: opts.Core, builder: opts.Builder, memory: opts.Memory, media: opts.Media}
+	return &Handler{
+		core:        opts.Core,
+		builder:     opts.Builder,
+		memory:      opts.Memory,
+		media:       opts.Media,
+		model:       opts.Model,
+		mediaLimits: opts.MediaLimits,
+	}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -79,11 +83,10 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	model := firstNonEmpty(strings.TrimSpace(os.Getenv("OPENAI_MODEL")), strings.TrimSpace(os.Getenv("AETHER_LLM_MODEL")), "gpt-4o-mini")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
 		"data": []map[string]any{{
-			"id":       model,
+			"id":       h.model,
 			"object":   "model",
 			"created":  0,
 			"owned_by": "aether",
@@ -116,7 +119,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "messages is required")
 		return
 	}
-	if err := validateMediaParts(req.Messages); err != nil {
+	if err := h.validateMediaParts(req.Messages); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -148,7 +151,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	completionID := "chatcmpl-" + uuid.NewString()[:12]
 	created := time.Now().Unix()
-	model := firstNonEmpty(policyString(policy, "model"), strings.TrimSpace(os.Getenv("OPENAI_MODEL")), strings.TrimSpace(os.Getenv("AETHER_LLM_MODEL")), "gpt-4o-mini")
+	model := firstNonEmpty(policyString(policy, "model"), h.model)
 
 	// Inject user ID into context so tools (e.g. delegate_task) can use the
 	// real authenticated user instead of relying on LLM-generated arguments.
@@ -338,7 +341,7 @@ func (h *Handler) handleMediaUploadInit(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if err := validateUploadIntent(req.Kind, req.ContentType, req.Size); err != nil {
+	if err := h.validateUploadIntent(req.Kind, req.ContentType, req.Size); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -411,7 +414,7 @@ func (h *Handler) handleMediaUploadComplete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	ct := firstNonEmpty(strings.TrimSpace(req.ContentType), strings.TrimSpace(info.ContentType), mimeFromPath(req.ObjectKey))
-	if err := validateUploadIntent(req.Kind, ct, info.Size); err != nil {
+	if err := h.validateUploadIntent(req.Kind, ct, info.Size); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -487,7 +490,7 @@ func (h *Handler) resolveMediaRefs(ctx context.Context, userID string, messages 
 				if err != nil {
 					return nil, fmt.Errorf("messages[%d].content[%d]: failed to fetch image", i, j)
 				}
-				if len(bytes) > envInt("AETHER_MAX_IMAGE_BYTES", defaultMaxImageBytes) {
+				if len(bytes) > h.mediaLimits.MaxImageBytes {
 					return nil, fmt.Errorf("messages[%d].content[%d]: image exceeds size limit", i, j)
 				}
 				mime := strings.TrimSpace(stringValue(mediaObj["mime"]))
@@ -518,7 +521,7 @@ func (h *Handler) resolveMediaRefs(ctx context.Context, userID string, messages 
 				if err != nil {
 					return nil, fmt.Errorf("messages[%d].content[%d]: failed to fetch audio", i, j)
 				}
-				if len(bytes) > envInt("AETHER_MAX_AUDIO_BYTES", defaultMaxAudioBytes) {
+				if len(bytes) > h.mediaLimits.MaxAudioBytes {
 					return nil, fmt.Errorf("messages[%d].content[%d]: audio exceeds size limit", i, j)
 				}
 				format := strings.TrimSpace(stringValue(mediaObj["format"]))
@@ -565,11 +568,11 @@ func policyString(policy map[string]any, key string) string {
 	return strings.TrimSpace(v)
 }
 
-func validateMediaParts(messages []map[string]any) error {
-	maxImageBytes := envInt("AETHER_MAX_IMAGE_BYTES", defaultMaxImageBytes)
-	maxAudioBytes := envInt("AETHER_MAX_AUDIO_BYTES", defaultMaxAudioBytes)
-	maxTotalMediaBytes := envInt("AETHER_MAX_TOTAL_MEDIA_BYTES", defaultMaxTotalMediaBytes)
-	maxMediaParts := envInt("AETHER_MAX_MEDIA_PARTS", defaultMaxMediaParts)
+func (h *Handler) validateMediaParts(messages []map[string]any) error {
+	maxImageBytes := h.mediaLimits.MaxImageBytes
+	maxAudioBytes := h.mediaLimits.MaxAudioBytes
+	maxTotalMediaBytes := h.mediaLimits.MaxTotalMediaBytes
+	maxMediaParts := h.mediaLimits.MaxMediaParts
 
 	for i, msg := range messages {
 		totalMediaBytes := 0
@@ -723,18 +726,6 @@ func numberValue(v any) float64 {
 	}
 }
 
-func envInt(name string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v <= 0 {
-		return fallback
-	}
-	return v
-}
-
 func newValidationError(messageIndex, partIndex int, reason string) error {
 	return &validationError{messageIndex: messageIndex, partIndex: partIndex, reason: reason}
 }
@@ -749,7 +740,7 @@ func (e *validationError) Error() string {
 	return "messages[" + strconv.Itoa(e.messageIndex) + "].content[" + strconv.Itoa(e.partIndex) + "]: " + e.reason
 }
 
-func validateUploadIntent(kind, contentType string, size int64) error {
+func (h *Handler) validateUploadIntent(kind, contentType string, size int64) error {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	if kind != "image" && kind != "audio" {
@@ -762,7 +753,7 @@ func validateUploadIntent(kind, contentType string, size int64) error {
 		if !allowedImageMIMEs[contentType] {
 			return fmt.Errorf("unsupported image mime type")
 		}
-		if size > int64(envInt("AETHER_MAX_IMAGE_BYTES", defaultMaxImageBytes)) {
+		if size > int64(h.mediaLimits.MaxImageBytes) {
 			return fmt.Errorf("image exceeds size limit")
 		}
 		return nil
@@ -770,7 +761,7 @@ func validateUploadIntent(kind, contentType string, size int64) error {
 	if !strings.HasPrefix(contentType, "audio/") {
 		return fmt.Errorf("unsupported audio mime type")
 	}
-	if size > int64(envInt("AETHER_MAX_AUDIO_BYTES", defaultMaxAudioBytes)) {
+	if size > int64(h.mediaLimits.MaxAudioBytes) {
 		return fmt.Errorf("audio exceeds size limit")
 	}
 	return nil

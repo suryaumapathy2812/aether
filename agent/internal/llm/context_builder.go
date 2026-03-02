@@ -21,25 +21,39 @@ type ContextBuilder struct {
 	plugins      *plugins.Manager
 	store        *db.Store
 	systemPrompt string
+	promptEnv    string // raw AGENT_SYSTEM_PROMPT value
+	promptFile   string // raw AGENT_PROMPT_FILE value
+	assetsDir    string // raw AGENT_ASSETS_DIR value
 	mu           sync.RWMutex
 }
 
-func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, pluginsManager *plugins.Manager, store *db.Store) *ContextBuilder {
-	basePrompt := strings.TrimSpace(os.Getenv("AGENT_SYSTEM_PROMPT"))
+// ContextBuilderConfig holds config values needed by ContextBuilder.
+type ContextBuilderConfig struct {
+	SystemPrompt string
+	PromptFile   string
+	AssetsDir    string
+}
+
+func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, pluginsManager *plugins.Manager, store *db.Store, cfg ContextBuilderConfig) *ContextBuilder {
+	b := &ContextBuilder{
+		registry:   registry,
+		skills:     skillsManager,
+		plugins:    pluginsManager,
+		store:      store,
+		promptEnv:  strings.TrimSpace(cfg.SystemPrompt),
+		promptFile: strings.TrimSpace(cfg.PromptFile),
+		assetsDir:  strings.TrimSpace(cfg.AssetsDir),
+	}
+	basePrompt := b.promptEnv
 	if basePrompt == "" {
-		basePrompt = strings.TrimSpace(loadPromptFromFile())
+		basePrompt = strings.TrimSpace(b.loadPromptFromFile())
 	}
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
 	basePrompt += "\n\nExecution policy:\n- For reminders or alarms, use schedule_reminder exactly once and then respond with confirmation.\n- For long multi-step work, or when user explicitly asks to test/try delegation, use delegate_task and return the task_id.\n- Avoid repeatedly calling the same tool with similar arguments; if a tool fails, explain the failure and stop."
-	return &ContextBuilder{
-		registry:     registry,
-		skills:       skillsManager,
-		plugins:      pluginsManager,
-		store:        store,
-		systemPrompt: basePrompt,
-	}
+	b.systemPrompt = basePrompt
+	return b
 }
 
 func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any, userID, sessionID string) LLMRequestEnvelope {
@@ -127,9 +141,9 @@ func (b *ContextBuilder) ReloadSystemPrompt() string {
 	if b == nil {
 		return ""
 	}
-	basePrompt := strings.TrimSpace(os.Getenv("AGENT_SYSTEM_PROMPT"))
+	basePrompt := b.promptEnv
 	if basePrompt == "" {
-		basePrompt = strings.TrimSpace(loadPromptFromFile())
+		basePrompt = strings.TrimSpace(b.loadPromptFromFile())
 	}
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
@@ -217,12 +231,11 @@ func normalizedUserID(v string) string {
 	return v
 }
 
-func loadPromptFromFile() string {
-	promptPath := strings.TrimSpace(os.Getenv("AGENT_PROMPT_FILE"))
+func (cb *ContextBuilder) loadPromptFromFile() string {
+	promptPath := cb.promptFile
 	if promptPath == "" {
-		assetsDir := strings.TrimSpace(os.Getenv("AGENT_ASSETS_DIR"))
-		if assetsDir != "" {
-			promptPath = filepath.Join(assetsDir, "PROMPT.md")
+		if cb.assetsDir != "" {
+			promptPath = filepath.Join(cb.assetsDir, "PROMPT.md")
 		} else {
 			wd, err := os.Getwd()
 			if err == nil {

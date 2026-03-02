@@ -63,9 +63,8 @@ func TestPluginCronRotateHandler(t *testing.T) {
 
 func openPluginCronStore(t *testing.T) *db.Store {
 	t.Helper()
-	t.Setenv("AGENT_STATE_KEY", "12345678901234567890123456789012")
 	path := filepath.Join(t.TempDir(), "state.db")
-	store, err := db.Open(path)
+	store, err := db.Open(path, "12345678901234567890123456789012")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

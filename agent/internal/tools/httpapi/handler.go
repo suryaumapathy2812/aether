@@ -487,6 +487,7 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 		}
 		rec := byName[p.Name]
 		authType, authProvider, fields := pluginAuthDetails(manifest)
+		fields = filterEnvBackedOAuthFields(fields, authProvider)
 		requiredKeys := []string{}
 		for _, f := range fields {
 			required, _ := f["required"].(bool)
@@ -797,14 +798,40 @@ func oauthProviderConfig(provider string) oauthProvider {
 }
 
 func oauthProviderEnvCredentials(provider string) (string, string) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	// Explicit mappings for known providers.
+	switch p {
 	case "google":
 		return strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")), strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
 	case "spotify":
 		return strings.TrimSpace(os.Getenv("SPOTIFY_CLIENT_ID")), strings.TrimSpace(os.Getenv("SPOTIFY_CLIENT_SECRET"))
-	default:
-		return "", ""
 	}
+	// Generic fallback: check {PROVIDER}_CLIENT_ID / {PROVIDER}_CLIENT_SECRET.
+	// This allows new OAuth2 plugins to use env vars without code changes —
+	// just set e.g. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env.
+	if p != "" {
+		prefix := strings.ToUpper(strings.ReplaceAll(p, "-", "_"))
+		return strings.TrimSpace(os.Getenv(prefix + "_CLIENT_ID")),
+			strings.TrimSpace(os.Getenv(prefix + "_CLIENT_SECRET"))
+	}
+	return "", ""
+}
+
+func filterEnvBackedOAuthFields(fields []map[string]any, provider string) []map[string]any {
+	envClientID, envClientSecret := oauthProviderEnvCredentials(provider)
+	if strings.TrimSpace(envClientID) == "" || strings.TrimSpace(envClientSecret) == "" {
+		return fields
+	}
+	filtered := make([]map[string]any, 0, len(fields))
+	for _, field := range fields {
+		key, _ := field["key"].(string)
+		key = strings.TrimSpace(key)
+		if key == "client_id" || key == "client_secret" {
+			continue
+		}
+		filtered = append(filtered, field)
+	}
+	return filtered
 }
 
 func oauthScopes(manifest plugins.PluginManifest) []string {

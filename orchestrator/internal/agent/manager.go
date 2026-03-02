@@ -57,6 +57,11 @@ type ManagerConfig struct {
 	S3GetTTL      string
 	UpdateRepo    string
 	UpdateToken   string
+
+	// OAuthEnvVars holds "KEY=VALUE" pairs for OAuth provider credentials
+	// (e.g. GOOGLE_CLIENT_ID=…, SPOTIFY_CLIENT_SECRET=…) that are forwarded
+	// to agent containers so plugins can use env-backed credentials.
+	OAuthEnvVars []string
 }
 
 type Manager struct {
@@ -314,6 +319,11 @@ func (m *Manager) ensureImage(ctx context.Context, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("agent image is required")
 	}
+	// If the image already exists locally, skip pulling from the registry.
+	// This avoids overwriting locally-built dev images with stale registry versions.
+	if _, _, err := m.docker.ImageInspectWithRaw(ctx, name); err == nil {
+		return nil
+	}
 	rc, err := m.docker.ImagePull(ctx, name, image.PullOptions{})
 	if err != nil {
 		return err
@@ -401,6 +411,12 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 	}
 	if strings.TrimSpace(m.cfg.UpdateToken) != "" {
 		env = append(env, "AGENT_UPDATE_TOKEN="+strings.TrimSpace(m.cfg.UpdateToken))
+	}
+
+	// Forward OAuth provider credentials (*_CLIENT_ID / *_CLIENT_SECRET) to the agent
+	// so plugins can use env-backed credentials without manual user configuration.
+	for _, kv := range m.cfg.OAuthEnvVars {
+		env = append(env, kv)
 	}
 
 	resp, err := m.docker.ContainerCreate(

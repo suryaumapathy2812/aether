@@ -9,7 +9,7 @@ import (
 
 func TestAgentTaskLifecycle(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestAgentTaskLifecycle(t *testing.T) {
 
 func TestAgentTaskCancelRequest(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestAgentTaskCancelRequest(t *testing.T) {
 
 func TestAgentTaskWaitingAndResume(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAgentTaskWaitingAndResume(t *testing.T) {
 
 func TestAgentTaskReject(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"), "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

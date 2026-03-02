@@ -6,19 +6,18 @@ import (
 	"fmt"
 	"io"
 	"mime"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
+	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 )
 
 type Service struct {
@@ -26,10 +25,12 @@ type Service struct {
 	bucketTemplate string
 	client         *s3.Client
 	presign        *s3.PresignClient
+	publicPresign  *s3.PresignClient // signs URLs using publicBase so browsers can reach them
 	putTTL         time.Duration
 	getTTL         time.Duration
 	forcePath      bool
 	publicBase     string
+	endpoint       string
 	defaultCDN     bool
 }
 
@@ -47,57 +48,86 @@ type ObjectInfo struct {
 	ETag        string
 }
 
-func NewFromEnv(ctx context.Context) (*Service, error) {
-	bucket := strings.TrimSpace(os.Getenv("S3_BUCKET"))
-	bucketTemplate := strings.TrimSpace(os.Getenv("S3_BUCKET_TEMPLATE"))
+// New creates a media Service from centralized config.
+// Returns (nil, nil) if no bucket is configured.
+func New(ctx context.Context, cfg agentcfg.S3Config) (*Service, error) {
+	bucket := strings.TrimSpace(cfg.Bucket)
+	bucketTemplate := strings.TrimSpace(cfg.BucketTemplate)
 	if bucket == "" && bucketTemplate == "" {
 		return nil, nil
 	}
-	region := strings.TrimSpace(os.Getenv("S3_REGION"))
+	region := strings.TrimSpace(cfg.Region)
 	if region == "" {
 		region = "us-east-1"
 	}
 
-	accessKey := strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID"))
-	secretKey := strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY"))
-	endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
-	publicBase := strings.TrimRight(strings.TrimSpace(os.Getenv("S3_PUBLIC_BASE_URL")), "/")
+	accessKey := strings.TrimSpace(cfg.AccessKeyID)
+	secretKey := strings.TrimSpace(cfg.SecretAccessKey)
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	publicBase := strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	forcePath := cfg.ForcePathStyle
+	putTTL := cfg.PutURLTTL
+	getTTL := cfg.GetURLTTL
 
-	putTTL := durationFromEnv("S3_PUT_URL_TTL_SECONDS", 300*time.Second)
-	getTTL := durationFromEnv("S3_GET_URL_TTL_SECONDS", 900*time.Second)
-	forcePath := strings.EqualFold(strings.TrimSpace(os.Getenv("S3_FORCE_PATH_STYLE")), "true")
-
-	loadOpts := []func(*config.LoadOptions) error{config.WithRegion(region)}
+	loadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
 	if accessKey != "" && secretKey != "" {
-		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")))
+		loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")))
 	}
 	if endpoint != "" {
 		resolver := s3.EndpointResolverFromURL(endpoint)
-		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...any) (aws.Endpoint, error) {
+		loadOpts = append(loadOpts, awsconfig.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...any) (aws.Endpoint, error) {
 			if service == s3.ServiceID {
 				return resolver.ResolveEndpoint(region, s3.EndpointResolverOptions{})
 			}
 			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
 		})))
 	}
-	cfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, err
 	}
-	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = forcePath
 	})
 	presign := s3.NewPresignClient(client)
+
+	// When a public base URL is set and differs from the internal endpoint,
+	// create a second presign client whose endpoint is the public URL.  This
+	// ensures the Host header baked into the AWS v4 signature matches the host
+	// the browser will actually send the request to.
+	var publicPresign *s3.PresignClient
+	if publicBase != "" && endpoint != "" && publicBase != strings.TrimRight(endpoint, "/") {
+		pubLoadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+		if accessKey != "" && secretKey != "" {
+			pubLoadOpts = append(pubLoadOpts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")))
+		}
+		pubResolver := s3.EndpointResolverFromURL(publicBase)
+		pubLoadOpts = append(pubLoadOpts, awsconfig.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, reg string, options ...any) (aws.Endpoint, error) {
+			if service == s3.ServiceID {
+				return pubResolver.ResolveEndpoint(reg, s3.EndpointResolverOptions{})
+			}
+			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
+		})))
+		pubCfg, pubErr := awsconfig.LoadDefaultConfig(ctx, pubLoadOpts...)
+		if pubErr == nil {
+			pubClient := s3.NewFromConfig(pubCfg, func(o *s3.Options) {
+				o.UsePathStyle = forcePath
+			})
+			publicPresign = s3.NewPresignClient(pubClient)
+		}
+	}
 
 	return &Service{
 		bucket:         bucket,
 		bucketTemplate: bucketTemplate,
 		client:         client,
 		presign:        presign,
+		publicPresign:  publicPresign,
 		putTTL:         putTTL,
 		getTTL:         getTTL,
 		forcePath:      forcePath,
 		publicBase:     publicBase,
+		endpoint:       strings.TrimRight(endpoint, "/"),
 		defaultCDN:     publicBase != "",
 	}, nil
 }
@@ -161,7 +191,14 @@ func (s *Service) PresignUpload(ctx context.Context, bucket, objectKey, contentT
 	if strings.TrimSpace(contentType) != "" {
 		in.ContentType = aws.String(contentType)
 	}
-	res, err := s.presign.PresignPutObject(ctx, in, s3.WithPresignExpires(s.putTTL))
+	// Use the public presign client when available so the signature's Host
+	// header matches the browser-accessible URL (e.g. localhost:9000 instead
+	// of the Docker-internal minio:9000).
+	signer := s.presign
+	if s.publicPresign != nil {
+		signer = s.publicPresign
+	}
+	res, err := signer.PresignPutObject(ctx, in, s3.WithPresignExpires(s.putTTL))
 	if err != nil {
 		return PutURL{}, err
 	}
@@ -189,19 +226,48 @@ func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
 	}
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
 	if err == nil {
+		// Bucket exists — ensure the public-read policy is applied (idempotent).
+		_ = s.ensurePublicReadPolicy(ctx, bucket)
 		return nil
 	}
 	_, err = s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
-	if err == nil {
-		return nil
-	}
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		code := strings.TrimSpace(apiErr.ErrorCode())
-		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
-			return nil
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			code := strings.TrimSpace(apiErr.ErrorCode())
+			if code != "BucketAlreadyOwnedByYou" && code != "BucketAlreadyExists" {
+				return err
+			}
+		} else {
+			return err
 		}
 	}
+	// Apply public-read policy so browsers can fetch objects directly via
+	// the public base URL without presigned query parameters.
+	_ = s.ensurePublicReadPolicy(ctx, bucket)
+	return nil
+}
+
+// ensurePublicReadPolicy sets an anonymous read-only policy on the bucket.
+// This allows browsers to GET objects from the public base URL without
+// presigned credentials.  The policy is idempotent.
+func (s *Service) ensurePublicReadPolicy(ctx context.Context, bucket string) error {
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::%s/*"]
+    }
+  ]
+}`, bucket)
+	_, err := s.client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
+		Bucket: aws.String(bucket),
+		Policy: aws.String(policy),
+	})
 	return err
 }
 
@@ -231,7 +297,12 @@ func (s *Service) PresignGet(ctx context.Context, bucket, objectKey string) (str
 		return "", errors.New("object key is required")
 	}
 	bucket = strings.TrimSpace(bucket)
+	if s.defaultCDN && s.forcePath && bucket != "" {
+		// Path-style S3 (e.g. MinIO): public URL includes the bucket segment.
+		return s.publicBase + "/" + bucket + "/" + strings.TrimPrefix(objectKey, "/"), nil
+	}
 	if s.defaultCDN {
+		// Virtual-hosted or CDN: bucket is implied by the domain.
 		return s.publicBase + "/" + strings.TrimPrefix(objectKey, "/"), nil
 	}
 	res, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(objectKey)}, s3.WithPresignExpires(s.getTTL))
@@ -314,18 +385,6 @@ func normalizeBucketName(v string) string {
 		v = strings.Trim(v, "-.")
 	}
 	return v
-}
-
-func durationFromEnv(name string, fallback time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return time.Duration(n) * time.Second
 }
 
 func IsNotFound(err error) bool {
