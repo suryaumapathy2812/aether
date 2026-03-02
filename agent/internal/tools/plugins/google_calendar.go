@@ -118,6 +118,94 @@ func (t *RefreshGoogleCalendarTokenTool) Execute(ctx context.Context, call tools
 	return refreshOAuthAccessToken(ctx, call, "https://oauth2.googleapis.com/token", false)
 }
 
+type SetupCalendarWatchTool struct{}
+
+func (t *SetupCalendarWatchTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "setup_calendar_watch",
+		Description: "Set up Google Calendar push notifications via Google Pub/Sub.",
+		StatusText:  "Setting up Calendar watch...",
+		Parameters: []tools.Param{
+			{
+				Name:        "pubsub_topic",
+				Type:        "string",
+				Required:    false,
+				Description: "Google Cloud Pub/Sub topic name (projects/*/topics/*).",
+			},
+		},
+	}
+}
+
+func (t *SetupCalendarWatchTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	cfg, err := pluginConfig(ctx, call)
+	if err != nil {
+		return tools.Fail("Failed to get plugin config: "+err.Error(), nil)
+	}
+
+	token, err := requireToken(ctx, call, cfg)
+	if err != nil {
+		return tools.Fail("Google Calendar is not connected: "+err.Error(), nil)
+	}
+
+	topicName, _ := call.Args["pubsub_topic"].(string)
+	if topicName == "" {
+		topicName = cfg["pubsub_topic"]
+	}
+	if topicName == "" {
+		topicName = cfg["calendar_topic"]
+	}
+	if topicName == "" {
+		return tools.Fail("Missing pubsub_topic. Provide as parameter or configure in plugin settings.", nil)
+	}
+
+	publicBaseURL := cfg["public_base_url"]
+	if publicBaseURL == "" {
+		publicBaseURL = cfg["base_url"]
+	}
+	if publicBaseURL == "" {
+		return tools.Fail("Missing public_base_url in plugin config.", nil)
+	}
+
+	webhookURL := strings.TrimRight(publicBaseURL, "/") + "/api/hooks/pubsub/google-calendar"
+
+	watchRequest := map[string]any{
+		"id":      "watch-" + time.Now().Format("20060102150405"),
+		"type":    "web_hook",
+		"address": webhookURL,
+	}
+
+	b, err := json.Marshal(watchRequest)
+	if err != nil {
+		return tools.Fail("Failed to create request: "+err.Error(), nil)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, calendarAPI+"/calendars/primary/events/watch", strings.NewReader(string(b)))
+	if err != nil {
+		return tools.Fail("Failed to create request: "+err.Error(), nil)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return tools.Fail("Calendar API request failed: "+err.Error(), nil)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return tools.Fail("Failed to setup Calendar watch: status "+fmt.Sprintf("%d", resp.StatusCode), nil)
+	}
+
+	cfg["pubsub_topic"] = topicName
+	cfg["calendar_topic"] = topicName
+	_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+
+	return tools.Success("Calendar watch set up. Webhook URL: "+webhookURL, map[string]any{
+		"webhook_url":  webhookURL,
+		"pubsub_topic": topicName,
+	})
+}
+
 func calendarRequest(ctx context.Context, call tools.Call, method, reqURL string, body any) (map[string]any, error) {
 	cfg, err := pluginConfig(ctx, call)
 	if err != nil {
@@ -166,4 +254,5 @@ var (
 	_ tools.Tool = (*CreateEventTool)(nil)
 	_ tools.Tool = (*GetEventTool)(nil)
 	_ tools.Tool = (*RefreshGoogleCalendarTokenTool)(nil)
+	_ tools.Tool = (*SetupCalendarWatchTool)(nil)
 )

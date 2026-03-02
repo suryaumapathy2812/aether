@@ -75,6 +75,7 @@ func classConstructors() map[string]func() tools.Tool {
 		"CreateEventTool":                func() tools.Tool { return &CreateEventTool{} },
 		"GetEventTool":                   func() tools.Tool { return &GetEventTool{} },
 		"RefreshGoogleCalendarTokenTool": func() tools.Tool { return &RefreshGoogleCalendarTokenTool{} },
+		"SetupCalendarWatchTool":         func() tools.Tool { return &SetupCalendarWatchTool{} },
 		"SearchContactsTool":             func() tools.Tool { return &SearchContactsTool{} },
 		"GetContactTool":                 func() tools.Tool { return &GetContactTool{} },
 		"RefreshGoogleContactsTokenTool": func() tools.Tool { return &RefreshGoogleContactsTokenTool{} },
