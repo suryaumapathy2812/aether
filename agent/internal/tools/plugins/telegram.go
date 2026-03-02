@@ -74,6 +74,65 @@ func (t *GetChatInfoTool) Execute(ctx context.Context, call tools.Call) tools.Re
 	return tools.Success(string(b), map[string]any{"chat_id": chatID})
 }
 
+type ResolveUsernameTool struct{}
+
+func (t *ResolveUsernameTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "telegram_resolve_username",
+		Description: "Resolve Telegram username to numeric chat ID. Use this when you have a @username and need the numeric chat_id for sending messages.",
+		StatusText:  "Resolving username...",
+		Parameters: []tools.Param{
+			{
+				Name:     "username",
+				Type:     "string",
+				Required: true,
+			},
+		},
+	}
+}
+
+func (t *ResolveUsernameTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	username, _ := call.Args["username"].(string)
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return tools.Fail("username is required", nil)
+	}
+	if !strings.HasPrefix(username, "@") {
+		username = "@" + username
+	}
+
+	obj, err := telegramRequest(ctx, call, "getChat", map[string]any{"chat_id": username})
+	if err != nil {
+		return tools.Fail("Failed to resolve username: "+err.Error(), nil)
+	}
+
+	result, ok := obj["result"].(map[string]any)
+	if !ok {
+		return tools.Fail("Invalid response from Telegram", nil)
+	}
+
+	chatID := ""
+	if id, ok := result["id"].(float64); ok {
+		chatID = fmt.Sprintf("%.0f", id)
+	} else if id, ok := result["id"].(string); ok {
+		chatID = id
+	}
+
+	if chatID == "" {
+		return tools.Fail("Could not extract chat_id from response", nil)
+	}
+
+	response := map[string]any{
+		"chat_id":    chatID,
+		"username":   result["username"],
+		"first_name": result["first_name"],
+		"last_name":  result["last_name"],
+		"type":       result["type"],
+	}
+	b, _ := json.Marshal(response)
+	return tools.Success(string(b), map[string]any{"username": username, "chat_id": chatID})
+}
+
 func (t *HandleTelegramEventTool) Definition() tools.Definition {
 	return tools.Definition{Name: "handle_telegram_event", Description: "Parse incoming Telegram webhook payload.", StatusText: "Processing Telegram event...", Parameters: []tools.Param{{Name: "payload", Type: "object", Required: true}}}
 }
@@ -189,6 +248,7 @@ var (
 	_ tools.Tool = (*SendMessageTool)(nil)
 	_ tools.Tool = (*SendPhotoTool)(nil)
 	_ tools.Tool = (*GetChatInfoTool)(nil)
+	_ tools.Tool = (*ResolveUsernameTool)(nil)
 	_ tools.Tool = (*HandleTelegramEventTool)(nil)
 	_ tools.Tool = (*SendTypingIndicatorTool)(nil)
 )

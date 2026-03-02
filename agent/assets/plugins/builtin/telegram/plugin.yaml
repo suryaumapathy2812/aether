@@ -31,5 +31,6 @@ tools:
   - class: SendMessageTool
   - class: SendPhotoTool
   - class: GetChatInfoTool
+  - class: ResolveUsernameTool
   - class: HandleTelegramEventTool
   - class: SendTypingIndicatorTool
