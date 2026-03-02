@@ -15,7 +15,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY prisma ./prisma
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN bun install --frozen-lockfile --ignore-scripts
 RUN bunx prisma generate
 RUN bun run build
 

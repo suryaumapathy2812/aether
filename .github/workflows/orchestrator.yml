@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-orchestrator-${{ github.sha }}
+          key: ${{ runner.os }}-buildx-orchestrator-${{ hashFiles('orchestrator/go.mod', 'orchestrator/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-buildx-orchestrator-
 
@@ -53,20 +53,12 @@ jobs:
           context: ./orchestrator
           file: ./orchestrator/Dockerfile
           push: true
-          platforms: |
-            linux/amd64
-            linux/arm64
+          platforms: linux/amd64
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/aether-orchestrator:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/aether-orchestrator:${{ steps.git.outputs.sha_short }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
-
-      - name: Move Docker cache
-        if: success()
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Redeploy Portainer Stack
         if: success()
