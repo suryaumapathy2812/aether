@@ -108,6 +108,68 @@ export function orchestratorWs(path: string, token?: string): WebSocket {
   return new WebSocket(`${protocol}//${host}${baseUrl}${path}${params}`);
 }
 
+// ── Devices ──
+
+export interface Device {
+  id: string;
+  name: string;
+  device_type: string;
+  plugin_name: string;
+  paired_at: string;
+  last_seen?: string;
+}
+
+export async function listDevices(): Promise<Device[]> {
+  const res = await orchestratorFetch("/api/devices");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error((err as { detail?: string }).detail || "Failed to list devices");
+  }
+  return res.json();
+}
+
+export interface RegisterTelegramRequest {
+  bot_token: string;
+  allowed_chat_ids?: string;
+  name?: string;
+}
+
+export interface RegisterTelegramResponse {
+  status: string;
+  device_id: string;
+  webhook_url: string;
+}
+
+export async function registerTelegramDevice(
+  botToken: string,
+  allowedChatIDs?: string,
+  name?: string
+): Promise<RegisterTelegramResponse> {
+  const res = await orchestratorFetch("/api/devices/telegram", {
+    method: "POST",
+    body: JSON.stringify({
+      bot_token: botToken,
+      allowed_chat_ids: allowedChatIDs,
+      name,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error((err as { detail?: string }).detail || "Failed to register Telegram device");
+  }
+  return res.json();
+}
+
+export async function deleteDevice(deviceId: string): Promise<void> {
+  const res = await orchestratorFetch(`/api/devices/${deviceId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error((err as { detail?: string }).detail || "Failed to delete device");
+  }
+}
+
 // ── Typed JSON helper built on fetchWithAuth ──
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
