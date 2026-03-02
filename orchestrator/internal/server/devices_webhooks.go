@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/agent"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/proxy"
@@ -370,4 +372,130 @@ func randomID(prefix string) (string, error) {
 
 func errorsIsNoRows(err error) bool {
 	return err == pgx.ErrNoRows
+}
+
+// Pub/Sub webhook handler for Google push notifications (Gmail, Calendar, etc.)
+// Route: /api/hooks/pubsub/{plugin_name}
+
+type pubsubMessage struct {
+	Data        string            `json:"data"`
+	Attributes  map[string]string `json:"attributes"`
+	MessageID   string            `json:"messageId"`
+	PublishTime string            `json:"publishTime"`
+}
+
+type pubsubPushMessage struct {
+	Message      pubsubMessage `json:"message"`
+	Subscription string        `json:"subscription"`
+}
+
+func (s *Server) handlePubsubWebhookIngress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/hooks/pubsub/"), "/")
+	pluginName := strings.TrimSpace(path)
+	if pluginName == "" {
+		writeError(w, http.StatusBadRequest, "plugin name is required")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 2*1024*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	var pushMsg pubsubPushMessage
+	if err := json.Unmarshal(body, &pushMsg); err != nil {
+		log.Printf("pubsub: invalid message format: %v", err)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		return
+	}
+
+	if pushMsg.Message.Data == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		return
+	}
+
+	notificationData, err := decodePubsubData(pushMsg.Message.Data)
+	if err != nil {
+		log.Printf("pubsub: failed to decode message data: %v", err)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		return
+	}
+
+	userID := notificationData["user_id"]
+	if userID == "" {
+		userID = lookupUserByPlugin(r.Context(), s.db, pluginName)
+	}
+	if userID == "" {
+		log.Printf("pubsub: no user found for plugin %s", pluginName)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		return
+	}
+
+	deviceID := lookupDeviceByPlugin(r.Context(), s.db, pluginName, userID)
+
+	target, err := s.resolveAgent(r.Context(), userID)
+	if err != nil {
+		log.Printf("pubsub: resolveAgent failed plugin=%s user=%s err=%v", pluginName, userID, err)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": false})
+		return
+	}
+
+	notificationBody, _ := json.Marshal(map[string]any{
+		"plugin":       pluginName,
+		"source":       "pubsub",
+		"device_id":    deviceID,
+		"notification": notificationData,
+		"attributes":   pushMsg.Message.Attributes,
+		"message_id":   pushMsg.Message.MessageID,
+	})
+
+	if err := s.forwardHookToAgent(r.Context(), target, pluginName, userID, deviceID, notificationBody, r.Header); err != nil {
+		log.Printf("pubsub: forward failed plugin=%s user=%s err=%v", pluginName, userID, err)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": false})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": true})
+}
+
+func decodePubsubData(encoded string) (map[string]string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode failed: %w", err)
+	}
+
+	var data map[string]string
+	if err := json.Unmarshal(decoded, &data); err != nil {
+		return nil, fmt.Errorf("json decode failed: %w", err)
+	}
+
+	return data, nil
+}
+
+func lookupUserByPlugin(ctx context.Context, db *pgxpool.Pool, pluginName string) string {
+	var userID string
+	err := db.QueryRow(ctx, `
+		SELECT user_id FROM plugins WHERE name = $1 AND enabled = true LIMIT 1
+	`, pluginName).Scan(&userID)
+	if err != nil {
+		return ""
+	}
+	return userID
+}
+
+func lookupDeviceByPlugin(ctx context.Context, db *pgxpool.Pool, pluginName, userID string) string {
+	var deviceID string
+	err := db.QueryRow(ctx, `
+		SELECT id FROM devices WHERE user_id = $1 AND plugin_name = $2 LIMIT 1
+	`, userID, pluginName).Scan(&deviceID)
+	if err != nil {
+		return ""
+	}
+	return deviceID
 }

@@ -79,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/telegram", s.requireIdentity(s.handleTelegramDevice))
 	mux.HandleFunc("/api/devices/", s.requireIdentity(s.handleDeviceByID))
 	mux.HandleFunc("/api/hooks/", s.handlePluginWebhookIngress)
+	mux.HandleFunc("/api/hooks/pubsub/", s.handlePubsubWebhookIngress)
 
 	mux.HandleFunc("/v1/", s.requireIdentity(s.handleV1Proxy))
 	mux.HandleFunc("/api/memory/", s.requireIdentity(s.handleMemoryProxy))

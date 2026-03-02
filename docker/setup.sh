@@ -79,6 +79,12 @@ echo -e "${GREEN}Step 3: OpenAI Configuration${NC}"
 echo -e "Enter your OpenAI API key (or press Enter to skip):"
 read -r OPENAI_API_KEY
 
+echo -e "Enter OpenAI Base URL (optional, press Enter for default https://api.openai.com/v1):"
+read -r OPENAI_BASE_URL
+if [ -z "$OPENAI_BASE_URL" ]; then
+    OPENAI_BASE_URL="https://api.openai.com/v1"
+fi
+
 # Get OAuth credentials
 echo ""
 echo -e "${GREEN}Step 4: OAuth Configuration (Optional)${NC}"
@@ -118,6 +124,7 @@ AGENT_SECRET=$AGENT_SECRET
 
 # === LLM ===
 OPENAI_API_KEY=$OPENAI_API_KEY
+OPENAI_BASE_URL=$OPENAI_BASE_URL
 
 # === S3/MinIO ===
 S3_ACCESS_KEY_ID=minioadmin
@@ -137,9 +144,9 @@ echo -e "${GREEN}Environment file created: .env${NC}"
 echo ""
 echo -e "${GREEN}Step 6: Installing Prerequisites${NC}"
 
-# Update package list
+# Update package list (ignore errors from third-party repos)
 echo "Updating package list..."
-apt update -qq
+apt update -qq 2>/dev/null || true
 
 # Install Node.js
 if ! command -v node &> /dev/null; then
@@ -207,6 +214,7 @@ DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@localhost:5432/aether
 BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
 AGENT_SECRET=$AGENT_SECRET
 OPENAI_API_KEY=$OPENAI_API_KEY
+OPENAI_BASE_URL=$OPENAI_BASE_URL
 S3_ACCESS_KEY_ID=minioadmin
 S3_SECRET_ACCESS_KEY=$S3_SECRET
 S3_ENDPOINT=http://localhost:9000

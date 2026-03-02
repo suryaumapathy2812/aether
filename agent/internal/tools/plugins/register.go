@@ -108,7 +108,5 @@ func classConstructors() map[string]func() tools.Tool {
 		"GetChatInfoTool":                func() tools.Tool { return &GetChatInfoTool{} },
 		"HandleTelegramEventTool":        func() tools.Tool { return &HandleTelegramEventTool{} },
 		"SendTypingIndicatorTool":        func() tools.Tool { return &SendTypingIndicatorTool{} },
-		"MakePhoneCallTool":              func() tools.Tool { return &MakePhoneCallTool{} },
-		"GetUserPhoneNumberTool":         func() tools.Tool { return &GetUserPhoneNumberTool{} },
 	}
 }

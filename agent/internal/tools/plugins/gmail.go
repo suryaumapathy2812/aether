@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -286,6 +287,102 @@ func (t *RefreshGmailTokenTool) Definition() tools.Definition {
 
 func (t *RefreshGmailTokenTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	return refreshOAuthAccessToken(ctx, call, "https://oauth2.googleapis.com/token", false)
+}
+
+type SetupGmailWatchTool struct{}
+
+func (t *SetupGmailWatchTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "setup_gmail_watch",
+		Description: "Set up Gmail push notifications via Google Pub/Sub. Returns the webhook URL to configure in your Google Cloud Pub/Sub push subscription.",
+		StatusText:  "Setting up Gmail watch...",
+		Parameters: []tools.Param{
+			{
+				Name:        "pubsub_topic",
+				Type:        "string",
+				Required:    false,
+				Description: "Google Cloud Pub/Sub topic name (projects/*/topics/*). If not provided, you must configure 'pubsub_topic' in plugin settings.",
+			},
+		},
+	}
+}
+
+func (t *SetupGmailWatchTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	cfg, err := pluginConfig(ctx, call)
+	if err != nil {
+		return tools.Fail("Failed to get plugin config: "+err.Error(), nil)
+	}
+
+	accessToken, err := requireToken(ctx, call, cfg)
+	if err != nil {
+		return tools.Fail("Gmail is not connected: "+err.Error(), nil)
+	}
+
+	topicName, _ := call.Args["pubsub_topic"].(string)
+	if topicName == "" {
+		topicName = cfg["pubsub_topic"]
+	}
+	if topicName == "" {
+		topicName = cfg["gmail_topic"]
+	}
+	if topicName == "" {
+		return tools.Fail("Missing pubsub_topic. Provide it as parameter or configure 'pubsub_topic' in plugin settings.", nil)
+	}
+
+	publicBaseURL := cfg["public_base_url"]
+	if publicBaseURL == "" {
+		publicBaseURL = cfg["base_url"]
+	}
+	if publicBaseURL == "" {
+		return tools.Fail("Missing public_base_url in plugin config. Configure your server URL in plugin settings.", nil)
+	}
+
+	webhookURL := strings.TrimRight(publicBaseURL, "/") + "/api/hooks/pubsub/gmail"
+
+	requestBody := map[string]any{
+		"topicName": topicName,
+		"labelIds":  []string{"INBOX"},
+	}
+
+	b, err := json.Marshal(requestBody)
+	if err != nil {
+		return tools.Fail("Failed to create request: "+err.Error(), nil)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gmailAPI+"/watch", bytes.NewReader(b))
+	if err != nil {
+		return tools.Fail("Failed to create request: "+err.Error(), nil)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return tools.Fail("Gmail API request failed: "+err.Error(), nil)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody map[string]any
+		json.NewDecoder(resp.Body).Decode(&errBody)
+		msg := fmt.Sprintf("Gmail API returned status %d", resp.StatusCode)
+		if m, ok := errBody["error"].(map[string]any); ok {
+			if s, ok := m["message"].(string); ok {
+				msg = s
+			}
+		}
+		return tools.Fail("Failed to setup Gmail watch: "+msg, nil)
+	}
+
+	cfg["pubsub_topic"] = topicName
+	cfg["gmail_topic"] = topicName
+	_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+
+	return tools.Success(fmt.Sprintf("Gmail watch set up successfully. Webhook URL: %s\n\nNote: Configure your Google Cloud Pub/Sub subscription to push to this URL.", webhookURL), map[string]any{
+		"webhook_url":     webhookURL,
+		"pubsub_topic":    topicName,
+		"expiration_days": 7,
+	})
 }
 
 func gmailModifyLabels(ctx context.Context, call tools.Call, key string, values []string, okMsg string) tools.Result {
