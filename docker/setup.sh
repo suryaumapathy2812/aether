@@ -187,9 +187,15 @@ if ! command -v pm2 &> /dev/null; then
 fi
 
 # Install Docker Compose
-if ! command -v docker compose &> /dev/null; then
+if ! command -v docker compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
     echo "Installing Docker Compose..."
     apt install -y -qq docker-compose-v2
+fi
+
+# Determine docker compose command (v1 vs v2)
+DOCKER_COMPOSE="docker compose"
+if ! command -v docker compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
 fi
 
 echo -e "${GREEN}Prerequisites installed!${NC}"
@@ -240,7 +246,7 @@ echo -e "${GREEN}Aether setup complete!${NC}"
 echo ""
 echo -e "${GREEN}Step 8: Starting Docker Services${NC}"
 cd $AETHER_DIR/docker
-docker compose -f docker-compose.services.yml up -d
+$DOCKER_COMPOSE -f docker-compose.services.yml up -d
 
 # Wait for services to be healthy
 echo "Waiting for Postgres..."
@@ -314,7 +320,7 @@ echo -e "  - Caddy: https://$DOMAIN"
 echo ""
 echo -e "Commands:"
 echo -e "  - PM2: pm2 status, pm2 logs"
-echo -e "  - Docker services: cd $AETHER_DIR/docker && docker compose -f docker-compose.services.yml logs"
+echo -e "  - Docker services: cd $AETHER_DIR/docker && $DOCKER_COMPOSE -f docker-compose.services.yml logs"
 echo -e "  - Restart dashboard: pm2 restart aether-dashboard"
 echo -e "  - Restart orchestrator: pm2 restart aether-orchestrator"
 echo ""
