@@ -1,17 +1,13 @@
 # Aether Caddy Configuration
 #
 # Usage:
-#   Development: CADDY_ENV=dev caddy run --config Caddyfile
-#   Production:  CADDY_ENV=prod caddy run --config Caddyfile
-#
-# Or run via Docker:
 #   docker run -d --name caddy -p 80:80 -p 443:443 \
 #     -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile \
 #     -v caddy_data:/data \
 #     caddy:latest
 
-{$CADDY_ENV:dev} {
-    # Handle API routes (including WebSocket)
+aether.suryaumapathy.in {
+    # Handle API routes
     @api {
         path /api/*
     }
@@ -21,25 +17,15 @@
         not @api
     }
 
-    # Dashboard (Next.js) - proxy all non-API requests to port 3000
+    # Dashboard (Next.js)
     reverse_proxy @dashboard localhost:3000 {
         header_up X-Forwarded-Proto "https"
         header_up X-Forwarded-Host {host}
     }
 
-    # API to Orchestrator (Go) - proxy /api/* to port 4000
+    # API to Orchestrator
     reverse_proxy @api localhost:4000
 
     # Disable buffering for SSE/WebSocket
     flush_interval -1
-
-    # Log format
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-# Redirect www to non-www (production only)
-www.{$DOMAIN:localhost} {
-    redir https://{$DOMAIN:localhost}{uri}
 }
