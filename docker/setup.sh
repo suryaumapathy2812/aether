@@ -17,20 +17,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Spinner
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while ps -p $pid > /dev/null 2>&1; do
-        local temp=${spinstr#?}
-        printf " [%c] " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
+# Default values (will be overridden by .env if present)
+DEFAULT_DOMAIN="aether.suryaumapathy.in"
+DEFAULT_OPENAI_BASE_URL="https://api.openai.com/v1"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}     Aether Setup Script            ${NC}"
@@ -43,78 +32,163 @@ if [ "$EUID" -eq 0 ]; then
     echo ""
 fi
 
-# Get domain
-echo -e "${GREEN}Step 1: Domain Configuration${NC}"
-echo -e "Enter your domain (e.g., aether.suryaumapathy.in):"
-read -r DOMAIN
-if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Domain is required. Exiting.${NC}"
-    exit 1
+# Load existing .env if present
+AETHER_DIR="/opt/aether"
+ENV_FILE="$AETHER_DIR/.env"
+
+if [ -f "$ENV_FILE" ]; then
+    echo -e "${GREEN}Found existing .env file at $ENV_FILE${NC}"
+    echo "Loading existing configuration..."
+    set -a  # Auto-export
+    source "$ENV_FILE"
+    set +a
 fi
 
-# Get secrets
-echo ""
+# Helper function to prompt with default value
+prompt_with_default() {
+    local prompt="$1"
+    local var_name="$2"
+    local default_value="$3"
+    local is_required="$4"  # "yes" or "no"
+    
+    local current_value="${!var_name}"
+    local display_default="${current_value:-$default_value}"
+    
+    if [ "$is_required" = "yes" ]; then
+        echo -e "${prompt}"
+        echo -e "  (required, press Enter to keep: ${display_default})"
+    else
+        echo -e "${prompt}"
+        echo -e "  (press Enter to keep: ${display_default} or 'skip' to leave empty)"
+    fi
+    
+    read -r input
+    
+    if [ -z "$input" ]; then
+        # User pressed Enter - keep current value
+        if [ -z "$current_value" ]; then
+            eval "$var_name=$default_value"
+        else
+            eval "$var_name=$current_value"
+        fi
+    elif [ "$input" = "skip" ]; then
+        eval "$var_name="
+    else
+        eval "$var_name=$input"
+    fi
+    
+    echo ""
+}
+
+# Helper for yes/no prompts
+prompt_yes_no() {
+    local prompt="$1"
+    local default="$2"
+    
+    local current_value="${!default}"
+    local display_default=$([ "$current_value" = "yes" ] && echo "Y/n" || echo "n/Y")
+    
+    echo -e "${prompt}"
+    echo -e "  ($display_default)"
+    read -r input
+    
+    if [ -z "$input" ]; then
+        eval "$default=$current_value"
+    elif [ "$input" = "y" ] || [ "$input" = "Y" ] || [ "$input" = "yes" ]; then
+        eval "$default=yes"
+    else
+        eval "$default=no"
+    fi
+    echo ""
+}
+
+# ============================================
+# Step 1: Domain Configuration
+# ============================================
+echo -e "${GREEN}Step 1: Domain Configuration${NC}"
+prompt_with_default "Enter your domain (e.g., aether.suryaumapathy.in):" "DOMAIN" "$DEFAULT_DOMAIN" "yes"
+
+# ============================================
+# Step 2: Security Configuration
+# ============================================
 echo -e "${GREEN}Step 2: Security Configuration${NC}"
 
 generate_password() {
     openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32
 }
 
-echo "Generating secure passwords..."
-POSTGRES_PASSWORD=$(generate_password)
-BETTER_AUTH_SECRET=$(generate_password)
-AGENT_SECRET=$(generate_password)
-S3_SECRET=$(generate_password)
-
-echo -e "Passwords generated. Please save these:"
-echo ""
-echo -e "${YELLOW}POSTGRES_PASSWORD=${POSTGRES_PASSWORD}${NC}"
-echo -e "${YELLOW}BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}${NC}"
-echo -e "${YELLOW}AGENT_SECRET=${AGENT_SECRET}${NC}"
-echo -e "${YELLOW}S3_SECRET_ACCESS_KEY=${S3_SECRET}${NC}"
-echo ""
-
-# Get OpenAI key
-echo -e "${GREEN}Step 3: OpenAI Configuration${NC}"
-echo -e "Enter your OpenAI API key (or press Enter to skip):"
-read -r OPENAI_API_KEY
-
-echo -e "Enter OpenAI Base URL (optional, press Enter for default https://api.openai.com/v1):"
-read -r OPENAI_BASE_URL
-if [ -z "$OPENAI_BASE_URL" ]; then
-    OPENAI_BASE_URL="https://api.openai.com/v1"
+# Check if we already have passwords
+if [ -z "$POSTGRES_PASSWORD" ]; then
+    POSTGRES_PASSWORD=$(generate_password)
+    echo "Generated new POSTGRES_PASSWORD"
 fi
 
-# Get OAuth credentials
+if [ -z "$BETTER_AUTH_SECRET" ]; then
+    BETTER_AUTH_SECRET=$(generate_password)
+    echo "Generated new BETTER_AUTH_SECRET"
+fi
+
+if [ -z "$AGENT_SECRET" ]; then
+    AGENT_SECRET=$(generate_password)
+    echo "Generated new AGENT_SECRET"
+fi
+
+if [ -z "$S3_SECRET" ]; then
+    S3_SECRET=$(generate_password)
+    echo "Generated new S3_SECRET_ACCESS_KEY"
+fi
+
+echo -e "${YELLOW}Please save these passwords:${NC}"
+echo -e "  POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+echo -e "  BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}"
+echo -e "  AGENT_SECRET=${AGENT_SECRET}"
+echo -e "  S3_SECRET_ACCESS_KEY=${S3_SECRET}"
 echo ""
+
+# ============================================
+# Step 3: OpenAI Configuration
+# ============================================
+echo -e "${GREEN}Step 3: OpenAI Configuration${NC}"
+prompt_with_default "Enter your OpenAI API key:" "OPENAI_API_KEY" "" "no"
+prompt_with_default "Enter OpenAI Base URL:" "OPENAI_BASE_URL" "$DEFAULT_OPENAI_BASE_URL" "no"
+
+# ============================================
+# Step 4: OAuth Configuration
+# ============================================
 echo -e "${GREEN}Step 4: OAuth Configuration (Optional)${NC}"
-echo -e "Enter Google OAuth Client ID (or press Enter to skip):"
-read -r GOOGLE_CLIENT_ID
+prompt_with_default "Enter Google OAuth Client ID:" "GOOGLE_CLIENT_ID" "" "no"
 
 if [ -n "$GOOGLE_CLIENT_ID" ]; then
-    echo -e "Enter Google OAuth Client Secret:"
-    read -r GOOGLE_CLIENT_SECRET
+    prompt_with_default "Enter Google OAuth Client Secret:" "GOOGLE_CLIENT_SECRET" "" "no"
 fi
 
-echo -e "Enter Spotify Client ID (or press Enter to skip):"
-read -r SPOTIFY_CLIENT_ID
+prompt_with_default "Enter Spotify Client ID:" "SPOTIFY_CLIENT_ID" "" "no"
 
 if [ -n "$SPOTIFY_CLIENT_ID" ]; then
-    echo -e "Enter Spotify Client Secret:"
-    read -r SPOTIFY_CLIENT_SECRET
+    prompt_with_default "Enter Spotify Client Secret:" "SPOTIFY_CLIENT_SECRET" "" "no"
 fi
 
-# Create .env file
-echo ""
-echo -e "${GREEN}Step 5: Creating Environment File${NC}"
+# ============================================
+# Step 5: Save Environment File
+# ============================================
+echo -e "${GREEN}Step 5: Saving Environment File${NC}"
 
-cat > .env << EOF
+# Ensure directory exists
+mkdir -p "$AETHER_DIR"
+
+# Build DATABASE_URL
+if [ -z "$DATABASE_URL" ]; then
+    DATABASE_URL="postgresql://aether:${POSTGRES_PASSWORD}@localhost:5432/aether"
+fi
+
+# Save to .env
+cat > "$ENV_FILE" << EOF
 # === DOMAIN ===
 DOMAIN=$DOMAIN
 
 # === DATABASE ===
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@localhost:5432/aether
+DATABASE_URL=$DATABASE_URL
 
 # === AUTH ===
 BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
@@ -138,9 +212,15 @@ SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID
 SPOTIFY_CLIENT_SECRET=$SPOTIFY_CLIENT_SECRET
 EOF
 
-echo -e "${GREEN}Environment file created: .env${NC}"
+echo -e "${GREEN}Environment file saved to $ENV_FILE${NC}"
 
-# Install prerequisites
+# Also copy to docker directory
+cp "$ENV_FILE" "$AETHER_DIR/docker/.env"
+echo -e "${GREEN}Copied .env to docker directory${NC}"
+
+# ============================================
+# Step 6: Install Prerequisites
+# ============================================
 echo ""
 echo -e "${GREEN}Step 6: Installing Prerequisites${NC}"
 
@@ -200,52 +280,12 @@ fi
 
 echo -e "${GREEN}Prerequisites installed!${NC}"
 
-# Clone repository (if not already in correct location)
+# ============================================
+# Step 7: Start Docker Services
+# ============================================
 echo ""
-echo -e "${GREEN}Step 7: Setting Up Aether${NC}"
-
-AETHER_DIR="/opt/aether"
-
-if [ ! -d "$AETHER_DIR" ]; then
-    echo "Cloning Aether repository..."
-    git clone https://github.com/suryaumapathy2812/aether.git $AETHER_DIR
-    cd $AETHER_DIR
-else
-    echo "Aether directory already exists at $AETHER_DIR"
-    cd $AETHER_DIR
-fi
-
-# Create log directory
-mkdir -p /var/log/aether
-
-# Copy environment file
-cp docker/.env.template docker/.env
-cp docker/.env.template /opt/aether/.env
-
-# Update .env with actual values
-cat > /opt/aether/.env << EOF
-DOMAIN=$DOMAIN
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-DATABASE_URL=postgresql://aether:${POSTGRES_PASSWORD}@localhost:5432/aether
-BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
-AGENT_SECRET=$AGENT_SECRET
-OPENAI_API_KEY=$OPENAI_API_KEY
-OPENAI_BASE_URL=$OPENAI_BASE_URL
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=$S3_SECRET
-S3_ENDPOINT=http://localhost:9000
-GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
-GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
-SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID
-SPOTIFY_CLIENT_SECRET=$SPOTIFY_CLIENT_SECRET
-EOF
-
-echo -e "${GREEN}Aether setup complete!${NC}"
-
-# Start Docker services
-echo ""
-echo -e "${GREEN}Step 8: Starting Docker Services${NC}"
-cd $AETHER_DIR/docker
+echo -e "${GREEN}Step 7: Starting Docker Services${NC}"
+cd "$AETHER_DIR/docker"
 $DOCKER_COMPOSE -f docker-compose.services.yml up -d
 
 # Wait for services to be healthy
@@ -256,23 +296,29 @@ done
 
 echo -e "${GREEN}Docker services started!${NC}"
 
-# Build and start Dashboard
+# ============================================
+# Step 8: Build Dashboard
+# ============================================
 echo ""
-echo -e "${GREEN}Step 9: Building Dashboard${NC}"
-cd $AETHER_DIR/dashboard
+echo -e "${GREEN}Step 8: Building Dashboard${NC}"
+cd "$AETHER_DIR/dashboard"
 npm install
 npm run build
 
-# Build and start Orchestrator
+# ============================================
+# Step 9: Build Orchestrator
+# ============================================
 echo ""
-echo -e "${GREEN}Step 10: Building Orchestrator${NC}"
-cd $AETHER_DIR/orchestrator
+echo -e "${GREEN}Step 9: Building Orchestrator${NC}"
+cd "$AETHER_DIR/orchestrator"
 go build -o aether-orchestrator ./cmd/server
 
-# Setup PM2
+# ============================================
+# Step 10: Setup PM2
+# ============================================
 echo ""
-echo -e "${GREEN}Step 11: Setting Up PM2${NC}"
-cd $AETHER_DIR/docker
+echo -e "${GREEN}Step 10: Setting Up PM2${NC}"
+cd "$AETHER_DIR/docker"
 
 # Create log directory
 mkdir -p /var/log/aether
@@ -282,13 +328,22 @@ sed -i "s|/opt/aether/dashboard|$AETHER_DIR/dashboard|g" ecosystem.config.js
 sed -i "s|/opt/aether/orchestrator|$AETHER_DIR/orchestrator|g" ecosystem.config.js
 
 # Load environment and start PM2
-export $(cat /opt/aether/.env | xargs) && pm2 start ecosystem.config.js
+set -a
+source "$ENV_FILE"
+set +a
+
+pm2 start ecosystem.config.js
 pm2 save
 pm2 startup
 
-# Setup Caddy
+# ============================================
+# Step 11: Setup Caddy
+# ============================================
 echo ""
-echo -e "${GREEN}Step 12: Setting Up Caddy${NC}"
+echo -e "${GREEN}Step 11: Setting Up Caddy${NC}"
+
+# Stop existing caddy if any
+docker rm -f caddy 2>/dev/null || true
 
 # Create Caddy data directory
 mkdir -p /var/lib/caddy
@@ -299,10 +354,10 @@ docker run -d \
     -p 80:80 \
     -p 443:443 \
     --restart=unless-stopped \
-    -v $AETHER_DIR/docker/Caddyfile:/etc/caddy/Caddyfile:ro \
+    -v "$AETHER_DIR/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
     -v /var/lib/caddy:/data \
     -e CADDY_ENV=prod \
-    -e DOMAIN=$DOMAIN \
+    -e DOMAIN="$DOMAIN" \
     caddy:latest
 
 echo ""
@@ -324,5 +379,5 @@ echo -e "  - Docker services: cd $AETHER_DIR/docker && $DOCKER_COMPOSE -f docker
 echo -e "  - Restart dashboard: pm2 restart aether-dashboard"
 echo -e "  - Restart orchestrator: pm2 restart aether-orchestrator"
 echo ""
-echo -e "${YELLOW}IMPORTANT: Save your passwords from Step 4!${NC}"
+echo -e "${YELLOW}IMPORTANT: Save your passwords from Step 2!${NC}"
 echo ""
