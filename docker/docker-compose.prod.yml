@@ -72,6 +72,7 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
       - AGENT_STATE_KEY=${AGENT_STATE_KEY:-}
+      - AGENT_ASSETS_ROOT=${AGENT_ASSETS_ROOT:-/var/lib/aether/agents}
       - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
       - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
       - VAPID_SUBJECT=${VAPID_SUBJECT:-}
@@ -94,6 +95,7 @@ services:
       - minio
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/aether/agents:/var/lib/aether/agents
     networks:
       - aether_network
       - traefik-public

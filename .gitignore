@@ -66,3 +66,4 @@ workspace/
 logs
 dashboard/public/sw.js
 dashboard/public/workbox-*.js
+dashboard/public/worker-*.js

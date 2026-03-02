@@ -31,8 +31,10 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
   if (origin) headers.set("origin", origin);
   const referer = request.headers.get("referer");
   if (referer) headers.set("referer", referer);
-  headers.set("x-forwarded-host", request.headers.get("host") || request.nextUrl.host);
-  headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  headers.set("x-forwarded-host", forwardedHost || request.headers.get("host") || request.nextUrl.host);
+  headers.set("x-forwarded-proto", (forwardedProto || request.nextUrl.protocol.replace(":", "")).split(",")[0].trim());
 
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";

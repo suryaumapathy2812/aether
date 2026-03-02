@@ -76,6 +76,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - AGENT_STATE_KEY=${AGENT_STATE_KEY:-}
+      - AGENT_ASSETS_ROOT=${AGENT_ASSETS_ROOT:-/var/lib/aether/agents}
       - AGENT_UPDATE_REPO=${AGENT_UPDATE_REPO:-suryaumapathy2812/aether}
       - AGENT_UPDATE_TOKEN=${AGENT_UPDATE_TOKEN:-}
       - AETHER_AUTO_ASSIGN_FIRST_AGENT=${AETHER_AUTO_ASSIGN_FIRST_AGENT:-true}
@@ -106,6 +108,7 @@ services:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/aether/agents:/var/lib/aether/agents
     restart: unless-stopped
 
   # --- Dashboard (Next.js) ---
