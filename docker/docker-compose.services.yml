@@ -8,8 +8,6 @@
 # Environment:
 #   Copy .env.template to .env and fill in values
 
-version: '3.8'
-
 services:
   # --- PostgreSQL Database ---
   postgres:

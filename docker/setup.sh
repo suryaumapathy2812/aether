@@ -103,9 +103,21 @@ prompt_yes_no() {
 }
 
 # ============================================
-# Step 1: Domain Configuration
+# Step 1: Docker Hub Login (Optional)
 # ============================================
-echo -e "${GREEN}Step 1: Domain Configuration${NC}"
+echo -e "${GREEN}Step 1: Docker Hub Login (Optional)${NC}"
+echo "Docker Hub has rate limits. Login to avoid issues pulling images."
+echo ""
+prompt_with_default "Docker Hub Username (press Enter to skip):" "DOCKERHUB_USERNAME" "" "no"
+
+if [ -n "$DOCKERHUB_USERNAME" ]; then
+    prompt_with_default "Docker Hub Access Token (https://hub.docker.com/settings/security):" "DOCKERHUB_TOKEN" "" "no"
+fi
+
+# ============================================
+# Step 2: Domain Configuration
+# ============================================
+echo -e "${GREEN}Step 2: Domain Configuration${NC}"
 prompt_with_default "Enter your domain (e.g., aether.suryaumapathy.in):" "DOMAIN" "$DEFAULT_DOMAIN" "yes"
 
 # ============================================
@@ -210,6 +222,9 @@ GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
 SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID
 SPOTIFY_CLIENT_SECRET=$SPOTIFY_CLIENT_SECRET
+
+# === DOCKER ===
+DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME
 EOF
 
 echo -e "${GREEN}Environment file saved to $ENV_FILE${NC}"
@@ -258,6 +273,20 @@ if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
     curl -fsSL https://get.docker.com | sh
     usermod -aG docker $USER
+fi
+
+# Login to Docker Hub (needed to avoid rate limits)
+echo ""
+echo -e "${GREEN}Docker Hub Login${NC}"
+echo "Logging in to Docker Hub to avoid rate limits..."
+echo "If you don't have a Docker Hub account, create one at https://hub.docker.com"
+docker logout 2>/dev/null || true
+
+# Try to login with credentials if provided, otherwise prompt
+if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+    echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+elif [ -n "$DOCKERHUB_USERNAME" ]; then
+    docker login -u "$DOCKERHUB_USERNAME"
 fi
 
 # Install PM2
