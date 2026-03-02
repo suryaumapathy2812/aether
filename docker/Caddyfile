@@ -1,14 +1,13 @@
 aether.suryaumapathy.in {
     # API routes to orchestrator
-    handle /api/* {
-        reverse_proxy localhost:4000
-    }
+    @api path /api/*
+    
+    # API goes to orchestrator
+    reverse_proxy @api localhost:4000
     
     # Everything else to dashboard
-    handle * {
-        reverse_proxy localhost:3000
-    }
+    reverse_proxy localhost:3000
     
-    # Enable WebSocket support
-    ws_optimization
+    # Disable buffering for WebSocket
+    flush_interval -1
 }
