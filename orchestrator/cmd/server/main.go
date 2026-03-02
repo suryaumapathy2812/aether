@@ -60,6 +60,7 @@ func main() {
 			OpenAIBaseURL: cfg.AgentOpenAIBaseURL,
 			OpenAIModel:   cfg.AgentOpenAIModel,
 			AgentStateKey: cfg.AgentStateKey,
+			AssetsRoot:    cfg.AgentAssetsRoot,
 			VapidPublic:   cfg.VapidPublicKey,
 			VapidPrivate:  cfg.VapidPrivateKey,
 			VapidSubject:  cfg.VapidSubject,

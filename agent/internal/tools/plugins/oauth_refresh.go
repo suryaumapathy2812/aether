@@ -60,6 +60,21 @@ func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL stri
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
+		if call.Ctx.PluginState != nil {
+			cfg["last_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+			cfg["last_refresh_status"] = "failed"
+			cfg["last_refresh_error"] = "token refresh failed: " + err.Error()
+			if v := strings.TrimSpace(cfg["refresh_fail_count"]); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					cfg["refresh_fail_count"] = strconv.Itoa(n + 1)
+				} else {
+					cfg["refresh_fail_count"] = "1"
+				}
+			} else {
+				cfg["refresh_fail_count"] = "1"
+			}
+			_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+		}
 		return tools.Fail("Token refresh failed: "+err.Error(), nil)
 	}
 	defer resp.Body.Close()
@@ -73,6 +88,21 @@ func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL stri
 		Error        string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		if call.Ctx.PluginState != nil {
+			cfg["last_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+			cfg["last_refresh_status"] = "failed"
+			cfg["last_refresh_error"] = "failed to decode refresh response"
+			if v := strings.TrimSpace(cfg["refresh_fail_count"]); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					cfg["refresh_fail_count"] = strconv.Itoa(n + 1)
+				} else {
+					cfg["refresh_fail_count"] = "1"
+				}
+			} else {
+				cfg["refresh_fail_count"] = "1"
+			}
+			_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+		}
 		return tools.Fail("Failed to decode refresh response", nil)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -80,9 +110,39 @@ func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL stri
 		if msg == "" {
 			msg = fmt.Sprintf("token endpoint status %d", resp.StatusCode)
 		}
+		if call.Ctx.PluginState != nil {
+			cfg["last_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+			cfg["last_refresh_status"] = "failed"
+			cfg["last_refresh_error"] = msg
+			if v := strings.TrimSpace(cfg["refresh_fail_count"]); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					cfg["refresh_fail_count"] = strconv.Itoa(n + 1)
+				} else {
+					cfg["refresh_fail_count"] = "1"
+				}
+			} else {
+				cfg["refresh_fail_count"] = "1"
+			}
+			_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+		}
 		return tools.Fail("Token refresh failed: "+msg, nil)
 	}
 	if strings.TrimSpace(data.AccessToken) == "" {
+		if call.Ctx.PluginState != nil {
+			cfg["last_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+			cfg["last_refresh_status"] = "failed"
+			cfg["last_refresh_error"] = "refresh response missing access_token"
+			if v := strings.TrimSpace(cfg["refresh_fail_count"]); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					cfg["refresh_fail_count"] = strconv.Itoa(n + 1)
+				} else {
+					cfg["refresh_fail_count"] = "1"
+				}
+			} else {
+				cfg["refresh_fail_count"] = "1"
+			}
+			_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+		}
 		return tools.Fail("Refresh response missing access_token", nil)
 	}
 
@@ -118,6 +178,11 @@ func refreshOAuthAccessToken(ctx context.Context, call tools.Call, tokenURL stri
 	cfg["last_refresh_status"] = "ok"
 	cfg["last_refresh_error"] = ""
 	if call.Ctx.PluginState != nil {
+		cfg["last_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+		cfg["last_refresh_status"] = "ok"
+		cfg["last_refresh_error"] = ""
+		cfg["refresh_fail_count"] = "0"
+		cfg["next_refresh_at"] = expiresAt.Add(-5 * time.Minute).Format(time.RFC3339)
 		if err := call.Ctx.PluginState.SetConfig(ctx, cfg); err != nil {
 			return tools.Fail("Failed to persist refreshed token: "+err.Error(), nil)
 		}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +19,6 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/jackc/pgx/v5"
@@ -42,6 +42,7 @@ type ManagerConfig struct {
 	OpenAIBaseURL string
 	OpenAIModel   string
 	AgentStateKey string
+	AssetsRoot    string
 	VapidPublic   string
 	VapidPrivate  string
 	VapidSubject  string
@@ -107,6 +108,7 @@ func NewManager(ctx context.Context, db *pgxpool.Pool, cfg ManagerConfig) (*Mana
 	if strings.TrimSpace(m.cfg.Network) == "" {
 		return nil, errors.New("AGENT_NETWORK is required when network auto-detection fails")
 	}
+	m.ensureAssetsRoot()
 	if m.cfg.AgentPort <= 0 {
 		m.cfg.AgentPort = 8000
 	}
@@ -152,15 +154,11 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 	}
 
 	containerName := containerNameForUser(userID)
-	volumeName := volumeNameForUser(userID)
-	if err := m.ensureVolume(ctx, volumeName, userID); err != nil {
-		return Target{}, err
-	}
 	if err := m.ensureImage(ctx, m.cfg.Image); err != nil {
 		return Target{}, err
 	}
 
-	ctrID, err := m.ensureContainer(ctx, userID, containerName, volumeName)
+	ctrID, err := m.ensureContainer(ctx, userID, containerName, "")
 	if err != nil {
 		return Target{}, err
 	}
@@ -333,18 +331,13 @@ func (m *Manager) ensureImage(ctx context.Context, name string) error {
 	return nil
 }
 
-func (m *Manager) ensureVolume(ctx context.Context, name, userID string) error {
-	_, err := m.docker.VolumeCreate(ctx, volume.CreateOptions{
-		Name: name,
-		Labels: map[string]string{
-			"managed-by": "aether-orchestrator",
-			"user-id":    userID,
-		},
-	})
-	return err
+func (m *Manager) ensureAssetsRoot() {
+	if strings.TrimSpace(m.cfg.AssetsRoot) == "" {
+		m.cfg.AssetsRoot = "/var/lib/aether/agents"
+	}
 }
 
-func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, volumeName string) (string, error) {
+func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ string) (string, error) {
 	if inspect, err := m.docker.ContainerInspect(ctx, containerName); err == nil {
 		return inspect.ID, nil
 	} else if err != nil && !errdefs.IsNotFound(err) {
@@ -367,6 +360,12 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 	if strings.TrimSpace(m.cfg.AgentStateKey) != "" {
 		env = append(env, "AGENT_STATE_KEY="+strings.TrimSpace(m.cfg.AgentStateKey))
 	}
+	m.ensureAssetsRoot()
+	assetsHostPath := filepath.Join(m.cfg.AssetsRoot, userID, "assets")
+	if err := os.MkdirAll(assetsHostPath, 0o755); err != nil {
+		return "", err
+	}
+	env = append(env, "AGENT_ASSETS_DIR=/app/assets")
 	if strings.TrimSpace(m.cfg.VapidPublic) != "" {
 		env = append(env, "VAPID_PUBLIC_KEY="+strings.TrimSpace(m.cfg.VapidPublic))
 	}
@@ -427,9 +426,9 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, vo
 			Labels: map[string]string{"managed-by": "aether-orchestrator", "user-id": userID},
 		},
 		&container.HostConfig{
-			// Each user gets a dedicated persistent SQLite volume at /app/assets.
+			// Each user gets a dedicated persistent assets path at /app/assets.
 			// This keeps state.db across container restarts/reprovisioning.
-			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volumeName, Target: "/app/assets"}},
+			Mounts: []mount.Mount{{Type: mount.TypeBind, Source: assetsHostPath, Target: "/app/assets"}},
 		},
 		&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{m.cfg.Network: {}}},
 		nil,
@@ -609,10 +608,6 @@ func shortHash(in string) string {
 
 func containerNameForUser(userID string) string {
 	return "aether-agent-" + shortHash(userID)
-}
-
-func volumeNameForUser(userID string) string {
-	return "aether-agent-assets-" + shortHash(userID)
 }
 
 func agentIDForUser(userID string) string {

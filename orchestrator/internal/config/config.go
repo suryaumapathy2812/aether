@@ -28,6 +28,7 @@ type Config struct {
 	AgentOpenAIBaseURL string
 	AgentOpenAIModel   string
 	AgentStateKey      string
+	AgentAssetsRoot    string
 	VapidPublicKey     string
 	VapidPrivateKey    string
 	VapidSubject       string
@@ -75,6 +76,7 @@ func Load() Config {
 		AgentOpenAIBaseURL: stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))),
 		AgentOpenAIModel:   stripWrappingQuotes(strings.TrimSpace(os.Getenv("OPENAI_MODEL"))),
 		AgentStateKey:      stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_STATE_KEY"))),
+		AgentAssetsRoot:    defaultString("AGENT_ASSETS_ROOT", "/var/lib/aether/agents"),
 		VapidPublicKey:     stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_PUBLIC_KEY"))),
 		VapidPrivateKey:    stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_PRIVATE_KEY"))),
 		VapidSubject:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("VAPID_SUBJECT"))),

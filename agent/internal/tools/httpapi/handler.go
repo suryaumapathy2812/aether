@@ -40,6 +40,24 @@ func New(opts Options) *Handler {
 	return &Handler{registry: opts.Registry, orchestrator: opts.Orchestrator, plugins: opts.Plugins, store: opts.Store}
 }
 
+func (h *Handler) EnsurePluginCronJobs(ctx context.Context) error {
+	if h == nil || h.plugins == nil {
+		return nil
+	}
+	recs, err := h.plugins.ListEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		manifest, err := h.plugins.ReadManifest(rec.Name)
+		if err != nil {
+			continue
+		}
+		_ = h.ensurePluginCronJobs(ctx, manifest, rec.Config)
+	}
+	return nil
+}
+
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.handleHealth)
 	mux.HandleFunc("/internal/tools", h.handleTools)

@@ -138,6 +138,23 @@ func (m *Manager) List() []PluginMeta {
 	return out
 }
 
+func (m *Manager) ListEnabled(ctx context.Context) ([]db.PluginRecord, error) {
+	if m == nil || m.stateStore == nil {
+		return nil, nil
+	}
+	recs, err := m.stateStore.ListPlugins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]db.PluginRecord, 0, len(recs))
+	for _, rec := range recs {
+		if rec.Enabled {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
 func (m *Manager) Get(name string) (PluginMeta, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

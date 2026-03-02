@@ -183,6 +183,9 @@ func main() {
 
 	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store})
 	handler.RegisterRoutes(mux)
+	if err := handler.EnsurePluginCronJobs(context.Background()); err != nil {
+		log.Printf("plugin cron schedule warning: %v", err)
+	}
 
 	up := updater.New(updater.Config{
 		CurrentVersion: buildinfo.Version,

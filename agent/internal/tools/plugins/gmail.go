@@ -354,6 +354,41 @@ func gmailRequest(ctx context.Context, call tools.Call, method, reqURL string, b
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		if refreshed := refreshGmailTokenOnUnauthorized(ctx, call); refreshed {
+			_ = resp.Body.Close()
+			var retryBody *strings.Reader
+			if body == nil {
+				retryBody = strings.NewReader("")
+			} else {
+				b, _ := json.Marshal(body)
+				retryBody = strings.NewReader(string(b))
+			}
+			req, err = http.NewRequestWithContext(ctx, method, reqURL, retryBody)
+			if err != nil {
+				return nil, err
+			}
+			cfg, err := pluginConfig(ctx, call)
+			if err != nil {
+				return nil, err
+			}
+			token, err := requireToken(ctx, call, cfg)
+			if err != nil {
+				return nil, fmt.Errorf("Gmail is not connected: %w", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			if body != nil {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, err = (&http.Client{Timeout: 20 * time.Second}).Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+		} else {
+			return nil, fmt.Errorf("Gmail token refresh failed; please reconnect")
+		}
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Gmail API request failed with status %d", resp.StatusCode)
 	}
@@ -365,6 +400,21 @@ func gmailRequest(ctx context.Context, call tools.Call, method, reqURL string, b
 		return nil, err
 	}
 	return obj, nil
+}
+
+func refreshGmailTokenOnUnauthorized(ctx context.Context, call tools.Call) bool {
+	result := refreshOAuthAccessToken(ctx, call, "https://oauth2.googleapis.com/token", false)
+	if result.Error {
+		if call.Ctx.PluginState != nil {
+			cfg, err := call.Ctx.PluginState.Config(ctx)
+			if err == nil {
+				cfg["needs_reconnect"] = "true"
+				_ = call.Ctx.PluginState.SetConfig(ctx, cfg)
+			}
+		}
+		return false
+	}
+	return true
 }
 
 var (

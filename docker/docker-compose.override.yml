@@ -26,6 +26,7 @@ services:
   orchestrator:
     volumes:
       - ../orchestrator:/app
+      - /var/lib/aether/agents:/var/lib/aether/agents
     command: go run ./cmd/server
 
   dashboard:
