@@ -1,12 +1,16 @@
 aether.suryaumapathy.in {
-    # API routes to orchestrator
-    @api path /api/*
-    
-    # API goes to orchestrator
-    reverse_proxy @api localhost:4000
-    
+    # Next.js auth routes must go to the dashboard
+    handle /api/auth* {
+        reverse_proxy localhost:3000
+    }
+
+    # All other API routes go to the orchestrator
+    handle /api/* {
+        reverse_proxy localhost:4000
+    }
+
     # Everything else to dashboard
-    reverse_proxy localhost:3000
-    
-    # WebSocket/SSE handled by reverse_proxy
+    handle {
+        reverse_proxy localhost:3000
+    }
 }
