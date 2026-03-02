@@ -11,28 +11,24 @@
 #     caddy:latest
 
 {$CADDY_ENV:dev} {
-    # Handle WebSocket connections first
-    @ws {
-        path /api/ws*
-    }
-
+    # Handle API routes (including WebSocket)
     @api {
         path /api/*
     }
 
+    # Dashboard is everything that's not API
     @dashboard {
         not @api
     }
 
-    # Dashboard (Next.js)
+    # Dashboard (Next.js) - proxy all non-API requests to port 3000
     reverse_proxy @dashboard localhost:3000 {
         header_up X-Forwarded-Proto "https"
         header_up X-Forwarded-Host {host}
     }
 
-    # API to Orchestrator (Go)
+    # API to Orchestrator (Go) - proxy /api/* to port 4000
     reverse_proxy @api localhost:4000
-    reverse_proxy @ws localhost:4000
 
     # Disable buffering for SSE/WebSocket
     flush_interval -1
