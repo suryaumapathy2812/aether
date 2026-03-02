@@ -4,6 +4,11 @@ aether.suryaumapathy.in {
         reverse_proxy localhost:3000
     }
 
+    # Next.js orchestrator proxy — must go to the dashboard
+    handle /api/go/* {
+        reverse_proxy localhost:3000
+    }
+
     # All other API routes go to the orchestrator
     handle /api/* {
         reverse_proxy localhost:4000
