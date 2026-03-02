@@ -121,9 +121,9 @@ echo -e "${GREEN}Step 2: Domain Configuration${NC}"
 prompt_with_default "Enter your domain (e.g., aether.suryaumapathy.in):" "DOMAIN" "$DEFAULT_DOMAIN" "yes"
 
 # ============================================
-# Step 2: Security Configuration
+# Step 3: Security Configuration
 # ============================================
-echo -e "${GREEN}Step 2: Security Configuration${NC}"
+echo -e "${GREEN}Step 3: Security Configuration${NC}"
 
 generate_password() {
     openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32
@@ -158,16 +158,16 @@ echo -e "  S3_SECRET_ACCESS_KEY=${S3_SECRET}"
 echo ""
 
 # ============================================
-# Step 3: OpenAI Configuration
+# Step 4: OpenAI Configuration
 # ============================================
-echo -e "${GREEN}Step 3: OpenAI Configuration${NC}"
+echo -e "${GREEN}Step 4: OpenAI Configuration${NC}"
 prompt_with_default "Enter your OpenAI API key:" "OPENAI_API_KEY" "" "no"
 prompt_with_default "Enter OpenAI Base URL:" "OPENAI_BASE_URL" "$DEFAULT_OPENAI_BASE_URL" "no"
 
 # ============================================
-# Step 4: OAuth Configuration
+# Step 5: OAuth Configuration
 # ============================================
-echo -e "${GREEN}Step 4: OAuth Configuration (Optional)${NC}"
+echo -e "${GREEN}Step 5: OAuth Configuration (Optional)${NC}"
 prompt_with_default "Enter Google OAuth Client ID:" "GOOGLE_CLIENT_ID" "" "no"
 
 if [ -n "$GOOGLE_CLIENT_ID" ]; then
@@ -181,9 +181,9 @@ if [ -n "$SPOTIFY_CLIENT_ID" ]; then
 fi
 
 # ============================================
-# Step 5: Save Environment File
+# Step 6: Save Environment File
 # ============================================
-echo -e "${GREEN}Step 5: Saving Environment File${NC}"
+echo -e "${GREEN}Step 6: Saving Environment File${NC}"
 
 # Ensure directory exists
 mkdir -p "$AETHER_DIR"
@@ -204,9 +204,12 @@ DATABASE_URL=$DATABASE_URL
 
 # === AUTH ===
 BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
+BETTER_AUTH_URL=https://$DOMAIN
+BETTER_AUTH_TRUSTED_ORIGINS=https://$DOMAIN
 
 # === AGENT ===
 AGENT_SECRET=$AGENT_SECRET
+AGENT_NETWORK=aether_internal
 
 # === LLM ===
 OPENAI_API_KEY=$OPENAI_API_KEY
@@ -215,7 +218,7 @@ OPENAI_BASE_URL=$OPENAI_BASE_URL
 # === S3/MinIO ===
 S3_ACCESS_KEY_ID=minioadmin
 S3_SECRET_ACCESS_KEY=$S3_SECRET
-S3_ENDPOINT=http://localhost:9000
+S3_ENDPOINT=http://aether-minio:9000
 
 # === OAUTH ===
 GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
@@ -234,10 +237,10 @@ cp "$ENV_FILE" "$AETHER_DIR/docker/.env"
 echo -e "${GREEN}Copied .env to docker directory${NC}"
 
 # ============================================
-# Step 6: Install Prerequisites
+# Step 7: Install Prerequisites
 # ============================================
 echo ""
-echo -e "${GREEN}Step 6: Installing Prerequisites${NC}"
+echo -e "${GREEN}Step 7: Installing Prerequisites${NC}"
 
 # Add Go to PATH (in case it was previously installed)
 export PATH=$PATH:/usr/local/go/bin
@@ -310,10 +313,10 @@ fi
 echo -e "${GREEN}Prerequisites installed!${NC}"
 
 # ============================================
-# Step 7: Start Docker Services
+# Step 8: Start Docker Services
 # ============================================
 echo ""
-echo -e "${GREEN}Step 7: Starting Docker Services${NC}"
+echo -e "${GREEN}Step 8: Starting Docker Services${NC}"
 cd "$AETHER_DIR/docker"
 $DOCKER_COMPOSE -f docker-compose.services.yml up -d
 
@@ -326,35 +329,40 @@ done
 echo -e "${GREEN}Docker services started!${NC}"
 
 # ============================================
-# Step 8: Build Dashboard
+# Step 9: Build Dashboard
 # ============================================
 echo ""
-echo -e "${GREEN}Step 8: Building Dashboard${NC}"
+echo -e "${GREEN}Step 9: Building Dashboard${NC}"
 cd "$AETHER_DIR/dashboard"
 npm install
 npm run build
 
+# Push Prisma schema to database (creates tables for auth, API keys, etc.)
+echo "Running database migrations..."
+npx prisma db push
+
 # ============================================
-# Step 9: Build Orchestrator
+# Step 10: Build Orchestrator
 # ============================================
 echo ""
-echo -e "${GREEN}Step 9: Building Orchestrator${NC}"
+echo -e "${GREEN}Step 10: Building Orchestrator${NC}"
 cd "$AETHER_DIR/orchestrator"
 go build -o aether-orchestrator ./cmd/server
 
 # ============================================
-# Step 10: Setup PM2
+# Step 11: Setup PM2
 # ============================================
 echo ""
-echo -e "${GREEN}Step 10: Setting Up PM2${NC}"
+echo -e "${GREEN}Step 11: Setting Up PM2${NC}"
 cd "$AETHER_DIR/docker"
 
 # Create log directory
 mkdir -p /var/log/aether
 
-# Update ecosystem.config.js with correct paths
-sed -i "s|/opt/aether/dashboard|$AETHER_DIR/dashboard|g" ecosystem.config.js
-sed -i "s|/opt/aether/orchestrator|$AETHER_DIR/orchestrator|g" ecosystem.config.js
+# Pre-pull agent image so first user request is fast
+AGENT_IMAGE="${AGENT_IMAGE:-suryaumapathy2812/aether-agent:latest}"
+echo "Pre-pulling agent image: $AGENT_IMAGE"
+docker pull "$AGENT_IMAGE"
 
 # Load environment and start PM2
 set -a
@@ -366,10 +374,10 @@ pm2 save
 pm2 startup
 
 # ============================================
-# Step 11: Setup Caddy
+# Step 12: Setup Caddy
 # ============================================
 echo ""
-echo -e "${GREEN}Step 11: Setting Up Caddy${NC}"
+echo -e "${GREEN}Step 12: Setting Up Caddy${NC}"
 
 # Stop existing caddy if any
 docker rm -f caddy 2>/dev/null || true
@@ -405,5 +413,5 @@ echo -e "  - Docker services: cd $AETHER_DIR/docker && $DOCKER_COMPOSE -f docker
 echo -e "  - Restart dashboard: pm2 restart aether-dashboard"
 echo -e "  - Restart orchestrator: pm2 restart aether-orchestrator"
 echo ""
-echo -e "${YELLOW}IMPORTANT: Save your passwords from Step 2!${NC}"
+echo -e "${YELLOW}IMPORTANT: Save your passwords from Step 3!${NC}"
 echo ""
