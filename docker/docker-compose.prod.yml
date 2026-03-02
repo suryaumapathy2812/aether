@@ -58,7 +58,7 @@ services:
 
   # --- Orchestrator (Go) ---
   orchestrator:
-    image: ${DOCKERHUB_USERNAME:-yourusername}/aether-orchestrator:latest
+    image: suryaumapathy2812/aether-orchestrator:latest
     environment:
       - PORT=4000
       - DATABASE_URL=${DATABASE_URL}
@@ -123,7 +123,7 @@ services:
 
   # --- Dashboard (Next.js) ---
   dashboard:
-    image: ${DOCKERHUB_USERNAME:-yourusername}/aether-dashboard:latest
+    image: suryaumapathy2812/aether-dashboard:latest
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
