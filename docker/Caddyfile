@@ -8,6 +8,5 @@ aether.suryaumapathy.in {
     # Everything else to dashboard
     reverse_proxy localhost:3000
     
-    # Disable buffering for WebSocket
-    flush_interval -1
+    # WebSocket/SSE handled by reverse_proxy
 }

@@ -377,16 +377,13 @@ docker rm -f caddy 2>/dev/null || true
 # Create Caddy data directory
 mkdir -p /var/lib/caddy
 
-# Run Caddy via Docker
+# Run Caddy via Docker (host networking so it can reach localhost:3000/4000)
 docker run -d \
     --name caddy \
-    -p 80:80 \
-    -p 443:443 \
+    --network host \
     --restart=unless-stopped \
     -v "$AETHER_DIR/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
     -v /var/lib/caddy:/data \
-    -e CADDY_ENV=prod \
-    -e DOMAIN="$DOMAIN" \
     caddy:latest
 
 echo ""
@@ -400,7 +397,7 @@ echo -e "  - Orchestrator: http://localhost:4000"
 echo -e "  - Postgres: localhost:5432"
 echo -e "  - MinIO Console: http://localhost:9001"
 echo -e "  - Dozzle (logs): http://localhost:8080"
-echo -e "  - Caddy: https://$DOMAIN"
+echo -e "  - Caddy: https://$DOMAIN (host networking)"
 echo ""
 echo -e "Commands:"
 echo -e "  - PM2: pm2 status, pm2 logs"
