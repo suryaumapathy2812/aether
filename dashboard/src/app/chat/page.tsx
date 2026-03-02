@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import {
-  chatCompletions,
   completeMediaUpload,
   initMediaUpload,
   type ChatContentPart,
   getMemoryConversations,
   type ChatMessage,
+  streamConversationTurn,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -333,20 +333,58 @@ export default function ChatPage() {
           content: summarizeUserContent(m.content),
         };
       });
-      const response = await chatCompletions({
-        user: session?.user?.id || "",
-        messages: modelMessages,
-      });
-      const assistant = response.choices?.[0]?.message?.content?.trim() || "";
+      const assistantId = randomId("assistant");
       setMessages((prev) => [
         ...prev,
         {
-          id: randomId("assistant"),
+          id: assistantId,
           role: "assistant",
-          text: assistant || "(empty response)",
-          content: assistant || "(empty response)",
+          text: "",
+          content: "",
         },
       ]);
+      const userId = session?.user?.id || "";
+      let ackText = "";
+      let answerText = "";
+      let answerStarted = false;
+      await streamConversationTurn({
+        user: userId,
+        messages: modelMessages,
+        onEvent: (event) => {
+          if (event.phase === "ack" && typeof event.text === "string") {
+            ackText = event.text;
+          }
+          if (event.phase === "answer" && typeof event.text === "string") {
+            answerText += event.text;
+            answerStarted = true;
+          }
+          const combined = answerStarted
+            ? answerText.trim()
+            : (ackText || "").trim();
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    text: combined || "",
+                    content: combined || "",
+                  }
+                : m
+            )
+          );
+        },
+      });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                text: (m.text || "").trim() || "(empty response)",
+                content: (m.text || "").trim() || "(empty response)",
+              }
+            : m
+        )
+      );
     } catch (e: unknown) {
       setErrorText(e instanceof Error ? e.message : "Request failed");
     } finally {

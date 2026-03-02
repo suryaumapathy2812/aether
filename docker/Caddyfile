@@ -1,7 +1,19 @@
 :3000 {
-  reverse_proxy dashboard:3000
+  reverse_proxy dashboard:3000 {
+    flush_interval -1
+  }
+  header {
+    Cache-Control "no-cache, no-transform"
+    X-Accel-Buffering "no"
+  }
 }
 
 :3080 {
-  reverse_proxy orchestrator:4000
+  reverse_proxy orchestrator:4000 {
+    flush_interval -1
+  }
+  header {
+    Cache-Control "no-cache, no-transform"
+    X-Accel-Buffering "no"
+  }
 }

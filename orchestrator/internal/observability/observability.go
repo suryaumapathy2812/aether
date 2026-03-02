@@ -101,7 +101,8 @@ func Middleware(next http.Handler) http.Handler {
 		if forensicMode.Load() {
 			body = readAndRestoreBody(&r.Body)
 		}
-		rw := &responseLogger{ResponseWriter: w, status: http.StatusOK}
+		captureBody := forensicMode.Load() && !strings.HasPrefix(r.Header.Get("Content-Type"), "text/event-stream")
+		rw := &responseLogger{ResponseWriter: w, status: http.StatusOK, captureBody: captureBody}
 		rw.Header().Set("X-Request-ID", requestID)
 
 		in := log.Info().Str("event", "http_request_in").Str("request_id", requestID).Str("method", r.Method).Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Str("remote_addr", r.RemoteAddr).Interface("headers", sanitizeHeaders(r.Header, forensicMode.Load()))
@@ -113,7 +114,7 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		out := log.Info().Str("event", "http_request_out").Str("request_id", requestID).Str("method", r.Method).Str("path", r.URL.Path).Int("status", rw.status).Int("bytes", rw.bytes).Dur("duration", time.Since(start))
-		if forensicMode.Load() && rw.body.Len() > 0 {
+		if rw.captureBody && rw.body.Len() > 0 {
 			out.Str("response_body", truncate(rw.body.String(), int(bodyLimitByte.Load())))
 		}
 		out.Msg("request completed")
@@ -156,9 +157,10 @@ func (pgxLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, d
 
 type responseLogger struct {
 	http.ResponseWriter
-	status int
-	bytes  int
-	body   bytes.Buffer
+	status      int
+	bytes       int
+	body        bytes.Buffer
+	captureBody bool
 }
 
 func (l *responseLogger) WriteHeader(statusCode int) {
@@ -167,7 +169,7 @@ func (l *responseLogger) WriteHeader(statusCode int) {
 }
 
 func (l *responseLogger) Write(p []byte) (int, error) {
-	if forensicMode.Load() && int64(l.body.Len()) < bodyLimitByte.Load() {
+	if l.captureBody && int64(l.body.Len()) < bodyLimitByte.Load() {
 		_, _ = l.body.Write(p)
 	}
 	n, err := l.ResponseWriter.Write(p)

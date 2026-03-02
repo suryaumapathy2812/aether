@@ -442,6 +442,17 @@ export interface ChatCompletionResponse {
   }[];
 }
 
+export interface ConversationTurnEvent {
+  id?: string;
+  object?: string;
+  created?: number;
+  phase?: "start" | "ack" | "act" | "answer" | "error" | "done";
+  event?: string;
+  text?: string;
+  error?: string;
+  payload?: Record<string, unknown>;
+}
+
 export async function chatCompletions(input: {
   model?: string;
   messages: ChatMessage[];
@@ -463,6 +474,61 @@ export async function chatCompletions(input: {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function streamConversationTurn(input: {
+  messages: ChatMessage[];
+  user: string;
+  session?: string;
+  temperature?: number;
+  max_tokens?: number;
+  onEvent: (event: ConversationTurnEvent) => void;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    messages: input.messages,
+    user: input.user,
+    session: input.session || "",
+    temperature: input.temperature,
+    max_tokens: input.max_tokens,
+  };
+  const res = await fetchWithAuth("/v1/conversations/turn", {
+    method: "POST",
+    body: JSON.stringify(body),
+    signal: input.signal,
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(extractErrorMessage(err, res.statusText));
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx = buffer.indexOf("\n\n");
+    while (idx !== -1) {
+      const chunk = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      idx = buffer.indexOf("\n\n");
+      const lines = chunk.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === "[DONE]") return;
+        if (!payload) continue;
+        try {
+          input.onEvent(JSON.parse(payload) as ConversationTurnEvent);
+        } catch {
+          // Ignore malformed events
+        }
+      }
+    }
+  }
 }
 
 // ── Agent tasks ──

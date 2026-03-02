@@ -49,6 +49,11 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
     const responseHeaders = new Headers();
     const upstreamType = response.headers.get("content-type");
     if (upstreamType) responseHeaders.set("content-type", upstreamType);
+    if (upstreamType && upstreamType.toLowerCase().startsWith("text/event-stream")) {
+      responseHeaders.set("cache-control", "no-cache, no-transform");
+      responseHeaders.set("connection", "keep-alive");
+      responseHeaders.set("x-accel-buffering", "no");
+    }
     const location = response.headers.get("location");
     if (location) responseHeaders.set("location", location);
     if (!location && response.redirected && response.url) {

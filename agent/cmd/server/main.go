@@ -19,6 +19,8 @@ import (
 	agenthttp "github.com/suryaumapathy2812/core-ai/agent/internal/agent/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
+	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
@@ -162,11 +164,14 @@ func main() {
 
 	// ── HTTP handlers ───────────────────────────────────────────────
 	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
+	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
 	llmHandler := llmhttp.New(llmhttp.Options{
 		Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService,
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService})
+	convHandler.RegisterRoutes(mux)
 	agentHandler := agenthttp.New(store, mediaService)
 	agentHandler.RegisterRoutes(mux)
 
