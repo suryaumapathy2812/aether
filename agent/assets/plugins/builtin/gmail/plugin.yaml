@@ -18,6 +18,16 @@ auth:
       label: Gmail Address
       type: text
       required: false
+    - key: public_base_url
+      label: Public Base URL
+      type: text
+      required: true
+      description: Your server's public URL (e.g., https://your-domain.com). Required for webhooks.
+    - key: pubsub_topic
+      label: Google Pub/Sub Topic
+      type: text
+      required: false
+      description: Google Cloud Pub/Sub topic for Gmail notifications (e.g., projects/my-project/topics/gmail)
 
 webhook:
   protocol: pubsub
@@ -42,3 +52,4 @@ tools:
   - class: AddLabelTool
   - class: RemoveLabelTool
   - class: RefreshGmailTokenTool
+  - class: SetupGmailWatchTool

@@ -144,6 +144,9 @@ echo -e "${GREEN}Environment file created: .env${NC}"
 echo ""
 echo -e "${GREEN}Step 6: Installing Prerequisites${NC}"
 
+# Add Go to PATH (in case it was previously installed)
+export PATH=$PATH:/usr/local/go/bin
+
 # Update package list (ignore errors from third-party repos)
 echo "Updating package list..."
 apt update -qq 2>/dev/null || true
@@ -157,11 +160,18 @@ fi
 
 # Install Go
 if ! command -v go &> /dev/null; then
-    echo "Installing Go..."
+    echo "Installing Go (this may take a minute)..."
     wget -q https://go.dev/dl/go1.22.linux-amd64.tar.gz -O /tmp/go.tar.gz
     tar -C /usr/local -xzf /tmp/go.tar.gz
     rm /tmp/go.tar.gz
+    # Add to system PATH
+    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+    chmod +x /etc/profile.d/go.sh
+    echo "Go installed!"
 fi
+
+# Add Go to PATH for this session
+export PATH=$PATH:/usr/local/go/bin
 
 # Install Docker
 if ! command -v docker &> /dev/null; then

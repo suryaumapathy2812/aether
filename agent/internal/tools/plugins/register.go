@@ -69,6 +69,7 @@ func classConstructors() map[string]func() tools.Tool {
 		"AddLabelTool":                   func() tools.Tool { return &AddLabelTool{} },
 		"RemoveLabelTool":                func() tools.Tool { return &RemoveLabelTool{} },
 		"RefreshGmailTokenTool":          func() tools.Tool { return &RefreshGmailTokenTool{} },
+		"SetupGmailWatchTool":            func() tools.Tool { return &SetupGmailWatchTool{} },
 		"UpcomingEventsTool":             func() tools.Tool { return &UpcomingEventsTool{} },
 		"SearchEventsTool":               func() tools.Tool { return &SearchEventsTool{} },
 		"CreateEventTool":                func() tools.Tool { return &CreateEventTool{} },
