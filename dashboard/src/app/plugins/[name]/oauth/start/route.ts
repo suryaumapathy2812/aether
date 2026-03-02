@@ -6,7 +6,13 @@ export async function GET(
 ) {
   const { name } = await context.params;
   const pluginName = encodeURIComponent(name);
-  const localTarget = new URL(`/api/go/api/plugins/${pluginName}/oauth/start`, request.nextUrl.origin);
+  const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const forwardedProtoRaw = request.headers.get("x-forwarded-proto");
+  const forwardedProto = (forwardedProtoRaw || request.nextUrl.protocol.replace(":", ""))
+    .split(",")[0]
+    .trim();
+  const origin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : request.nextUrl.origin;
+  const localTarget = new URL(`/api/go/api/plugins/${pluginName}/oauth/start`, origin);
   request.nextUrl.searchParams.forEach((value, key) => {
     localTarget.searchParams.append(key, value);
   });
@@ -16,8 +22,10 @@ export async function GET(
   if (cookie) fwdHeaders.set("cookie", cookie);
   const authorization = request.headers.get("authorization");
   if (authorization) fwdHeaders.set("authorization", authorization);
-  fwdHeaders.set("origin", request.nextUrl.origin);
-  fwdHeaders.set("referer", request.nextUrl.origin + `/plugins/${pluginName}`);
+  fwdHeaders.set("origin", origin);
+  fwdHeaders.set("referer", origin + `/plugins/${pluginName}`);
+  if (forwardedHost) fwdHeaders.set("x-forwarded-host", forwardedHost);
+  if (forwardedProto) fwdHeaders.set("x-forwarded-proto", forwardedProto);
 
   let lastError = "Could not start connection. Please try again.";
   try {
@@ -54,7 +62,7 @@ export async function GET(
     lastError = "Could not start connection. Please try again.";
   }
 
-  const fallback = new URL(`/plugins/${pluginName}`, request.nextUrl.origin);
+  const fallback = new URL(`/plugins/${pluginName}`, origin);
   fallback.searchParams.set("error", lastError);
   return NextResponse.redirect(fallback.toString(), 302);
 }
