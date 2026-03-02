@@ -32,6 +32,9 @@ func HTTPStream(client *http.Client, w http.ResponseWriter, incoming *http.Reque
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
 	}
+	// Force chunked transfer encoding for streaming responses
+	w.Header().Del("Content-Length")
+	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(resp.StatusCode)
 	if flusher, ok := w.(http.Flusher); ok {
 		buf := make([]byte, 32*1024)

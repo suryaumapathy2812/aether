@@ -116,6 +116,10 @@ services:
         - "traefik.http.routers.orchestrator.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-suryaumapathyresolver}"
         - "traefik.http.services.orchestrator.loadbalancer.server.port=4000"
         - "traefik.http.routers.orchestrator.priority=100"
+        - "traefik.http.middlewares.orchestrator-streaming.headers.customresponseheaders.X-Accel-Buffering=no"
+        - "traefik.http.middlewares.orchestrator-streaming.headers.customresponseheaders.Cache-Control=no-cache"
+        - "traefik.http.middlewares.orchestrator-streaming.headers.customresponseheaders.Transfer-Encoding=chunked"
+        - "traefik.http.routers.orchestrator.middlewares=orchestrator-streaming"
 
   # --- Dashboard (Next.js) ---
   dashboard:
