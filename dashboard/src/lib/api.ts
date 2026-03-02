@@ -65,6 +65,50 @@ export async function fetchWithAuth(
   });
 }
 
+// ── Orchestrator Direct API ──
+// These functions connect directly to the orchestrator (via same-origin proxy in production).
+// In production, Traefik proxies /api/* to the orchestrator, so we use relative URLs.
+// This avoids hardcoding hostnames that differ between dev/prod.
+
+function getOrchestratorBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    return ""; // Same-origin - Traefik proxies /api/* to orchestrator in production
+  }
+  // SSR fallback
+  return process.env.AGENT_BASE_URL || "http://localhost:4000";
+}
+
+export async function orchestratorFetch(
+  path: string,
+  options?: RequestInit
+): Promise<Response> {
+  const token = getSessionToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const baseUrl = getOrchestratorBaseUrl();
+  return fetch(`${baseUrl}${path}`, { ...options, headers });
+}
+
+export function orchestratorWs(path: string, token?: string): WebSocket {
+  const baseUrl = getOrchestratorBaseUrl();
+  const protocol =
+    typeof window !== "undefined"
+      ? window.location.protocol === "https:"
+        ? "wss:"
+        : "ws:"
+      : "ws:";
+  const host =
+    typeof window !== "undefined" ? window.location.host : "localhost:3000";
+
+  const params = token ? `?token=${encodeURIComponent(token)}` : "";
+  return new WebSocket(`${protocol}//${host}${baseUrl}${path}${params}`);
+}
+
 // ── Typed JSON helper built on fetchWithAuth ──
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
@@ -679,7 +723,7 @@ export function getWsUrl(): string {
   // Same-origin: derive WS URL from current page
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/api/ws?token=${token}`;
+    return `${proto}//${window.location.host}/api/ws/notifications?token=${token}`;
   }
   // SSR fallback
   return `ws://localhost:3000/api/ws?token=${token}`;

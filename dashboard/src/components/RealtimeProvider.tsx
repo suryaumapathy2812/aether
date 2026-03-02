@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { useSession } from "@/lib/auth-client";
+import { orchestratorFetch } from "@/lib/api";
 
 type ChatRole = "user" | "assistant";
 
@@ -37,7 +38,6 @@ interface RealtimeContextValue {
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
-const ORCHESTRATOR_URL = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "";
 
 function randomId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -72,10 +72,6 @@ export default function RealtimeProvider({
   const replacingConnectionRef = useRef(false);
   const currentAssistantIdRef = useRef<string | null>(null);
 
-  const authHeaders = useCallback((): Record<string, string> => {
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }, [token]);
-
   const appendMessage = useCallback((role: ChatRole, text: string): void => {
     setMessages((prev) => [...prev, { id: randomId(role), role, text }]);
   }, []);
@@ -102,12 +98,8 @@ export default function RealtimeProvider({
     async (
       localDescription: RTCSessionDescriptionInit
     ): Promise<{ sdp: string; type: string; pc_id: string }> => {
-      const response = await fetch(`${ORCHESTRATOR_URL}/api/webrtc/offer`, {
+      const response = await orchestratorFetch("/api/webrtc/offer", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders(),
-        },
         body: JSON.stringify({
           sdp: localDescription.sdp,
           type: localDescription.type,
@@ -119,17 +111,13 @@ export default function RealtimeProvider({
       }
       return response.json();
     },
-    [authHeaders]
+    []
   );
 
   const postIce = useCallback(
     async (pcId: string, candidate: RTCIceCandidate): Promise<void> => {
-      await fetch(`${ORCHESTRATOR_URL}/api/webrtc/ice`, {
+      await orchestratorFetch("/api/webrtc/ice", {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders(),
-        },
         body: JSON.stringify({
           pc_id: pcId,
           candidates: [
@@ -142,15 +130,12 @@ export default function RealtimeProvider({
         }),
       });
     },
-    [authHeaders]
+    []
   );
 
   const waitForAgentReady = useCallback(async (): Promise<void> => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const response = await fetch(`${ORCHESTRATOR_URL}/api/agent/ready`, {
-        method: "GET",
-        headers: authHeaders(),
-      });
+      const response = await orchestratorFetch("/api/agent/ready");
 
       if (response.ok) {
         const body = (await response.json()) as { ready?: boolean };
@@ -160,7 +145,7 @@ export default function RealtimeProvider({
       await sleep(Math.min(400 * 2 ** attempt, 2500));
     }
     throw new Error("agent unavailable");
-  }, [authHeaders]);
+  }, []);
 
   const disconnectPeer = useCallback(async (sendStop: boolean): Promise<void> => {
     if (reconnectTimerRef.current !== null) {

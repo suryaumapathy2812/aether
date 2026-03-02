@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
-import { listAgentTasks, type AgentTask } from "@/lib/api";
+import { listAgentTasks, orchestratorWs, type AgentTask } from "@/lib/api";
 
 // ── Types ──
 
@@ -37,10 +37,6 @@ interface NotificationContextValue {
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
-// ── Constants ──
-
-const WS_BASE =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_WS_URL || "ws://localhost:4000";
 const MAX_NOTIFICATIONS = 100;
 const PING_INTERVAL = 25_000;
 const APPROVALS_POLL_INTERVAL = 10_000;
@@ -274,43 +270,35 @@ export default function NotificationProvider({
         wsRef.current = null;
       }
 
-      const params = new URLSearchParams();
-      if (token) params.set("token", token);
-      const url = `${WS_BASE}/api/ws/notifications?${params.toString()}`;
+      const socket = orchestratorWs("/api/ws/notifications", token || undefined);
+      wsRef.current = socket;
 
-      try {
-        const socket = new WebSocket(url);
-        wsRef.current = socket;
-
-        socket.onopen = () => {
-          setConnected(true);
-          reconnectAttemptsRef.current = 0;
-          if (pingTimerRef.current) clearInterval(pingTimerRef.current);
-          pingTimerRef.current = setInterval(() => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "ping" }));
-            }
-          }, PING_INTERVAL);
-        };
-
-        socket.onclose = () => {
-          setConnected(false);
-          wsRef.current = null;
-          if (pingTimerRef.current) {
-            clearInterval(pingTimerRef.current);
-            pingTimerRef.current = null;
+      socket.onopen = () => {
+        setConnected(true);
+        reconnectAttemptsRef.current = 0;
+        if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+        pingTimerRef.current = setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "ping" }));
           }
-          scheduleReconnect();
-        };
+        }, PING_INTERVAL);
+      };
 
-        socket.onerror = () => {};
-
-        socket.onmessage = (event) => {
-          handleWsMessage(event.data);
-        };
-      } catch {
+      socket.onclose = () => {
+        setConnected(false);
+        wsRef.current = null;
+        if (pingTimerRef.current) {
+          clearInterval(pingTimerRef.current);
+          pingTimerRef.current = null;
+        }
         scheduleReconnect();
-      }
+      };
+
+      socket.onerror = () => {};
+
+      socket.onmessage = (event) => {
+        handleWsMessage(event.data);
+      };
     }
 
     openSocket();
