@@ -1,19 +1,49 @@
-:3000 {
-  reverse_proxy dashboard:3000 {
+# Aether Caddy Configuration
+#
+# Usage:
+#   Development: CADDY_ENV=dev caddy run --config Caddyfile
+#   Production:  CADDY_ENV=prod caddy run --config Caddyfile
+#
+# Or run via Docker:
+#   docker run -d --name caddy -p 80:80 -p 443:443 \
+#     -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile \
+#     -v caddy_data:/data \
+#     caddy:latest
+
+{$CADDY_ENV:dev} {
+    # Handle WebSocket connections first
+    @ws {
+        path /api/ws*
+    }
+
+    @api {
+        path /api/*
+    }
+
+    @dashboard {
+        not @api
+    }
+
+    # Dashboard (Next.js)
+    reverse_proxy @dashboard localhost:3000 {
+        header_up X-Forwarded-Proto "https"
+        header_up X-Forwarded-Host {host}
+    }
+
+    # API to Orchestrator (Go)
+    reverse_proxy @api localhost:4000
+    reverse_proxy @ws localhost:4000
+
+    # Disable buffering for SSE/WebSocket
     flush_interval -1
-  }
-  header {
-    Cache-Control "no-cache, no-transform"
-    X-Accel-Buffering "no"
-  }
+
+    # Log format
+    log {
+        output file /var/log/caddy/access.log
+    }
 }
 
-:3080 {
-  reverse_proxy orchestrator:4000 {
-    flush_interval -1
-  }
-  header {
-    Cache-Control "no-cache, no-transform"
-    X-Accel-Buffering "no"
-  }
+# Redirect www to non-www (production only)
+www.{$DOMAIN:localhost} {
+    redir https://{$DOMAIN:localhost}{uri}
 }
