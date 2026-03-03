@@ -18,16 +18,6 @@ auth:
       label: Gmail Address
       type: text
       required: false
-    - key: public_base_url
-      label: Public Base URL
-      type: text
-      required: false
-      description: Your server's public URL. Set via AETHER_PUBLIC_BASE_URL env var.
-    - key: pubsub_topic
-      label: Google Pub/Sub Topic
-      type: text
-      required: false
-      description: Google Cloud Pub/Sub topic. Set via GOOGLE_CLOUD_PROJECT env var.
 
 webhook:
   protocol: pubsub
