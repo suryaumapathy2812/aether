@@ -299,9 +299,16 @@ echo "Installing common packages..."
 apt install -y -qq curl wget unzip zip git jq build-essential ca-certificates
 
 # Install Bun (JavaScript runtime) - fallback to node if bun fails
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
 if ! command -v bun &> /dev/null; then
     echo "Installing Bun..."
-    if ! curl -fsSL https://bun.sh/install | bash 2>/dev/null; then
+    curl -fsSL https://bun.sh/install | bash
+    # Verify installation
+    if [ -f "$BUN_INSTALL/bin/bun" ]; then
+        echo "Bun installed successfully!"
+    else
         echo "Bun install failed, falling back to Node.js..."
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
         apt install -y -qq nodejs
@@ -421,6 +428,9 @@ echo -e "${GREEN}Step 9: Building Dashboard${NC}"
 cd "$AETHER_DIR/dashboard"
 
 # Use bun if available, otherwise npm
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
 if command -v bun &> /dev/null; then
     echo "Building with Bun..."
     bun install
