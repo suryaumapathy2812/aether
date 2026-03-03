@@ -14,8 +14,8 @@ module.exports = {
     // Dashboard (Next.js)
     {
       name: 'aether-dashboard',
-      script: 'node',
-      args: '.next/standalone/server.js',
+      script: '.next/standalone/server.js',
+      interpreter: 'node',
       cwd: '/opt/aether/dashboard',
       instances: 1,
       exec_mode: 'fork',
