@@ -294,6 +294,10 @@ export PATH=$PATH:/usr/local/go/bin
 echo "Updating package list..."
 apt update -qq 2>/dev/null || true
 
+# Install common packages needed for builds
+echo "Installing common packages..."
+apt install -y -qq curl wget unzip zip git jq build-essential ca-certificates
+
 # Install Bun (JavaScript runtime)
 if ! command -v bun &> /dev/null; then
     echo "Installing Bun..."
