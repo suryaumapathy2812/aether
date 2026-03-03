@@ -433,6 +433,8 @@ cd "$AETHER_DIR/dashboard"
 
 # Use npm (bun has SIGBUS issues on some VPS environments)
 echo "Building with npm..."
+# Limit memory and disable SWC to reduce memory usage
+export NODE_OPTIONS="--max-old-space-size=2048"
 npm install
 npm run build
 
