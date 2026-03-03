@@ -17,9 +17,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default values (will be overridden by .env if present)
+# Default values (will be overridden by .env.example or .env if present)
 DEFAULT_DOMAIN="aether.suryaumapathy.in"
-DEFAULT_OPENAI_BASE_URL="https://api.openai.com/v1"
+DEFAULT_OPENAI_BASE_URL="https://openrouter.ai/api/v1"
+DEFAULT_OPENAI_MODEL="google/gemini-2.5-flash"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}     Aether Setup Script            ${NC}"
@@ -32,14 +33,24 @@ if [ "$EUID" -eq 0 ]; then
     echo ""
 fi
 
-# Load existing .env if present
+# Determine Aether directory
 AETHER_DIR="/opt/aether"
 ENV_FILE="$AETHER_DIR/.env"
+ENV_EXAMPLE="$AETHER_DIR/docker/.env.example"
 
+# Load .env.example first (provides base defaults)
+if [ -f "$ENV_EXAMPLE" ]; then
+    echo -e "${GREEN}Loading defaults from $ENV_EXAMPLE${NC}"
+    set -a
+    source "$ENV_EXAMPLE"
+    set +a
+fi
+
+# Load existing .env if present (overrides .env.example)
 if [ -f "$ENV_FILE" ]; then
     echo -e "${GREEN}Found existing .env file at $ENV_FILE${NC}"
     echo "Loading existing configuration..."
-    set -a  # Auto-export
+    set -a
     source "$ENV_FILE"
     set +a
 fi
@@ -163,6 +174,7 @@ echo ""
 echo -e "${GREEN}Step 4: OpenAI Configuration${NC}"
 prompt_with_default "Enter your OpenAI API key:" "OPENAI_API_KEY" "" "no"
 prompt_with_default "Enter OpenAI Base URL:" "OPENAI_BASE_URL" "$DEFAULT_OPENAI_BASE_URL" "no"
+prompt_with_default "Enter OpenAI Model:" "OPENAI_MODEL" "$DEFAULT_OPENAI_MODEL" "no"
 
 # ============================================
 # Step 5: OAuth Configuration
@@ -206,8 +218,8 @@ BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
 AGENT_SECRET=$AGENT_SECRET
 
 OPENAI_API_KEY=$OPENAI_API_KEY
-OPENAI_BASE_URL=$OPENAI_BASE_URL
-OPENAI_MODEL=
+OPENAI_BASE_URL=${OPENAI_BASE_URL:-$DEFAULT_OPENAI_BASE_URL}
+OPENAI_MODEL=${OPENAI_MODEL:-$DEFAULT_OPENAI_MODEL}
 
 # =============================================================================
 # DEFAULTS

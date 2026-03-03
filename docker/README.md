@@ -66,6 +66,8 @@ docker/
 The interactive setup script handles everything:
 
 ```bash
+mkdir /opt/aether
+git clone https://github.com/suryaumapathy2812/aether.git /opt/aether
 cd /opt/aether
 chmod +x docker/setup.sh
 ./docker/setup.sh
