@@ -364,8 +364,12 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 	userRoot := filepath.Join(m.cfg.AssetsRoot, userID)
 	stateDBHostPath := filepath.Join(userRoot, "state.db")
 	workspaceHostPath := filepath.Join(userRoot, "workspace")
-	if err := os.MkdirAll(workspaceHostPath, 0o755); err != nil {
-		return "", err
+	skillsUserHostPath := filepath.Join(userRoot, "skills", "user")
+	skillsExtHostPath := filepath.Join(userRoot, "skills", "external")
+	for _, d := range []string{workspaceHostPath, skillsUserHostPath, skillsExtHostPath} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return "", err
+		}
 	}
 	// Touch state.db if it doesn't exist — Docker would create it as a
 	// directory otherwise, which breaks SQLite.
@@ -442,6 +446,8 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 			Mounts: []mount.Mount{
 				{Type: mount.TypeBind, Source: stateDBHostPath, Target: "/app/assets/state.db"},
 				{Type: mount.TypeBind, Source: workspaceHostPath, Target: "/app/assets/workspace"},
+				{Type: mount.TypeBind, Source: skillsUserHostPath, Target: "/app/assets/skills/user"},
+				{Type: mount.TypeBind, Source: skillsExtHostPath, Target: "/app/assets/skills/external"},
 			},
 		},
 		&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{m.cfg.Network: {}}},
