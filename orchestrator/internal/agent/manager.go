@@ -361,9 +361,20 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 		env = append(env, "AGENT_STATE_KEY="+strings.TrimSpace(m.cfg.AgentStateKey))
 	}
 	m.ensureAssetsRoot()
-	assetsHostPath := filepath.Join(m.cfg.AssetsRoot, userID, "assets")
-	if err := os.MkdirAll(assetsHostPath, 0o755); err != nil {
+	userRoot := filepath.Join(m.cfg.AssetsRoot, userID)
+	stateDBHostPath := filepath.Join(userRoot, "state.db")
+	workspaceHostPath := filepath.Join(userRoot, "workspace")
+	if err := os.MkdirAll(workspaceHostPath, 0o755); err != nil {
 		return "", err
+	}
+	// Touch state.db if it doesn't exist — Docker would create it as a
+	// directory otherwise, which breaks SQLite.
+	if _, err := os.Stat(stateDBHostPath); os.IsNotExist(err) {
+		f, err := os.Create(stateDBHostPath)
+		if err != nil {
+			return "", err
+		}
+		f.Close()
 	}
 	env = append(env, "AGENT_ASSETS_DIR=/app/assets")
 	if strings.TrimSpace(m.cfg.VapidPublic) != "" {
@@ -426,9 +437,12 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 			Labels: map[string]string{"managed-by": "aether-orchestrator", "user-id": userID},
 		},
 		&container.HostConfig{
-			// Each user gets a dedicated persistent assets path at /app/assets.
-			// This keeps state.db across container restarts/reprovisioning.
-			Mounts: []mount.Mount{{Type: mount.TypeBind, Source: assetsHostPath, Target: "/app/assets"}},
+			// Mount only what needs to persist across container restarts.
+			// Builtins (plugins/builtin, skills/builtin, PROMPT.md) come from the image.
+			Mounts: []mount.Mount{
+				{Type: mount.TypeBind, Source: stateDBHostPath, Target: "/app/assets/state.db"},
+				{Type: mount.TypeBind, Source: workspaceHostPath, Target: "/app/assets/workspace"},
+			},
 		},
 		&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{m.cfg.Network: {}}},
 		nil,
