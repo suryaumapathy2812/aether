@@ -433,10 +433,17 @@ cd "$AETHER_DIR/dashboard"
 
 # Use npm (bun has SIGBUS issues on some VPS environments)
 echo "Building with npm..."
-# Limit memory and disable SWC to reduce memory usage
+# Limit memory to reduce memory usage
 export NODE_OPTIONS="--max-old-space-size=2048"
 npm install
 npm run build
+
+# For standalone build, copy public and static folders to the standalone output
+if [ -d ".next/standalone" ]; then
+    echo "Copying static files for standalone build..."
+    cp -r public .next/standalone/ 2>/dev/null || true
+    cp -r .next/static .next/standalone/ 2>/dev/null || true
+fi
 
 # Push Prisma schema to database (creates tables for auth, API keys, etc.)
 echo "Running database migrations..."
