@@ -298,10 +298,14 @@ apt update -qq 2>/dev/null || true
 echo "Installing common packages..."
 apt install -y -qq curl wget unzip zip git jq build-essential ca-certificates
 
-# Install Bun (JavaScript runtime)
+# Install Bun (JavaScript runtime) - fallback to node if bun fails
 if ! command -v bun &> /dev/null; then
     echo "Installing Bun..."
-    curl -fsSL https://bun.sh/install | bash
+    if ! curl -fsSL https://bun.sh/install | bash 2>/dev/null; then
+        echo "Bun install failed, falling back to Node.js..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
+        apt install -y -qq nodejs
+    fi
 fi
 
 # Ensure bun is in PATH
@@ -368,9 +372,14 @@ elif [ -n "$DOCKERHUB_USERNAME" ]; then
     docker login -u "$DOCKERHUB_USERNAME"
 fi
 
-# Install PM2
+# Install PM2 (requires npm)
 if ! command -v pm2 &> /dev/null; then
     echo "Installing PM2..."
+    # Ensure npm is available (install node if needed)
+    if ! command -v npm &> /dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
+        apt install -y -qq nodejs
+    fi
     npm install -g pm2
 fi
 
@@ -411,12 +420,25 @@ echo -e "${GREEN}Docker services started!${NC}"
 echo ""
 echo -e "${GREEN}Step 9: Building Dashboard${NC}"
 cd "$AETHER_DIR/dashboard"
-bun install
-bun run build
+
+# Use bun if available, otherwise npm
+if command -v bun &> /dev/null; then
+    echo "Building with Bun..."
+    bun install
+    bun run build
+else
+    echo "Building with npm..."
+    npm install
+    npm run build
+fi
 
 # Push Prisma schema to database (creates tables for auth, API keys, etc.)
 echo "Running database migrations..."
-bunx prisma db push
+if command -v bun &> /dev/null; then
+    bunx prisma db push
+else
+    npx prisma db push
+fi
 
 # ============================================
 # Step 10: Build Orchestrator
