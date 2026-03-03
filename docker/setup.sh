@@ -309,9 +309,9 @@ if ! command -v bun &> /dev/null; then
 fi
 
 # Ensure bun is in PATH
-if [ -f "$HOME/.bun/bin/bun" ]; then
-    export PATH="$HOME/.bun/bin:$PATH"
-fi
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
 if ! command -v go &> /dev/null; then
     echo "Installing Go..."
     # Try adding Go repository
@@ -384,9 +384,8 @@ if ! command -v pm2 &> /dev/null; then
 fi
 
 # Ensure bun is in PATH
-if [ -f "$HOME/.bun/bin/bun" ]; then
-    export PATH="$HOME/.bun/bin:$PATH"
-fi
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Docker Compose is included in docker-compose-plugin (installed with Docker above)
 
