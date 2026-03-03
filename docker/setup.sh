@@ -305,8 +305,12 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 if ! command -v bun &> /dev/null; then
     echo "Installing Bun..."
     curl -fsSL https://bun.sh/install | bash
+    # Source bashrc to load bun path
+    if [ -f "$HOME/.bashrc" ]; then
+        source "$HOME/.bashrc"
+    fi
     # Verify installation
-    if [ -f "$BUN_INSTALL/bin/bun" ]; then
+    if command -v bun &> /dev/null; then
         echo "Bun installed successfully!"
     else
         echo "Bun install failed, falling back to Node.js..."
