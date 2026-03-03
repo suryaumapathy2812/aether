@@ -431,27 +431,14 @@ echo ""
 echo -e "${GREEN}Step 9: Building Dashboard${NC}"
 cd "$AETHER_DIR/dashboard"
 
-# Use bun if available, otherwise npm
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
-
-if command -v bun &> /dev/null; then
-    echo "Building with Bun..."
-    bun install
-    bun run build
-else
-    echo "Building with npm..."
-    npm install
-    npm run build
-fi
+# Use npm (bun has SIGBUS issues on some VPS environments)
+echo "Building with npm..."
+npm install
+npm run build
 
 # Push Prisma schema to database (creates tables for auth, API keys, etc.)
 echo "Running database migrations..."
-if command -v bun &> /dev/null; then
-    bunx prisma db push
-else
-    npx prisma db push
-fi
+npx prisma db push
 
 # ============================================
 # Step 10: Build Orchestrator
