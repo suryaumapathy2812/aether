@@ -294,14 +294,16 @@ export PATH=$PATH:/usr/local/go/bin
 echo "Updating package list..."
 apt update -qq 2>/dev/null || true
 
-# Install Node.js
-if ! command -v node &> /dev/null; then
-    echo "Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
-    apt install -y -qq nodejs
+# Install Bun (JavaScript runtime)
+if ! command -v bun &> /dev/null; then
+    echo "Installing Bun..."
+    curl -fsSL https://bun.sh/install | bash
 fi
 
-# Install Go (use official Go repo)
+# Ensure bun is in PATH
+if [ -f "$HOME/.bun/bin/bun" ]; then
+    export PATH="$HOME/.bun/bin:$PATH"
+fi
 if ! command -v go &> /dev/null; then
     echo "Installing Go..."
     # Try adding Go repository
@@ -368,6 +370,11 @@ if ! command -v pm2 &> /dev/null; then
     npm install -g pm2
 fi
 
+# Ensure bun is in PATH
+if [ -f "$HOME/.bun/bin/bun" ]; then
+    export PATH="$HOME/.bun/bin:$PATH"
+fi
+
 # Docker Compose is included in docker-compose-plugin (installed with Docker above)
 
 # Determine docker compose command (v2 plugin vs v1)
@@ -400,12 +407,12 @@ echo -e "${GREEN}Docker services started!${NC}"
 echo ""
 echo -e "${GREEN}Step 9: Building Dashboard${NC}"
 cd "$AETHER_DIR/dashboard"
-npm install
-npm run build
+bun install
+bun run build
 
 # Push Prisma schema to database (creates tables for auth, API keys, etc.)
 echo "Running database migrations..."
-npx prisma db push
+bunx prisma db push
 
 # ============================================
 # Step 10: Build Orchestrator
