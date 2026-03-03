@@ -301,24 +301,25 @@ if ! command -v node &> /dev/null; then
     apt install -y -qq nodejs
 fi
 
-# Install Go (use official PPA for latest version)
+# Install Go (use official Go repo)
 if ! command -v go &> /dev/null; then
     echo "Installing Go..."
-    # Add Go PPA for latest version
-    add-apt-repository -y ppa:ubuntu-layers/go-1.26 2>/dev/null || \
-    (wget -q "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -O /tmp/go.tar.gz && \
-     tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz)
+    # Try adding Go repository
+    if command -v add-apt-repository &> /dev/null; then
+        add-apt-repository -y ppa:ubuntu-layers/go-1.26 2>/dev/null || true
+        apt update -qq 2>/dev/null || true
+        apt install -y -qq golang-go 2>/dev/null || true
+    fi
     
-    if command -v go &> /dev/null; then
-        echo "Go installed!"
-    else
-        # Fallback: download manually
+    # Fallback: download manually if apt failed
+    if ! command -v go &> /dev/null; then
         wget -q "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -O /tmp/go.tar.gz
         tar -C /usr/local -xzf /tmp/go.tar.gz
         rm /tmp/go.tar.gz
         echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
         chmod +x /etc/profile.d/go.sh
     fi
+    echo "Go installed!"
 fi
 
 # Add Go to PATH for this session
@@ -367,12 +368,7 @@ if ! command -v pm2 &> /dev/null; then
     npm install -g pm2
 fi
 
-# Docker Compose comes with docker-compose-plugin in the Docker repo above
-# But ensure it's available anyway
-if ! command -v docker compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
-    echo "Installing Docker Compose..."
-    apt install -y -qq docker-compose-v2
-fi
+# Docker Compose is included in docker-compose-plugin (installed with Docker above)
 
 # Determine docker compose command (v2 plugin vs v1)
 DOCKER_COMPOSE="docker compose"
