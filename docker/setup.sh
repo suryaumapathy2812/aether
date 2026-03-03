@@ -301,16 +301,18 @@ if ! command -v node &> /dev/null; then
     apt install -y -qq nodejs
 fi
 
+GO_VERSION="1.26.0"
+
 # Install Go
 if ! command -v go &> /dev/null; then
-    echo "Installing Go (this may take a minute)..."
-    wget -q https://go.dev/dl/go1.22.linux-amd64.tar.gz -O /tmp/go.tar.gz
+    echo "Installing Go $GO_VERSION (this may take a minute)..."
+    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
     tar -C /usr/local -xzf /tmp/go.tar.gz
     rm /tmp/go.tar.gz
     # Add to system PATH
     echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
     chmod +x /etc/profile.d/go.sh
-    echo "Go installed!"
+    echo "Go $GO_VERSION installed!"
 fi
 
 # Add Go to PATH for this session
@@ -320,7 +322,16 @@ export PATH=$PATH:/usr/local/go/bin
 if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
     curl -fsSL https://get.docker.com | sh
-    usermod -aG docker $USER
+fi
+
+# Ensure docker is running and enabled
+if command -v docker &> /dev/null; then
+    systemctl enable docker 2>/dev/null || true
+    systemctl start docker 2>/dev/null || true
+    # Add user to docker group if not already
+    if [ -n "$USER" ] && ! groups $USER | grep -q docker; then
+        usermod -aG docker $USER 2>/dev/null || true
+    fi
 fi
 
 # Login to Docker Hub (needed to avoid rate limits)
@@ -343,13 +354,19 @@ if ! command -v pm2 &> /dev/null; then
     npm install -g pm2
 fi
 
-# Install Docker Compose
+# Install Docker Compose (v2 plugin or v1 standalone)
 if ! command -v docker compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
     echo "Installing Docker Compose..."
-    apt install -y -qq docker-compose-v2
+    # Try installing docker-compose-v2 package first (available on Ubuntu 24.04+)
+    apt install -y -qq docker-compose-v2 2>/dev/null || true
+    # If that didn't work, install docker-compose v1 as fallback
+    if ! command -v docker compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
+        curl -fsSL "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+    fi
 fi
 
-# Determine docker compose command (v1 vs v2)
+# Determine docker compose command (v2 plugin vs v1)
 DOCKER_COMPOSE="docker compose"
 if ! command -v docker compose &> /dev/null; then
     DOCKER_COMPOSE="docker-compose"
