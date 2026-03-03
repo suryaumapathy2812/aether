@@ -193,40 +193,73 @@ if [ -z "$DATABASE_URL" ]; then
     DATABASE_URL="postgresql://aether:${POSTGRES_PASSWORD}@localhost:5432/aether"
 fi
 
-# Save to .env
+# Save to .env (complete config — matches docker/.env.example)
 cat > "$ENV_FILE" << EOF
-# === DOMAIN ===
+# =============================================================================
+# REQUIRED
+# =============================================================================
+
 DOMAIN=$DOMAIN
 
-# === DATABASE ===
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
+AGENT_SECRET=$AGENT_SECRET
+
+OPENAI_API_KEY=$OPENAI_API_KEY
+OPENAI_BASE_URL=$OPENAI_BASE_URL
+OPENAI_MODEL=
+
+# =============================================================================
+# DEFAULTS
+# =============================================================================
+
+POSTGRES_DB=aether
+POSTGRES_USER=aether
 DATABASE_URL=$DATABASE_URL
 
-# === AUTH ===
-BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
 BETTER_AUTH_URL=https://$DOMAIN
 BETTER_AUTH_TRUSTED_ORIGINS=https://$DOMAIN
 
-# === AGENT ===
-AGENT_SECRET=$AGENT_SECRET
+AGENT_IMAGE=suryaumapathy2812/aether-agent:latest
 AGENT_NETWORK=aether_internal
+AGENT_IDLE_TIMEOUT=1800
+AGENT_HEALTH_TIMEOUT=30
+AGENT_PORT=8000
+AGENT_ASSETS_ROOT=/var/lib/aether/agents
 
-# === LLM ===
-OPENAI_API_KEY=$OPENAI_API_KEY
-OPENAI_BASE_URL=$OPENAI_BASE_URL
-
-# === S3/MinIO ===
 S3_ACCESS_KEY_ID=minioadmin
 S3_SECRET_ACCESS_KEY=$S3_SECRET
 S3_ENDPOINT=http://aether-minio:9000
+S3_BUCKET=
+S3_BUCKET_TEMPLATE=core-ai-media-{user}
+S3_REGION=us-east-1
+S3_PUBLIC_BASE_URL=
+S3_FORCE_PATH_STYLE=true
+S3_PUT_URL_TTL_SECONDS=300
+S3_GET_URL_TTL_SECONDS=900
 
-# === OAUTH ===
+AGENT_UPDATE_REPO=suryaumapathy2812/aether
+AGENT_UPDATE_TOKEN=
+AGENT_STATE_KEY=
+
+AETHER_AUTO_ASSIGN_FIRST_AGENT=true
+AETHER_DEFAULT_AGENT_ID=
+
+DOZZLE_PORT=8080
+
+# =============================================================================
+# OPTIONAL
+# =============================================================================
+
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=
+
 GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
 SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID
 SPOTIFY_CLIENT_SECRET=$SPOTIFY_CLIENT_SECRET
 
-# === DOCKER ===
 DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME
 EOF
 
