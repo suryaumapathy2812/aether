@@ -21,16 +21,17 @@ auth:
     - key: public_base_url
       label: Public Base URL
       type: text
-      required: true
-      description: Your server's public URL (e.g., https://your-domain.com). Required for webhooks.
+      required: false
+      description: Your server's public URL. Set via AETHER_PUBLIC_BASE_URL env var.
     - key: pubsub_topic
       label: Google Pub/Sub Topic
       type: text
       required: false
-      description: Google Cloud Pub/Sub topic for Gmail notifications (e.g., projects/my-project/topics/gmail)
+      description: Google Cloud Pub/Sub topic. Set via GOOGLE_CLOUD_PROJECT env var.
 
 webhook:
   protocol: pubsub
+  pubsub_topic: aether-gmail
   setup_tool: setup_gmail_watch
   handle_tool: handle_gmail_event
   renew_interval: 518400

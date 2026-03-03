@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -318,6 +319,7 @@ func (t *SetupGmailWatchTool) Execute(ctx context.Context, call tools.Call) tool
 		return tools.Fail("Gmail is not connected: "+err.Error(), nil)
 	}
 
+	// Topic: config → GOOGLE_CLOUD_PROJECT env + hardcoded topic name → error
 	topicName, _ := call.Args["pubsub_topic"].(string)
 	if topicName == "" {
 		topicName = cfg["pubsub_topic"]
@@ -326,15 +328,25 @@ func (t *SetupGmailWatchTool) Execute(ctx context.Context, call tools.Call) tool
 		topicName = cfg["gmail_topic"]
 	}
 	if topicName == "" {
-		return tools.Fail("Missing pubsub_topic. Provide it as parameter or configure 'pubsub_topic' in plugin settings.", nil)
+		projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+		if projectID != "" {
+			topicName = "projects/" + strings.Trim(projectID, "/") + "/topics/aether-gmail"
+		}
+	}
+	if topicName == "" {
+		return tools.Fail("GOOGLE_CLOUD_PROJECT not configured. Set the environment variable to your Google Cloud project ID.", nil)
 	}
 
+	// Public base URL: config → AETHER_PUBLIC_BASE_URL env → error
 	publicBaseURL := cfg["public_base_url"]
 	if publicBaseURL == "" {
 		publicBaseURL = cfg["base_url"]
 	}
 	if publicBaseURL == "" {
-		return tools.Fail("Missing public_base_url in plugin config. Configure your server URL in plugin settings.", nil)
+		publicBaseURL = os.Getenv("AETHER_PUBLIC_BASE_URL")
+	}
+	if publicBaseURL == "" {
+		return tools.Fail("AETHER_PUBLIC_BASE_URL not configured. Set the environment variable.", nil)
 	}
 
 	webhookURL := strings.TrimRight(publicBaseURL, "/") + "/api/hooks/pubsub/gmail"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -147,6 +148,7 @@ func (t *SetupCalendarWatchTool) Execute(ctx context.Context, call tools.Call) t
 		return tools.Fail("Google Calendar is not connected: "+err.Error(), nil)
 	}
 
+	// Topic: config → GOOGLE_CLOUD_PROJECT env + hardcoded topic name → error
 	topicName, _ := call.Args["pubsub_topic"].(string)
 	if topicName == "" {
 		topicName = cfg["pubsub_topic"]
@@ -155,15 +157,25 @@ func (t *SetupCalendarWatchTool) Execute(ctx context.Context, call tools.Call) t
 		topicName = cfg["calendar_topic"]
 	}
 	if topicName == "" {
-		return tools.Fail("Missing pubsub_topic. Provide as parameter or configure in plugin settings.", nil)
+		projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+		if projectID != "" {
+			topicName = "projects/" + strings.Trim(projectID, "/") + "/topics/aether-calendar"
+		}
+	}
+	if topicName == "" {
+		return tools.Fail("GOOGLE_CLOUD_PROJECT not configured. Set the environment variable to your Google Cloud project ID.", nil)
 	}
 
+	// Public base URL: config → AETHER_PUBLIC_BASE_URL env → error
 	publicBaseURL := cfg["public_base_url"]
 	if publicBaseURL == "" {
 		publicBaseURL = cfg["base_url"]
 	}
 	if publicBaseURL == "" {
-		return tools.Fail("Missing public_base_url in plugin config.", nil)
+		publicBaseURL = os.Getenv("AETHER_PUBLIC_BASE_URL")
+	}
+	if publicBaseURL == "" {
+		return tools.Fail("AETHER_PUBLIC_BASE_URL not configured. Set the environment variable.", nil)
 	}
 
 	webhookURL := strings.TrimRight(publicBaseURL, "/") + "/api/hooks/pubsub/google-calendar"
