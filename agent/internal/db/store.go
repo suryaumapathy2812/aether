@@ -201,7 +201,7 @@ func OpenInAssets(assetsDir, stateKey string) (*Store, error) {
 	if assetsDir == "" {
 		return nil, fmt.Errorf("assets directory is required")
 	}
-	return Open(filepath.Join(assetsDir, "state.db"), stateKey)
+	return Open(filepath.Join(assetsDir, "db", "state.db"), stateKey)
 }
 
 func (s *Store) Close() error {

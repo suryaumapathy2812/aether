@@ -362,23 +362,14 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 	}
 	m.ensureAssetsRoot()
 	userRoot := filepath.Join(m.cfg.AssetsRoot, userID)
-	stateDBHostPath := filepath.Join(userRoot, "state.db")
+	dbHostPath := filepath.Join(userRoot, "db")
 	workspaceHostPath := filepath.Join(userRoot, "workspace")
 	skillsUserHostPath := filepath.Join(userRoot, "skills", "user")
 	skillsExtHostPath := filepath.Join(userRoot, "skills", "external")
-	for _, d := range []string{workspaceHostPath, skillsUserHostPath, skillsExtHostPath} {
+	for _, d := range []string{dbHostPath, workspaceHostPath, skillsUserHostPath, skillsExtHostPath} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", err
 		}
-	}
-	// Touch state.db if it doesn't exist — Docker would create it as a
-	// directory otherwise, which breaks SQLite.
-	if _, err := os.Stat(stateDBHostPath); os.IsNotExist(err) {
-		f, err := os.Create(stateDBHostPath)
-		if err != nil {
-			return "", err
-		}
-		f.Close()
 	}
 	env = append(env, "AGENT_ASSETS_DIR=/app/assets")
 	if strings.TrimSpace(m.cfg.VapidPublic) != "" {
@@ -444,7 +435,7 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 			// Mount only what needs to persist across container restarts.
 			// Builtins (plugins/builtin, skills/builtin, PROMPT.md) come from the image.
 			Mounts: []mount.Mount{
-				{Type: mount.TypeBind, Source: stateDBHostPath, Target: "/app/assets/state.db"},
+				{Type: mount.TypeBind, Source: dbHostPath, Target: "/app/assets/db"},
 				{Type: mount.TypeBind, Source: workspaceHostPath, Target: "/app/assets/workspace"},
 				{Type: mount.TypeBind, Source: skillsUserHostPath, Target: "/app/assets/skills/user"},
 				{Type: mount.TypeBind, Source: skillsExtHostPath, Target: "/app/assets/skills/external"},
