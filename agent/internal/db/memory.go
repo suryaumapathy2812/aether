@@ -434,6 +434,121 @@ func (s *Store) ListDecisions(ctx context.Context, userID, category string, acti
 	return out, rows.Err()
 }
 
+// FactRecord represents a stored fact with its ID.
+type FactRecord struct {
+	ID      int64
+	Fact    string
+	FactKey string
+}
+
+// ListFacts returns all facts for a user with their IDs and keys.
+func (s *Store) ListFacts(ctx context.Context, userID string) ([]FactRecord, error) {
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, fact, fact_key FROM facts WHERE user_id = ? ORDER BY updated_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FactRecord{}
+	for rows.Next() {
+		var rec FactRecord
+		if err := rows.Scan(&rec.ID, &rec.Fact, &rec.FactKey); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// DeleteFact deletes a fact by ID.
+func (s *Store) DeleteFact(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, id)
+	return err
+}
+
+// DeleteMemory deletes a memory by ID.
+func (s *Store) DeleteMemory(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM memories WHERE id = ?`, id)
+	return err
+}
+
+// DeleteDecision deletes a decision by ID.
+func (s *Store) DeleteDecision(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM decisions WHERE id = ?`, id)
+	return err
+}
+
+// MergeEntities merges the source entity into the target entity.
+// It moves all observations, interactions, and relations from source to target,
+// adds the source name as an alias on the target, then deletes the source.
+func (s *Store) MergeEntities(ctx context.Context, targetID, sourceID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store unavailable")
+	}
+	if targetID == sourceID {
+		return nil
+	}
+
+	// Move observations: update entity_id, handle key conflicts by deleting dupes.
+	_, _ = s.db.ExecContext(ctx, `
+		DELETE FROM entity_observations
+		WHERE entity_id = ? AND observation_key IN (
+			SELECT observation_key FROM entity_observations WHERE entity_id = ?
+		)
+	`, sourceID, targetID)
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE entity_observations SET entity_id = ? WHERE entity_id = ?
+	`, targetID, sourceID)
+
+	// Move interactions.
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE entity_interactions SET entity_id = ? WHERE entity_id = ?
+	`, targetID, sourceID)
+
+	// Move relations: update source_entity_id and target_entity_id references.
+	// Delete any that would create self-referencing or duplicate relations.
+	_, _ = s.db.ExecContext(ctx, `
+		DELETE FROM entity_relations
+		WHERE source_entity_id = ? AND target_entity_id = ?
+	`, sourceID, targetID)
+	_, _ = s.db.ExecContext(ctx, `
+		DELETE FROM entity_relations
+		WHERE source_entity_id = ? AND target_entity_id = ?
+	`, targetID, sourceID)
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE OR IGNORE entity_relations SET source_entity_id = ? WHERE source_entity_id = ?
+	`, targetID, sourceID)
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE OR IGNORE entity_relations SET target_entity_id = ? WHERE target_entity_id = ?
+	`, targetID, sourceID)
+	// Clean up any remaining orphaned relations from the source.
+	_, _ = s.db.ExecContext(ctx, `
+		DELETE FROM entity_relations WHERE source_entity_id = ? OR target_entity_id = ?
+	`, sourceID, sourceID)
+
+	// Add source name as alias on target.
+	source, err := s.GetEntity(ctx, sourceID)
+	if err == nil && source != nil {
+		_ = s.AddEntityAlias(ctx, targetID, source.Name)
+		for _, alias := range source.Aliases {
+			_ = s.AddEntityAlias(ctx, targetID, alias)
+		}
+	}
+
+	// Accumulate interaction count.
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE entities SET
+			interaction_count = interaction_count + COALESCE((SELECT interaction_count FROM entities WHERE id = ?), 0),
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?
+	`, sourceID, targetID)
+
+	// Delete source entity (cascades observations, interactions, relations).
+	return s.DeleteEntity(ctx, sourceID)
+}
+
 func (s *Store) QueueMemoryNotification(ctx context.Context, userID, text, deliveryType, source string, deliverAt *time.Time, metadata map[string]any) (int64, error) {
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"

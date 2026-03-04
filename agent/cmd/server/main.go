@@ -174,6 +174,13 @@ func main() {
 	})
 	proactive.RegisterCronHandlers(scheduler, proactiveEngine)
 
+	// ── Memory dedup engine ────────────────────────────────────────
+	dedupEngine := memory.NewDedupEngine(memory.DedupOptions{
+		Store:        store,
+		IntervalSecs: memory.DefaultDedupIntervalSecs, // 2 hours
+	})
+	memory.RegisterDedupCronHandlers(scheduler, dedupEngine)
+
 	// ── HTTP handlers ───────────────────────────────────────────────
 	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
 	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
@@ -200,6 +207,9 @@ func main() {
 	}
 	if err := proactiveEngine.EnsureCronJobs(context.Background()); err != nil {
 		log.Printf("proactive cron schedule warning: %v", err)
+	}
+	if err := dedupEngine.EnsureCronJobs(context.Background()); err != nil {
+		log.Printf("memory dedup cron schedule warning: %v", err)
 	}
 
 	up := updater.New(updater.Config{

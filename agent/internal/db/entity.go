@@ -537,6 +537,41 @@ func (s *Store) ListEntityRelations(ctx context.Context, entityID string) ([]Ent
 	return out, rows.Err()
 }
 
+// AddEntityAlias adds an alias to an existing entity if not already present.
+func (s *Store) AddEntityAlias(ctx context.Context, entityID, alias string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store unavailable")
+	}
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return nil
+	}
+	// Read current aliases.
+	var aliasesJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT aliases FROM entities WHERE id = ?`, entityID).Scan(&aliasesJSON)
+	if err != nil {
+		return err
+	}
+	existing := []string{}
+	if strings.TrimSpace(aliasesJSON) != "" {
+		_ = json.Unmarshal([]byte(aliasesJSON), &existing)
+	}
+	// Check if alias already present (case-insensitive).
+	aliasLower := strings.ToLower(alias)
+	for _, a := range existing {
+		if strings.ToLower(a) == aliasLower {
+			return nil // already present
+		}
+	}
+	existing = append(existing, alias)
+	blob, _ := json.Marshal(existing)
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE entities SET aliases = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?
+	`, string(blob), entityID)
+	return err
+}
+
 // DeleteEntity deletes an entity by ID. Foreign keys cascade to observations,
 // interactions, and relations.
 func (s *Store) DeleteEntity(ctx context.Context, entityID string) error {
