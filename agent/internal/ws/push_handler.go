@@ -23,6 +23,7 @@ func NewPushHandler(store *db.Store, sender *PushSender) *PushHandler {
 func (h *PushHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/push/vapid-key", h.handleVAPIDKey)
 	mux.HandleFunc("/api/push/subscribe", h.handleSubscription)
+	mux.HandleFunc("/api/push/test", h.handleTestPush)
 }
 
 func (h *PushHandler) handleVAPIDKey(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +99,55 @@ func (h *PushHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "unsubscribed"})
+}
+
+func (h *PushHandler) handleTestPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.sender == nil {
+		writeError(w, http.StatusServiceUnavailable, "push sender not configured (VAPID keys missing)")
+		return
+	}
+	if h.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store unavailable")
+		return
+	}
+
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if userID == "" {
+		userID = "default"
+	}
+
+	subs, err := h.store.GetPushSubscriptions(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get subscriptions: "+err.Error())
+		return
+	}
+	if len(subs) == 0 {
+		writeError(w, http.StatusNotFound, "no push subscriptions found for user")
+		return
+	}
+
+	pushSubs := make([]PushSubscription, 0, len(subs))
+	for _, sub := range subs {
+		pushSubs = append(pushSubs, PushSubscription{
+			Endpoint: sub.Endpoint,
+			Keys: struct {
+				P256dh string `json:"p256dh"`
+				Auth   string `json:"auth"`
+			}{P256dh: sub.KeyP256dh, Auth: sub.KeyAuth},
+		})
+	}
+
+	h.sender.SendToAll(pushSubs, PushPayload{
+		Title: "Hello from Aether",
+		Body:  "Push notifications are working!",
+		Tag:   "test",
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "sent", "subscriptions": len(pushSubs)})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
