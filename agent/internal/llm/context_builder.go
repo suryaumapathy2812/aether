@@ -93,6 +93,9 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		if section := b.decisionsPromptSection(userID); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
+		if section := b.entitiesPromptSection(userID); strings.TrimSpace(section) != "" {
+			promptParts = append(promptParts, section)
+		}
 		if section := b.memoryPromptSection(userID, messages); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
@@ -177,6 +180,35 @@ func (b *ContextBuilder) decisionsPromptSection(userID string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (b *ContextBuilder) entitiesPromptSection(userID string) string {
+	if b == nil || b.store == nil {
+		return ""
+	}
+	entities, err := b.store.ListEntities(context.Background(), normalizedUserID(userID), "", 20)
+	if err != nil || len(entities) == 0 {
+		return ""
+	}
+	lines := []string{"Known entities in the user's world:"}
+	for _, e := range entities {
+		obs, _ := b.store.ListEntityObservations(context.Background(), e.ID, 5)
+		obsTexts := make([]string, 0, len(obs))
+		for _, o := range obs {
+			obsTexts = append(obsTexts, strings.TrimSpace(o.Observation))
+		}
+		line := fmt.Sprintf("- [%s] %s", e.EntityType, e.Name)
+		if e.Summary != "" {
+			line += ": " + truncateText(e.Summary, 120)
+		} else if len(obsTexts) > 0 {
+			line += ": " + truncateText(strings.Join(obsTexts, "; "), 120)
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) <= 1 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (b *ContextBuilder) memoryPromptSection(userID string, messages []map[string]any) string {
 	if b == nil || b.store == nil {
 		return ""
@@ -204,6 +236,8 @@ func (b *ContextBuilder) memoryPromptSection(userID string, messages []map[strin
 			lines = append(lines, "- [Previous session] "+truncateText(strings.TrimSpace(r.Summary), 180))
 		case "conversation":
 			lines = append(lines, "- [Previous conversation] User: "+truncateText(strings.TrimSpace(r.UserMessage), 120)+" | Assistant: "+truncateText(strings.TrimSpace(r.AssistantMessage), 120))
+		case "entity":
+			lines = append(lines, "- [Entity/"+r.EntityType+"] "+r.EntityName+": "+truncateText(strings.TrimSpace(r.EntitySummary), 140))
 		}
 	}
 	if len(lines) <= 1 {

@@ -29,6 +29,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/observability"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/proactive"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
@@ -162,6 +163,17 @@ func main() {
 	wsTaskNotifier := ws.NewTaskNotifier(wsHub)
 	agentNotifier := agent.NewNotifier(cfg.TaskWebhookURL, wsTaskNotifier)
 
+	// ── Proactive engine ────────────────────────────────────────────
+	proactiveEngine := proactive.New(proactive.Options{
+		Store:               store,
+		Core:                llmCore,
+		PushSender:          pushSender,
+		WSHub:               wsHub,
+		AssetsDir:           cfg.AssetsDir,
+		PlanIntervalSeconds: cfg.Proactive.PlanIntervalSeconds,
+	})
+	proactive.RegisterCronHandlers(scheduler, proactiveEngine)
+
 	// ── HTTP handlers ───────────────────────────────────────────────
 	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
 	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
@@ -185,6 +197,9 @@ func main() {
 	handler.RegisterRoutes(mux)
 	if err := handler.EnsurePluginCronJobs(context.Background()); err != nil {
 		log.Printf("plugin cron schedule warning: %v", err)
+	}
+	if err := proactiveEngine.EnsureCronJobs(context.Background()); err != nil {
+		log.Printf("proactive cron schedule warning: %v", err)
 	}
 
 	up := updater.New(updater.Config{

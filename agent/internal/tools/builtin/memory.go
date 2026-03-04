@@ -101,6 +101,8 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, call tools.Call) tools.R
 			lines = append(lines, fmt.Sprintf("%d. [session] %s", idx, truncateOutput(r.Summary, 140)))
 		case "conversation":
 			lines = append(lines, fmt.Sprintf("%d. [conversation] User: %s", idx, truncateOutput(r.UserMessage, 140)))
+		case "entity":
+			lines = append(lines, fmt.Sprintf("%d. [entity/%s] %s: %s", idx, r.EntityType, r.EntityName, truncateOutput(r.EntitySummary, 120)))
 		}
 	}
 	return tools.Success("Found relevant memories:\n"+strings.Join(lines, "\n"), map[string]any{"count": len(results)})

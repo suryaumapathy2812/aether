@@ -38,6 +38,9 @@ type Config struct {
 
 	// Media validation limits
 	Media MediaLimitsConfig
+
+	// Proactive engine
+	Proactive ProactiveConfig
 }
 
 // LLMConfig holds LLM provider credentials and model settings.
@@ -76,6 +79,11 @@ type MediaLimitsConfig struct {
 	MaxAudioBytes      int
 	MaxTotalMediaBytes int
 	MaxMediaParts      int
+}
+
+// ProactiveConfig holds settings for the proactive planning engine.
+type ProactiveConfig struct {
+	PlanIntervalSeconds int
 }
 
 // Load reads all configuration from environment variables and returns
@@ -150,6 +158,10 @@ func Load() Config {
 			MaxAudioBytes:      envInt("AETHER_MAX_AUDIO_BYTES", 12*1024*1024),
 			MaxTotalMediaBytes: envInt("AETHER_MAX_TOTAL_MEDIA_BYTES", 20*1024*1024),
 			MaxMediaParts:      envInt("AETHER_MAX_MEDIA_PARTS", 4),
+		},
+
+		Proactive: ProactiveConfig{
+			PlanIntervalSeconds: envInt("AETHER_PROACTIVE_PLAN_INTERVAL", 10800),
 		},
 	}
 }

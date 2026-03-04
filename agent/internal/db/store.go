@@ -419,6 +419,68 @@ func (s *Store) migrate(ctx context.Context) error {
 			UNIQUE(user_id, endpoint)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);`,
+		// --- Entity memory tables ---
+		`CREATE TABLE IF NOT EXISTS entities (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			entity_type TEXT NOT NULL,
+			name TEXT NOT NULL,
+			aliases TEXT NOT NULL DEFAULT '[]',
+			summary TEXT NOT NULL DEFAULT '',
+			properties TEXT NOT NULL DEFAULT '{}',
+			first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			interaction_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type);`,
+		`CREATE INDEX IF NOT EXISTS idx_entities_user_name ON entities(user_id, name);`,
+		`CREATE INDEX IF NOT EXISTS idx_entities_user_last_seen ON entities(user_id, last_seen_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS entity_observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			entity_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			observation TEXT NOT NULL,
+			observation_key TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT 'trait',
+			confidence REAL NOT NULL DEFAULT 1.0,
+			source TEXT NOT NULL DEFAULT 'extracted',
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(entity_id, observation_key),
+			FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_entity_observations_entity ON entity_observations(entity_id);`,
+		`CREATE TABLE IF NOT EXISTS entity_interactions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			entity_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			summary TEXT NOT NULL,
+			source TEXT NOT NULL,
+			source_ref TEXT,
+			interaction_at TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_entity_interactions_entity ON entity_interactions(entity_id, interaction_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_entity_interactions_time ON entity_interactions(user_id, interaction_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS entity_relations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			source_entity_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			target_entity_id TEXT NOT NULL,
+			context TEXT NOT NULL DEFAULT '',
+			confidence REAL NOT NULL DEFAULT 1.0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(source_entity_id, relation, target_entity_id),
+			FOREIGN KEY(source_entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+			FOREIGN KEY(target_entity_id) REFERENCES entities(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_entity_relations_source ON entity_relations(source_entity_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_entity_relations_target ON entity_relations(target_entity_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {

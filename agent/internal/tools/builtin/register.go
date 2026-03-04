@@ -12,6 +12,12 @@ func RegisterCore(reg *tools.Registry) error {
 		&ScheduleReminderTool{},
 		&SaveMemoryTool{},
 		&SearchMemoryTool{},
+		&SendNotificationTool{},
+		&SaveEntityTool{},
+		&AddEntityObservationTool{},
+		&SearchEntitiesTool{},
+		&RelateEntitiesTool{},
+		&GetEntityDetailsTool{},
 	}
 	for _, t := range core {
 		if err := reg.Register(t, ""); err != nil {

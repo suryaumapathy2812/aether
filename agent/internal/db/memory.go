@@ -86,6 +86,9 @@ type MemorySearchResult struct {
 	UserMessage      string
 	AssistantMessage string
 	Confidence       float64
+	EntityName       string
+	EntityType       string
+	EntitySummary    string
 }
 
 func (s *Store) AddMemoryConversation(ctx context.Context, userID, sessionID, userMessage string, userContent any, assistantMessage string) (int64, error) {
@@ -648,6 +651,11 @@ func (s *Store) ExportMemorySnapshot(ctx context.Context, userID string) (map[st
 		})
 	}
 
+	entities, err := s.ListEntities(ctx, userID, "", 10000)
+	if err != nil {
+		return nil, err
+	}
+
 	return map[string]any{
 		"facts":            facts,
 		"memories":         memories,
@@ -656,6 +664,7 @@ func (s *Store) ExportMemorySnapshot(ctx context.Context, userID string) (map[st
 		"sessions":         sessions,
 		"notifications":    notifications,
 		"proactive_events": proactive,
+		"entities":         entities,
 	}, nil
 }
 
@@ -779,6 +788,19 @@ func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit in
 		appendIfMatch("session", summary, 0.05, row.EndedAt, func(r *MemorySearchResult) {
 			r.Summary = summary
 		})
+	}
+
+	// Search entities for matching results.
+	entities, err := s.ListEntities(ctx, userID, "", 100)
+	if err == nil {
+		for _, ent := range entities {
+			text := ent.Name + " " + ent.Summary + " " + strings.Join(ent.Aliases, " ")
+			appendIfMatch("entity", text, 0.12, ent.LastSeenAt, func(r *MemorySearchResult) {
+				r.EntityName = ent.Name
+				r.EntityType = ent.EntityType
+				r.EntitySummary = ent.Summary
+			})
+		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {

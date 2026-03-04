@@ -122,7 +122,7 @@ func (s *Service) worker(ctx context.Context) {
 }
 
 func (s *Service) extractAndStore(ctx context.Context, job extractionJob) {
-	prompt := `You are Aether's memory extractor. After each conversation turn, extract three types of information:
+	prompt := `You are Aether's memory extractor. After each conversation turn, extract four types of information:
 
 ## Facts
 Objective, stable user information that is useful later.
@@ -133,13 +133,17 @@ Contextual or episodic information from this interaction.
 ## Decisions
 Behavior rules the assistant should follow for this user.
 
+## Entities
+People, projects, organizations, places, or topics mentioned. For each, provide name, type, and observations.
+Types: person, project, organization, topic, place, tool
+
 Rules:
 - Return concise third-person statements.
 - Skip small talk and low-value details.
 - If nothing useful, return empty arrays.
 
 Return ONLY JSON:
-{"facts": ["..."], "memories": ["..."], "decisions": ["..."]}
+{"facts": ["..."], "memories": ["..."], "decisions": ["..."], "entities": [{"name": "...", "type": "...", "observations": ["..."]}]}
 
 Conversation:
 User: ` + job.UserMessage + `
@@ -150,7 +154,7 @@ Assistant: ` + job.AssistantMessage
 		Modality: "system",
 		Messages: []map[string]any{{"role": "user", "content": prompt}},
 		Tools:    []map[string]any{},
-		Policy:   map[string]any{"max_tokens": 400, "temperature": 0.0},
+		Policy:   map[string]any{"max_tokens": 600, "temperature": 0.0},
 	}
 
 	parts := []string{}
@@ -174,16 +178,42 @@ Assistant: ` + job.AssistantMessage
 	for _, decision := range parsed.Decisions {
 		_ = s.store.StoreMemoryDecision(context.Background(), job.UserID, decision, "preference", "extracted", job.ConversationID)
 	}
+	// Store extracted entities and their observations.
+	for _, entity := range parsed.Entities {
+		entity.Name = strings.TrimSpace(entity.Name)
+		entity.Type = strings.TrimSpace(entity.Type)
+		if entity.Name == "" || entity.Type == "" {
+			continue
+		}
+		entityID, err := s.store.UpsertEntity(context.Background(), job.UserID, entity.Type, entity.Name, nil, nil)
+		if err != nil || entityID == "" {
+			continue
+		}
+		for _, obs := range entity.Observations {
+			obs = strings.TrimSpace(obs)
+			if obs == "" {
+				continue
+			}
+			_ = s.store.AddEntityObservation(context.Background(), entityID, job.UserID, obs, "trait", "extracted")
+		}
+	}
+}
+
+type extractedEntity struct {
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Observations []string `json:"observations"`
 }
 
 type extractionResult struct {
-	Facts     []string `json:"facts"`
-	Memories  []string `json:"memories"`
-	Decisions []string `json:"decisions"`
+	Facts     []string          `json:"facts"`
+	Memories  []string          `json:"memories"`
+	Decisions []string          `json:"decisions"`
+	Entities  []extractedEntity `json:"entities"`
 }
 
 func parseExtraction(content string) extractionResult {
-	out := extractionResult{Facts: []string{}, Memories: []string{}, Decisions: []string{}}
+	out := extractionResult{Facts: []string{}, Memories: []string{}, Decisions: []string{}, Entities: []extractedEntity{}}
 	v := strings.TrimSpace(content)
 	if v == "" {
 		return out
@@ -197,7 +227,7 @@ func parseExtraction(content string) extractionResult {
 		v = m
 	}
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
-		return extractionResult{Facts: []string{}, Memories: []string{}, Decisions: []string{}}
+		return extractionResult{Facts: []string{}, Memories: []string{}, Decisions: []string{}, Entities: []extractedEntity{}}
 	}
 	out.Facts = cleanStrings(out.Facts)
 	out.Memories = cleanStrings(out.Memories)
