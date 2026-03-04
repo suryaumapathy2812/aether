@@ -1192,34 +1192,27 @@ func (s *Store) ClaimNextAgentTask(ctx context.Context, now time.Time, leaseFor 
 		return AgentTaskRecord{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	row := tx.QueryRowContext(ctx, `
-		SELECT id, status
-		FROM agent_tasks
-		WHERE cancel_requested = 0
-			AND (locked_until IS NULL OR locked_until <= ?)
-			AND status IN (?, ?, ?, ?, ?)
-		ORDER BY priority DESC, created_at ASC
-		LIMIT 1
-	`, formatTS(now), string(AgentTaskQueued), string(AgentTaskRunning), string(AgentTaskNeedsMoreWork), string(AgentTaskVerifyPending), string(AgentTaskVerifying))
-	var id string
-	var currentStatus string
-	if err := row.Scan(&id, &currentStatus); err != nil {
-		if err == sql.ErrNoRows {
-			return AgentTaskRecord{}, ErrNotFound
-		}
-		return AgentTaskRecord{}, err
-	}
-	nextStatus := AgentTaskRunning
-	if currentStatus == string(AgentTaskVerifyPending) || currentStatus == string(AgentTaskVerifying) {
-		nextStatus = AgentTaskVerifying
-	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE agent_tasks
-		SET status = ?, lock_token = ?, locked_until = ?, started_at = COALESCE(started_at, ?),
+		SET status = CASE WHEN status IN (?, ?) THEN ? ELSE ? END,
+			lock_token = ?, locked_until = ?, started_at = COALESCE(started_at, ?),
 			finished_at = CASE WHEN status IN (?, ?) THEN NULL ELSE finished_at END,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ?
-	`, string(nextStatus), lockToken, formatTS(leaseUntil), formatTS(now), string(AgentTaskNeedsMoreWork), string(AgentTaskVerifying), id)
+		WHERE id = (
+			SELECT id FROM agent_tasks
+			WHERE cancel_requested = 0
+				AND (locked_until IS NULL OR locked_until <= ?)
+				AND status IN (?, ?, ?, ?, ?)
+			ORDER BY priority DESC, created_at ASC
+			LIMIT 1
+		)
+	`,
+		string(AgentTaskVerifyPending), string(AgentTaskVerifying), string(AgentTaskVerifying), string(AgentTaskRunning),
+		lockToken, formatTS(leaseUntil), formatTS(now),
+		string(AgentTaskNeedsMoreWork), string(AgentTaskVerifying),
+		formatTS(now),
+		string(AgentTaskQueued), string(AgentTaskRunning), string(AgentTaskNeedsMoreWork), string(AgentTaskVerifyPending), string(AgentTaskVerifying),
+	)
 	if err != nil {
 		return AgentTaskRecord{}, err
 	}
@@ -1230,14 +1223,14 @@ func (s *Store) ClaimNextAgentTask(ctx context.Context, now time.Time, leaseFor 
 	if affected == 0 {
 		return AgentTaskRecord{}, ErrNotFound
 	}
-	row = tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		SELECT id, user_id, session_id, title, goal, status, priority, max_steps, step_count,
 			cancel_requested, deadline_at, started_at, finished_at, last_error, result_summary, result_json,
 			metadata_json, lock_token, locked_until, created_at, updated_at
 		FROM agent_tasks
-		WHERE id = ?
+		WHERE lock_token = ?
 		LIMIT 1
-	`, id)
+	`, lockToken)
 	rec, err := scanAgentTaskRow(row)
 	if err != nil {
 		return AgentTaskRecord{}, err
