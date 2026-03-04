@@ -131,6 +131,10 @@ func (r *Runtime) workerLoop(ctx context.Context, workerID int) {
 		}
 		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"worker_id": workerID, "status": string(task.Status), "message": "Task claimed by runtime worker"})
 		r.notify(ctx, task, "claimed", map[string]any{"worker_id": workerID})
+		if task.Status == db.AgentTaskVerifying {
+			r.runVerificationTask(ctx, task)
+			continue
+		}
 		r.runTask(ctx, task)
 	}
 }
@@ -316,14 +320,14 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		return
 	}
 	result := map[string]any{"summary": assistant}
-	if err := r.store.CompleteAgentTask(ctx, task.ID, task.LockToken, assistant, result); err != nil {
-		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to finalize task: "+err.Error())
+	if err := r.store.SetAgentTaskVerifyPending(ctx, task.ID, task.LockToken, assistant, result); err != nil {
+		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to enqueue verifier: "+err.Error())
 		task.Status = db.AgentTaskFailed
 		r.notify(ctx, task, "failed", map[string]any{"error": err.Error()})
 		return
 	}
-	_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": string(db.AgentTaskCompleted), "message": "Task completed"})
-	task.Status = db.AgentTaskCompleted
+	_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": string(db.AgentTaskVerifyPending), "message": "Task execution finished; queued for verification"})
+	task.Status = db.AgentTaskVerifyPending
 	if r.memory != nil && assistant != "" {
 		taskStarted := task.CreatedAt
 		if task.StartedAt != nil {
@@ -331,7 +335,74 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		}
 		r.memory.RecordSessionSummary(context.Background(), task.UserID, firstNonEmpty(task.SessionID, task.ID), assistant, taskStarted, time.Now().UTC(), task.StepCount, []string{"delegated_task"})
 	}
-	r.notify(ctx, task, "completed", map[string]any{"summary": assistant})
+	r.notify(ctx, task, "verify_pending", map[string]any{"summary": assistant})
+}
+
+func (r *Runtime) runVerificationTask(ctx context.Context, task db.AgentTaskRecord) {
+	leaseDeadline := time.Now().UTC().Add(r.leaseFor)
+	_ = r.store.RenewAgentTaskLease(ctx, task.ID, task.LockToken, leaseDeadline)
+
+	decision, err := r.verifyTaskWithLLM(ctx, task)
+	if err != nil {
+		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "verification failed: "+err.Error())
+		task.Status = db.AgentTaskFailed
+		r.notify(ctx, task, "failed", map[string]any{"error": err.Error(), "phase": "verification"})
+		return
+	}
+	_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "verification_decision", map[string]any{
+		"decision": decision.Decision,
+		"reason":   decision.Reason,
+		"comments": decision.Comments,
+	})
+
+	switch decision.Decision {
+	case "completed":
+		summary := strings.TrimSpace(decision.RevisedSummary)
+		if summary == "" {
+			summary = strings.TrimSpace(task.ResultSummary)
+		}
+		result := map[string]any{"summary": summary, "verified": true, "verification_reason": decision.Reason}
+		if err := r.store.CompleteAgentTask(ctx, task.ID, task.LockToken, summary, result); err != nil {
+			_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to finalize verified task: "+err.Error())
+			task.Status = db.AgentTaskFailed
+			r.notify(ctx, task, "failed", map[string]any{"error": err.Error(), "phase": "verification_finalize"})
+			return
+		}
+		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": string(db.AgentTaskCompleted), "message": "Task verified and completed"})
+		task.Status = db.AgentTaskCompleted
+		r.notify(ctx, task, "completed", map[string]any{"summary": summary, "verified": true})
+		return
+	case "needs_more_work":
+		feedback := strings.TrimSpace(decision.Comments)
+		if feedback == "" {
+			feedback = strings.TrimSpace(decision.Reason)
+		}
+		if feedback == "" {
+			feedback = "Verification requires additional concrete work and a clearer final result. Continue execution and provide specific outcomes."
+		}
+		_ = r.store.AppendAgentTaskMessage(ctx, task.ID, "user", map[string]any{
+			"role":    "user",
+			"content": "Verifier feedback: " + feedback + "\nContinue working on the same task and return a concrete final result.",
+		})
+		if err := r.store.SetAgentTaskNeedsMoreWork(ctx, task.ID, task.LockToken, feedback); err != nil {
+			_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to queue task for more work: "+err.Error())
+			task.Status = db.AgentTaskFailed
+			r.notify(ctx, task, "failed", map[string]any{"error": err.Error(), "phase": "verification_requeue"})
+			return
+		}
+		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": string(db.AgentTaskNeedsMoreWork), "message": "Verifier requested more work", "comments": feedback})
+		task.Status = db.AgentTaskNeedsMoreWork
+		r.notify(ctx, task, "needs_more_work", map[string]any{"comments": feedback})
+		return
+	default:
+		reason := strings.TrimSpace(decision.Reason)
+		if reason == "" {
+			reason = "verification marked task as failed"
+		}
+		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, reason)
+		task.Status = db.AgentTaskFailed
+		r.notify(ctx, task, "failed", map[string]any{"error": reason, "phase": "verification"})
+	}
 }
 
 func (r *Runtime) notify(ctx context.Context, task db.AgentTaskRecord, event string, payload map[string]any) {
@@ -339,6 +410,122 @@ func (r *Runtime) notify(ctx context.Context, task db.AgentTaskRecord, event str
 		return
 	}
 	r.notifier.OnTaskUpdate(ctx, task, event, payload)
+}
+
+type verificationDecision struct {
+	Decision       string `json:"decision"`
+	Reason         string `json:"reason"`
+	Comments       string `json:"comments"`
+	RevisedSummary string `json:"revised_summary"`
+}
+
+func (r *Runtime) verifyTaskWithLLM(ctx context.Context, task db.AgentTaskRecord) (verificationDecision, error) {
+	decision := verificationDecision{}
+	events, _ := r.store.ListAgentTaskEvents(ctx, task.ID, 400)
+	evidence := summarizeTaskEvidence(events)
+	payload, _ := json.MarshalIndent(map[string]any{
+		"task_id":        task.ID,
+		"title":          task.Title,
+		"goal":           task.Goal,
+		"step_count":     task.StepCount,
+		"max_steps":      task.MaxSteps,
+		"result_summary": task.ResultSummary,
+		"evidence":       evidence,
+	}, "", "  ")
+	messages := []map[string]any{
+		{
+			"role":    "system",
+			"content": "You are a strict delegated-task verifier. Decide whether execution actually completed the requested goal. Return only JSON with keys: decision, reason, comments, revised_summary. decision must be one of: completed, needs_more_work, failed.",
+		},
+		{
+			"role":    "user",
+			"content": "Verify this delegated task result and decide completion. Mark needs_more_work if output is vague, incomplete, or missing concrete deliverables.\n\nTask payload:\n" + string(payload),
+		},
+	}
+	env := r.builder.Build(messages, map[string]any{"max_tokens": 800, "temperature": 0}, task.UserID, firstNonEmpty(task.SessionID, task.ID)+":verify")
+	env.Kind = "delegated_task_verifier"
+	env.Tools = nil
+	env.ToolChoice = "none"
+	buf := strings.Builder{}
+	hadErr := ""
+	for ev := range r.core.Generate(ctx, env) {
+		switch ev.EventType {
+		case llm.EventTextChunk:
+			chunk, _ := ev.Payload["text"].(string)
+			buf.WriteString(chunk)
+		case llm.EventError:
+			hadErr, _ = ev.Payload["message"].(string)
+		}
+	}
+	if strings.TrimSpace(hadErr) != "" {
+		return decision, fmt.Errorf(hadErr)
+	}
+	raw := strings.TrimSpace(buf.String())
+	if raw == "" {
+		return decision, fmt.Errorf("empty verifier response")
+	}
+	if err := json.Unmarshal([]byte(raw), &decision); err != nil {
+		start := strings.Index(raw, "{")
+		end := strings.LastIndex(raw, "}")
+		if start >= 0 && end > start {
+			if err2 := json.Unmarshal([]byte(raw[start:end+1]), &decision); err2 == nil {
+				err = nil
+			}
+		}
+		if err != nil {
+			return decision, fmt.Errorf("invalid verifier response: %w", err)
+		}
+	}
+	decision.Decision = strings.TrimSpace(strings.ToLower(decision.Decision))
+	if decision.Decision != "completed" && decision.Decision != "needs_more_work" && decision.Decision != "failed" {
+		return decision, fmt.Errorf("invalid verifier decision: %q", decision.Decision)
+	}
+	return decision, nil
+}
+
+func summarizeTaskEvidence(events []db.AgentTaskEvent) map[string]any {
+	toolCounts := map[string]int{}
+	toolErrors := 0
+	statusTrail := make([]string, 0, 12)
+	notable := make([]string, 0, 12)
+	for _, ev := range events {
+		payload := map[string]any{}
+		_ = json.Unmarshal([]byte(ev.PayloadJSON), &payload)
+		switch ev.Kind {
+		case "tool_call":
+			tool, _ := payload["tool_name"].(string)
+			if strings.TrimSpace(tool) != "" {
+				toolCounts[tool]++
+			}
+		case "tool_result":
+			if isErr, _ := payload["error"].(bool); isErr {
+				toolErrors++
+			}
+			tool, _ := payload["tool_name"].(string)
+			out, _ := payload["output"].(string)
+			out = strings.TrimSpace(out)
+			if len(notable) < 10 && strings.TrimSpace(tool) != "" && out != "" {
+				if len(out) > 180 {
+					out = out[:180] + "..."
+				}
+				notable = append(notable, fmt.Sprintf("%s: %s", tool, out))
+			}
+		case "status":
+			status, _ := payload["status"].(string)
+			msg, _ := payload["message"].(string)
+			line := strings.TrimSpace(strings.Join([]string{status, msg}, " "))
+			if line != "" && len(statusTrail) < 20 {
+				statusTrail = append(statusTrail, line)
+			}
+		}
+	}
+	return map[string]any{
+		"event_count":    len(events),
+		"tool_counts":    toolCounts,
+		"tool_errors":    toolErrors,
+		"status_trail":   statusTrail,
+		"notable_output": notable,
+	}
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {
