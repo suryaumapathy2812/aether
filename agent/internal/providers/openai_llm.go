@@ -28,11 +28,11 @@ func NewOpenAILLMProvider(cfg config.LLMConfig) *OpenAILLMProvider {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = "https://openrouter.ai/api/v1"
 	}
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "google/gemini-3.1-flash-lite-preview"
 	}
 
 	headers := map[string]string{}

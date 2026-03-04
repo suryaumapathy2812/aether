@@ -104,13 +104,13 @@ func Load() Config {
 	apiKey := firstNonEmpty(envString("OPENAI_API_KEY", ""), envString("AETHER_LLM_API_KEY", ""))
 	baseURL := firstNonEmpty(envString("OPENAI_BASE_URL", ""), envString("AETHER_LLM_BASE_URL", ""))
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = "https://openrouter.ai/api/v1"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	model := firstNonEmpty(envString("OPENAI_MODEL", ""), envString("AETHER_LLM_MODEL", ""))
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "google/gemini-3.1-flash-lite-preview"
 	}
 
 	return Config{

@@ -20,7 +20,7 @@ NC='\033[0m' # No Color
 # Default values (will be overridden by .env.example or .env if present)
 DEFAULT_DOMAIN="aether.suryaumapathy.in"
 DEFAULT_OPENAI_BASE_URL="https://openrouter.ai/api/v1"
-DEFAULT_OPENAI_MODEL="google/gemini-2.5-flash"
+DEFAULT_OPENAI_MODEL="google/gemini-3.1-flash-lite-preview"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}     Aether Setup Script            ${NC}"
@@ -173,7 +173,6 @@ echo ""
 # ============================================
 echo -e "${GREEN}Step 4: OpenAI Configuration${NC}"
 prompt_with_default "Enter your OpenAI API key:" "OPENAI_API_KEY" "" "no"
-prompt_with_default "Enter OpenAI Base URL:" "OPENAI_BASE_URL" "$DEFAULT_OPENAI_BASE_URL" "no"
 prompt_with_default "Enter OpenAI Model:" "OPENAI_MODEL" "$DEFAULT_OPENAI_MODEL" "no"
 
 # ============================================
