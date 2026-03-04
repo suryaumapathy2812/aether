@@ -164,6 +164,10 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		llmMessages = append(llmMessages, map[string]any{"role": "user", "content": task.Goal})
 	}
 	bounded, compactNote := r.window.Apply(llmMessages)
+	bounded = append([]map[string]any{{
+		"role":    "system",
+		"content": "You are the delegated background worker for this task. Execute the task directly. Do not call delegate_task. Do not say that you delegated the task to someone else. Return concrete execution results.",
+	}}, bounded...)
 	if strings.TrimSpace(compactNote) != "" {
 		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": "compacted", "message": compactNote})
 	}
@@ -178,6 +182,7 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
 	assistantFlushedForToolBatch := false
+	toolCallCount := 0
 	taskCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{TaskID: task.ID, LockToken: task.LockToken, UserID: task.UserID})
 	for ev := range r.core.GenerateWithTools(taskCtx, env) {
 		if time.Now().UTC().After(leaseDeadline.Add(-10 * time.Second)) {
@@ -191,6 +196,7 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 				assistantParts = append(assistantParts, chunk)
 			}
 		case llm.EventToolCall:
+			toolCallCount++
 			_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "tool_call", ev.Payload)
 			toolName, _ := ev.Payload["tool_name"].(string)
 			callID, _ := ev.Payload["call_id"].(string)
@@ -301,6 +307,14 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		r.notify(ctx, task, "failed", map[string]any{"error": hadError})
 		return
 	}
+	if toolCallCount == 0 && likelyMetaDelegationResponse(assistant) {
+		errMsg := "delegated task completed without execution: assistant acknowledged delegation instead of performing the work"
+		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "error", map[string]any{"message": errMsg, "assistant": assistant})
+		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, errMsg)
+		task.Status = db.AgentTaskFailed
+		r.notify(ctx, task, "failed", map[string]any{"error": errMsg})
+		return
+	}
 	result := map[string]any{"summary": assistant}
 	if err := r.store.CompleteAgentTask(ctx, task.ID, task.LockToken, assistant, result); err != nil {
 		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to finalize task: "+err.Error())
@@ -363,6 +377,28 @@ func likelyNeedsHumanInput(text string) bool {
 		"need the title",
 		"waiting for your input",
 		"let me know",
+	}
+	for _, p := range phrases {
+		if strings.Contains(v, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func likelyMetaDelegationResponse(text string) bool {
+	v := strings.ToLower(strings.TrimSpace(text))
+	if v == "" {
+		return false
+	}
+	phrases := []string{
+		"i've delegated",
+		"i have delegated",
+		"delegated a task",
+		"task delegated",
+		"background agent",
+		"i will notify you once",
+		"i'll notify you once",
 	}
 	for _, p := range phrases {
 		if strings.Contains(v, p) {
