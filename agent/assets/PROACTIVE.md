@@ -122,7 +122,7 @@ The agent executing each work item has access to these tools (when the correspon
 - `list_drive_files` — List files in a folder
 
 ### Web Search (builtin — always available)
-- `web_search` — Search the web (Exa AI, free, no API key)
+- `web_search` — Search the web (DuckDuckGo, free, no API key, no rate limits)
 - `web_fetch` — Fetch and read any URL
 
 ### Web Search (requires `brave-search` plugin)

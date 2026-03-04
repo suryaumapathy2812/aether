@@ -1,63 +1,35 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-// WebSearchTool performs real-time web searches via Exa AI's free MCP endpoint.
-// No API key required. Always available as a builtin tool.
+// WebSearchTool performs real-time web searches via DuckDuckGo's HTML endpoint.
+// Completely free, no API key, no rate limits, no freemium restrictions.
+// Always available as a builtin tool.
 type WebSearchTool struct{}
 
 const (
-	exaBaseURL        = "https://mcp.exa.ai/mcp"
-	exaDefaultResults = 8
-	exaTimeout        = 25 * time.Second
+	ddgBaseURL      = "https://html.duckduckgo.com/html/"
+	ddgTimeout      = 15 * time.Second
+	ddgDefaultCount = 10
+	ddgUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 )
-
-type exaRPCRequest struct {
-	JSONRPC string       `json:"jsonrpc"`
-	ID      int          `json:"id"`
-	Method  string       `json:"method"`
-	Params  exaRPCParams `json:"params"`
-}
-
-type exaRPCParams struct {
-	Name      string        `json:"name"`
-	Arguments exaSearchArgs `json:"arguments"`
-}
-
-type exaSearchArgs struct {
-	Query                string `json:"query"`
-	NumResults           int    `json:"numResults,omitempty"`
-	Livecrawl            string `json:"livecrawl,omitempty"`
-	Type                 string `json:"type,omitempty"`
-	ContextMaxCharacters int    `json:"contextMaxCharacters,omitempty"`
-}
-
-type exaRPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	Result  struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"result"`
-}
 
 func (t *WebSearchTool) Definition() tools.Definition {
 	year := time.Now().Year()
 	desc := fmt.Sprintf(
-		"Search the web using Exa AI. Performs real-time web searches and returns LLM-optimized context from the most relevant websites. "+
-			"Use this for current events, recent data, or anything beyond your knowledge cutoff. "+
+		"Search the web using DuckDuckGo. Performs real-time web searches and returns titles, URLs, and snippets from the most relevant websites. "+
+			"Completely free with no rate limits. Use this for current events, recent data, or anything beyond your knowledge cutoff. "+
 			"The current year is %d — always use this year when searching for recent information.",
 		year,
 	)
@@ -67,9 +39,8 @@ func (t *WebSearchTool) Definition() tools.Definition {
 		StatusText:  "Searching the web...",
 		Parameters: []tools.Param{
 			{Name: "query", Type: "string", Description: "Search query", Required: true},
-			{Name: "num_results", Type: "integer", Description: "Number of results to return (default: 8)", Required: false, Default: exaDefaultResults},
-			{Name: "type", Type: "string", Description: "Search type: auto (balanced, default), fast (quick), deep (comprehensive)", Required: false, Default: "auto", Enum: []string{"auto", "fast", "deep"}},
-			{Name: "livecrawl", Type: "string", Description: "Live crawl mode: fallback (use if cached unavailable, default), preferred (prioritize live crawling)", Required: false, Default: "fallback", Enum: []string{"fallback", "preferred"}},
+			{Name: "region", Type: "string", Description: "Region code for localized results (e.g. in-en for India, us-en for US, uk-en for UK). Default: wt-wt (no region)", Required: false, Default: "wt-wt"},
+			{Name: "time_range", Type: "string", Description: "Time range filter: d (past day), w (past week), m (past month), y (past year). Default: no filter", Required: false, Enum: []string{"d", "w", "m", "y"}},
 		},
 	}
 }
@@ -81,50 +52,31 @@ func (t *WebSearchTool) Execute(ctx context.Context, call tools.Call) tools.Resu
 		return tools.Fail("Search query is required", nil)
 	}
 
-	numResults := exaDefaultResults
-	if n, ok := call.Args["num_results"]; ok {
-		if v, err := asIntVal(n); err == nil && v > 0 {
-			numResults = v
-		}
+	region := "wt-wt"
+	if v, _ := call.Args["region"].(string); v != "" {
+		region = v
 	}
-	searchType := "auto"
-	if v, _ := call.Args["type"].(string); v != "" {
-		searchType = v
-	}
-	livecrawl := "fallback"
-	if v, _ := call.Args["livecrawl"].(string); v != "" {
-		livecrawl = v
+	timeRange, _ := call.Args["time_range"].(string)
+
+	// Build POST form data
+	form := url.Values{}
+	form.Set("q", query)
+	form.Set("kl", region)
+	if timeRange != "" {
+		form.Set("df", timeRange)
 	}
 
-	rpcReq := exaRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params: exaRPCParams{
-			Name: "web_search_exa",
-			Arguments: exaSearchArgs{
-				Query:      query,
-				NumResults: numResults,
-				Type:       searchType,
-				Livecrawl:  livecrawl,
-			},
-		},
-	}
-
-	body, err := json.Marshal(rpcReq)
-	if err != nil {
-		return tools.Fail("Failed to build search request: "+err.Error(), nil)
-	}
-
-	httpCtx, cancel := context.WithTimeout(ctx, exaTimeout)
+	httpCtx, cancel := context.WithTimeout(ctx, ddgTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(httpCtx, http.MethodPost, exaBaseURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(httpCtx, http.MethodPost, ddgBaseURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return tools.Fail("Failed to create request: "+err.Error(), nil)
+		return tools.Fail("Failed to create search request: "+err.Error(), nil)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", ddgUserAgent)
+	req.Header.Set("Accept", "text/html")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -136,50 +88,135 @@ func (t *WebSearchTool) Execute(ctx context.Context, call tools.Call) tools.Resu
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return tools.Fail(fmt.Sprintf("Search error (%d): %s", resp.StatusCode, string(errBody)), nil)
+		return tools.Fail(fmt.Sprintf("Search failed with status %d", resp.StatusCode), nil)
 	}
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
 		return tools.Fail("Failed to read search response: "+err.Error(), nil)
 	}
 
-	// Parse SSE response — look for "data: " lines containing JSON
-	text := parseExaSSE(string(respBody))
-	if text == "" {
-		// Try direct JSON parse (non-SSE response)
-		var direct exaRPCResponse
-		if err := json.Unmarshal(respBody, &direct); err == nil {
-			if len(direct.Result.Content) > 0 {
-				text = direct.Result.Content[0].Text
-			}
-		}
-	}
-
-	if text == "" {
+	results := parseDDGResults(string(body))
+	if len(results) == 0 {
 		return tools.Success("No search results found. Try a different query.", map[string]any{"query": query, "count": 0})
 	}
 
-	return tools.Success(text, map[string]any{"query": query})
+	// Format results for LLM consumption
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Web search results for: %s\n\n", query))
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.title))
+		sb.WriteString(fmt.Sprintf("   %s\n", r.url))
+		if r.snippet != "" {
+			sb.WriteString(fmt.Sprintf("   %s\n", r.snippet))
+		}
+		sb.WriteString("\n")
+	}
+
+	return tools.Success(sb.String(), map[string]any{"query": query, "count": len(results)})
 }
 
-// parseExaSSE extracts the result text from an SSE-formatted response.
-func parseExaSSE(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		if !strings.HasPrefix(line, "data: ") {
+// --- DuckDuckGo HTML parser ---
+
+type ddgResult struct {
+	title   string
+	url     string
+	snippet string
+}
+
+// Regex patterns for parsing DDG HTML results.
+// The HTML structure is stable: each result is a div.web-result containing:
+//   - Title in <a class="result__a" href="...uddg=ENCODED_URL...">TITLE</a>
+//   - Snippet in <a class="result__snippet">SNIPPET</a>
+var (
+	reResultBlock = regexp.MustCompile(`(?s)<div class="result results_links results_links_deep web-result\s*">(.*?)<div class="clear"></div>\s*</div>\s*</div>`)
+	reTitle       = regexp.MustCompile(`<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
+	reTitleHref   = regexp.MustCompile(`<a[^>]+class="result__a"[^>]+href="([^"]*)"`)
+	reSnippet     = regexp.MustCompile(`(?s)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
+	reUddg        = regexp.MustCompile(`uddg=([^&]+)`)
+	reHTMLTag     = regexp.MustCompile(`<[^>]+>`)
+	reHTMLEntity2 = regexp.MustCompile(`&[a-zA-Z]+;|&#\d+;|&#x[0-9a-fA-F]+;`)
+)
+
+func parseDDGResults(html string) []ddgResult {
+	blocks := reResultBlock.FindAllStringSubmatch(html, -1)
+	results := make([]ddgResult, 0, len(blocks))
+
+	for _, block := range blocks {
+		content := block[1]
+
+		// Extract title
+		titleMatch := reTitle.FindStringSubmatch(content)
+		if titleMatch == nil {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
-		var rpcResp exaRPCResponse
-		if err := json.Unmarshal([]byte(data), &rpcResp); err != nil {
+		title := stripHTML(titleMatch[1])
+		if title == "" {
 			continue
 		}
-		if len(rpcResp.Result.Content) > 0 {
-			return rpcResp.Result.Content[0].Text
+
+		// Extract URL from the uddg parameter in the href
+		resultURL := ""
+		hrefMatch := reTitleHref.FindStringSubmatch(content)
+		if hrefMatch != nil {
+			uddgMatch := reUddg.FindStringSubmatch(hrefMatch[1])
+			if uddgMatch != nil {
+				decoded, err := url.QueryUnescape(uddgMatch[1])
+				if err == nil {
+					resultURL = decoded
+				}
+			}
 		}
+		if resultURL == "" {
+			continue
+		}
+
+		// Extract snippet
+		snippet := ""
+		snippetMatch := reSnippet.FindStringSubmatch(content)
+		if snippetMatch != nil {
+			snippet = stripHTML(snippetMatch[1])
+		}
+
+		results = append(results, ddgResult{
+			title:   title,
+			url:     resultURL,
+			snippet: snippet,
+		})
 	}
-	return ""
+
+	return results
+}
+
+// stripHTML removes HTML tags and decodes common entities.
+func stripHTML(s string) string {
+	s = reHTMLTag.ReplaceAllString(s, "")
+	s = decodeDDGEntities(s)
+	s = strings.TrimSpace(s)
+	return s
+}
+
+// decodeDDGEntities handles common HTML entities found in DDG results.
+func decodeDDGEntities(s string) string {
+	replacements := map[string]string{
+		"&amp;":    "&",
+		"&lt;":     "<",
+		"&gt;":     ">",
+		"&quot;":   `"`,
+		"&apos;":   "'",
+		"&#39;":    "'",
+		"&#x27;":   "'",
+		"&nbsp;":   " ",
+		"&ndash;":  "–",
+		"&mdash;":  "—",
+		"&hellip;": "…",
+	}
+	for ent, repl := range replacements {
+		s = strings.ReplaceAll(s, ent, repl)
+	}
+	// Strip any remaining entities
+	s = reHTMLEntity2.ReplaceAllString(s, "")
+	return s
 }
 
 // asIntVal converts JSON number types to int.
