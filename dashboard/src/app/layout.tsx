@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import SessionSync from "@/components/SessionSync";
 import NotificationProvider from "@/components/NotificationProvider";
+import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -41,6 +42,7 @@ export default function RootLayout({
       <body className="font-sans">
         <TooltipProvider>
           <SessionSync />
+          <ServiceWorkerRegistrar />
           <NotificationProvider>
           <main className="app-scene">
             <div className="app-scene-bg app-scene-bg-animate" />

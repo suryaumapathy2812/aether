@@ -161,6 +161,30 @@ if [ -z "$S3_SECRET" ]; then
     echo "Generated new S3_SECRET_ACCESS_KEY"
 fi
 
+# Generate VAPID keys for Web Push notifications
+if [ -z "$VAPID_PUBLIC_KEY" ] || [ -z "$VAPID_PRIVATE_KEY" ]; then
+    echo "Generating VAPID keys for Web Push notifications..."
+    # Generate ECDSA P-256 key pair and extract raw keys in URL-safe base64 (VAPID format)
+    VAPID_PRIVATE_PEM=$(openssl ecparam -genkey -name prime256v1 -noout 2>/dev/null)
+    # Extract 32-byte private key via ASN1 parsing (robust, doesn't depend on DER offset)
+    PRIV_HEX=$(echo "$VAPID_PRIVATE_PEM" | openssl ec -outform DER 2>/dev/null | openssl asn1parse -inform DER -in /dev/stdin 2>/dev/null | grep "OCTET STRING" | head -1 | sed 's/.*\[HEX DUMP\]://')
+    VAPID_PRIVATE_KEY=$(echo "$PRIV_HEX" | xxd -r -p | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+    # Extract 65-byte uncompressed public key point (always last 65 bytes of DER pubkey)
+    VAPID_PUBLIC_KEY=$(echo "$VAPID_PRIVATE_PEM" | openssl ec -pubout -outform DER 2>/dev/null | tail -c 65 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+    if [ -n "$VAPID_PUBLIC_KEY" ] && [ -n "$VAPID_PRIVATE_KEY" ] && [ "$VAPID_PUBLIC_KEY" != "$VAPID_PRIVATE_KEY" ]; then
+        echo "Generated new VAPID keys"
+    else
+        echo -e "${YELLOW}Warning: VAPID key generation failed. Web Push will be disabled.${NC}"
+        echo -e "${YELLOW}You can generate keys manually: npx web-push generate-vapid-keys${NC}"
+        VAPID_PUBLIC_KEY=""
+        VAPID_PRIVATE_KEY=""
+    fi
+fi
+
+if [ -z "$VAPID_SUBJECT" ]; then
+    VAPID_SUBJECT="mailto:admin@${DOMAIN}"
+fi
+
 echo -e "${YELLOW}Please save these passwords:${NC}"
 echo -e "  POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
 echo -e "  BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}"
@@ -262,9 +286,9 @@ DOZZLE_PORT=8080
 # OPTIONAL
 # =============================================================================
 
-VAPID_PUBLIC_KEY=
-VAPID_PRIVATE_KEY=
-VAPID_SUBJECT=
+VAPID_PUBLIC_KEY=$VAPID_PUBLIC_KEY
+VAPID_PRIVATE_KEY=$VAPID_PRIVATE_KEY
+VAPID_SUBJECT=$VAPID_SUBJECT
 
 GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
