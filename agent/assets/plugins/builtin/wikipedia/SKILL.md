@@ -80,7 +80,7 @@ Get the current date and time in any timezone or city.
 
 **Wikipedia vs web search:**
 - Use `wikipedia_search` for established facts, historical events, well-known people/places
-- Use `web_search` (Brave) for current events, recent news, or topics too new for Wikipedia
+- Use `web_search` (builtin) for current events, recent news, or topics too new for Wikipedia
 
 **Wolfram Alpha vs calculator:**
 - Use `wolfram_query` for anything mathematical, scientific, or computational

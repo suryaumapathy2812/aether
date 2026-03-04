@@ -72,4 +72,4 @@ Convert between currencies using live exchange rates.
 **When NOT to use these tools:**
 - Simple mental math (2+2, 10% of 50) — just answer directly
 - General knowledge questions → use `wikipedia_search` instead
-- Current news or prices (stocks, crypto live prices) → use `web_search` instead
+- Current news or prices (stocks, crypto live prices) → use `web_search` (builtin) or `brave_web_search` (plugin) instead

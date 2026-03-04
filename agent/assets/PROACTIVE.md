@@ -121,9 +121,13 @@ The agent executing each work item has access to these tools (when the correspon
 - `get_file_info` — Get file metadata
 - `list_drive_files` — List files in a folder
 
+### Web Search (builtin — always available)
+- `web_search` — Search the web (Exa AI, free, no API key)
+- `web_fetch` — Fetch and read any URL
+
 ### Web Search (requires `brave-search` plugin)
-- `web_search` — Search the web
-- `news_search` — Search news
+- `brave_web_search` — Search the web via Brave Search (requires API key)
+- `news_search` — Search news via Brave Search
 
 ## Work item goal templates
 

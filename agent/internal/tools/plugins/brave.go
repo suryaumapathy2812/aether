@@ -14,7 +14,7 @@ type NewsSearchTool struct{}
 type LLMContextSearchTool struct{}
 
 func (t *WebSearchTool) Definition() tools.Definition {
-	return tools.Definition{Name: "web_search", Description: "Search the live web via Brave Search.", StatusText: "Searching web...", Parameters: []tools.Param{{Name: "query", Type: "string", Description: "Search query", Required: true}, {Name: "count", Type: "integer", Description: "Result count", Required: false, Default: 10}, {Name: "country", Type: "string", Description: "Country code", Required: false, Default: "IN"}}}
+	return tools.Definition{Name: "brave_web_search", Description: "Search the live web via Brave Search. Requires API key.", StatusText: "Searching web (Brave)...", Parameters: []tools.Param{{Name: "query", Type: "string", Description: "Search query", Required: true}, {Name: "count", Type: "integer", Description: "Result count", Required: false, Default: 10}, {Name: "country", Type: "string", Description: "Country code", Required: false, Default: "IN"}}}
 }
 
 func (t *WebSearchTool) Execute(ctx context.Context, call tools.Call) tools.Result {

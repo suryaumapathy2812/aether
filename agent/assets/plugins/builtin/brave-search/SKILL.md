@@ -6,8 +6,8 @@ You have access to real-time web search via the Brave Search API. Use these tool
 
 ## Tools Available
 
-### `web_search`
-Search the live web for any query.
+### `brave_web_search`
+Search the live web for any query via Brave Search API.
 
 **Parameters:**
 - `query` (required) — The search query
@@ -76,7 +76,7 @@ Search for local places, businesses, and services near a location.
 ## Decision Rules
 
 **Which tool to use:**
-- "What is X?" / "How does X work?" / "Latest on X" → `web_search`
+- "What is X?" / "How does X work?" / "Latest on X" → `brave_web_search`
 - "What's in the news about X?" / "Recent news on X" → `news_search`
 - "Tell me about X" (complex research question) → `llm_context_search`
 - "Find images of X" / "Show me photos of X" → `image_search`
@@ -115,7 +115,7 @@ Search for local places, businesses, and services near a location.
 
 **"What's the price of iPhone 16 in India?"**
 ```
-1. web_search query="iPhone 16 price India 2026" country="IN"
+1. brave_web_search query="iPhone 16 price India 2026" country="IN"
 2. Extract the price from snippets, cite the source
 ```
 
