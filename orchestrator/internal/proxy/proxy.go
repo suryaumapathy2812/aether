@@ -94,7 +94,7 @@ func RewriteQueryUserID(path string, q url.Values, userID string) url.Values {
 	for k, vals := range q {
 		copyQ[k] = append([]string(nil), vals...)
 	}
-	if strings.HasPrefix(path, "/api/memory/") || strings.HasPrefix(path, "/v1/agent/tasks") {
+	if strings.HasPrefix(path, "/api/memory/") || strings.HasPrefix(path, "/v1/agent/tasks") || strings.HasPrefix(path, "/api/push/") {
 		copyQ.Set("user_id", userID)
 	}
 	return copyQ
