@@ -137,11 +137,13 @@ func main() {
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		log.Fatalf("failed to create workspace dir: %v", err)
 	}
+	pushDeliverer := ws.NewPushDeliverer(store, pushSender, wsHub)
 	toolOrchestrator := tools.NewOrchestrator(toolRegistry, tools.ExecContext{
-		WorkingDir: workspaceDir,
-		Store:      store,
-		Skills:     skillsManager,
-		Plugins:    pluginsManager,
+		WorkingDir:    workspaceDir,
+		Store:         store,
+		Skills:        skillsManager,
+		Plugins:       pluginsManager,
+		PushDeliverer: pushDeliverer,
 	})
 
 	// ── LLM & Media ────────────────────────────────────────────────

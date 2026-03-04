@@ -141,13 +141,29 @@ func (h *PushHandler) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	h.sender.SendToAll(pushSubs, PushPayload{
+	results := h.sender.SendToAll(pushSubs, PushPayload{
 		Title: "Hello from Aether",
 		Body:  "Push notifications are working!",
 		Tag:   "test",
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "sent", "subscriptions": len(pushSubs)})
+	succeeded := 0
+	failed := 0
+	for _, r := range results {
+		if r.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":        "sent",
+		"subscriptions": len(pushSubs),
+		"succeeded":     succeeded,
+		"failed":        failed,
+		"results":       results,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

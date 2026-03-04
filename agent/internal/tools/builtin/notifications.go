@@ -3,14 +3,15 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 // SendNotificationTool allows the agent to send push notifications to the user.
-// It queues a notification in the store for delivery by the notification
-// infrastructure and broadcasts via WebSocket when available.
+// It queues a notification in the store, broadcasts via WebSocket, and delivers
+// via Web Push (if configured).
 type SendNotificationTool struct{}
 
 func (t *SendNotificationTool) Definition() tools.Definition {
@@ -49,13 +50,19 @@ func (t *SendNotificationTool) Execute(ctx context.Context, call tools.Call) too
 		tag = "proactive"
 	}
 
+	// Resolve user ID from task runtime context (set by conversation/agent handlers)
+	userID := "default"
+	if taskCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(taskCtx.UserID) != "" {
+		userID = strings.TrimSpace(taskCtx.UserID)
+	}
+
 	// Build the notification text as "title: body" for the store
 	notificationText := title + ": " + body
 
-	// Queue the notification in the store for delivery
+	// Queue the notification in the store for audit/history
 	notifID, err := call.Ctx.Store.QueueMemoryNotification(
 		ctx,
-		"default",        // userID
+		userID,
 		notificationText, // text
 		"push",           // deliveryType
 		"proactive",      // source
@@ -66,10 +73,25 @@ func (t *SendNotificationTool) Execute(ctx context.Context, call tools.Call) too
 		return tools.Fail("Failed to queue notification: "+err.Error(), nil)
 	}
 
-	return tools.Success(
-		fmt.Sprintf("Notification sent to user: %q (id=%d, tag=%s)", title, notifID, tag),
-		map[string]any{"notification_id": notifID, "tag": tag},
-	)
+	// Deliver via Web Push + WebSocket
+	pushSent := 0
+	pushFailed := 0
+	if call.Ctx.PushDeliverer != nil {
+		sent, failed, pushErr := call.Ctx.PushDeliverer.DeliverPush(ctx, userID, title, body, tag)
+		pushSent = sent
+		pushFailed = failed
+		if pushErr != nil {
+			log.Printf("send_notification: push delivery error for user=%s: %v", userID, pushErr)
+		}
+	}
+
+	summary := fmt.Sprintf("Notification sent to user: %q (id=%d, tag=%s, push_sent=%d, push_failed=%d)", title, notifID, tag, pushSent, pushFailed)
+	return tools.Success(summary, map[string]any{
+		"notification_id": notifID,
+		"tag":             tag,
+		"push_sent":       pushSent,
+		"push_failed":     pushFailed,
+	})
 }
 
 var _ tools.Tool = (*SendNotificationTool)(nil)

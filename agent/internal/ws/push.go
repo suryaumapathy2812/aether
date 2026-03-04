@@ -2,6 +2,8 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"strings"
 
@@ -91,21 +93,39 @@ func (s *PushSender) Send(sub PushSubscription, payload PushPayload) error {
 		log.Printf("ws push: send failed endpoint=%s err=%v", sub.Endpoint, err)
 		return err
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 400 {
-		log.Printf("ws push: endpoint returned status=%d endpoint=%s", resp.StatusCode, sub.Endpoint)
+		log.Printf("ws push: endpoint returned status=%d endpoint=%s body=%s", resp.StatusCode, sub.Endpoint, string(body))
+		return fmt.Errorf("push endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
+	log.Printf("ws push: sent ok status=%d endpoint=%s", resp.StatusCode, sub.Endpoint)
 	return nil
 }
 
+// PushResult captures the outcome of sending to a single subscription.
+type PushResult struct {
+	Endpoint string `json:"endpoint"`
+	Success  bool   `json:"success"`
+	Error    string `json:"error,omitempty"`
+}
+
 // SendToAll sends a push notification to all subscriptions for a user.
-func (s *PushSender) SendToAll(subscriptions []PushSubscription, payload PushPayload) {
+// Returns per-subscription results.
+func (s *PushSender) SendToAll(subscriptions []PushSubscription, payload PushPayload) []PushResult {
 	if s == nil {
-		return
+		return nil
 	}
+	results := make([]PushResult, 0, len(subscriptions))
 	for _, sub := range subscriptions {
+		r := PushResult{Endpoint: sub.Endpoint}
 		if err := s.Send(sub, payload); err != nil {
+			r.Error = err.Error()
 			log.Printf("ws push: failed to send to %s: %v", sub.Endpoint, err)
+		} else {
+			r.Success = true
 		}
+		results = append(results, r)
 	}
+	return results
 }
