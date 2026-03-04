@@ -31,6 +31,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/decisions", h.handleMemoryDecisions)
 	mux.HandleFunc("/api/memory/notifications", h.handleMemoryNotifications)
 	mux.HandleFunc("/api/memory/export", h.handleMemoryExport)
+	mux.HandleFunc("/api/memory/entities", h.handleEntities)
+	mux.HandleFunc("/api/memory/entities/", h.handleEntityByID)
 }
 
 func (h *Handler) memoryUserID(r *http.Request) string {
@@ -233,6 +235,85 @@ func (h *Handler) handleMemoryExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"export": export})
+}
+
+func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	userID := h.memoryUserID(r)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	var entities []db.EntityRecord
+	var err error
+	if q != "" {
+		entities, err = h.store.SearchEntities(r.Context(), userID, q, limit)
+	} else {
+		entityType := strings.TrimSpace(r.URL.Query().Get("type"))
+		entities, err = h.store.ListEntities(r.Context(), userID, entityType, limit)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entities": entities, "count": len(entities)})
+}
+
+func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	entityID := strings.TrimPrefix(r.URL.Path, "/api/memory/entities/")
+	entityID = strings.Trim(entityID, "/")
+	if entityID == "" {
+		writeError(w, http.StatusNotFound, "entity id is required")
+		return
+	}
+
+	ctx := r.Context()
+
+	entity, err := h.store.GetEntity(ctx, entityID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err == db.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	observations, err := h.store.ListEntityObservations(ctx, entityID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	interactions, err := h.store.ListEntityInteractions(ctx, entityID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	relations, err := h.store.ListEntityRelations(ctx, entityID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entity":       entity,
+		"observations": observations,
+		"interactions": interactions,
+		"relations":    relations,
+	})
 }
 
 func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {

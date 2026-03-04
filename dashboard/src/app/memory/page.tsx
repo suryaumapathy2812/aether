@@ -12,29 +12,16 @@ import { useSession } from "@/lib/auth-client";
 import {
   exportMemory,
   getDecisions,
+  getEntities,
+  getEntityDetails,
   getMemories,
   getMemoryConversations,
   getMemoryFacts,
-  getMemoryNotifications,
-  getMemorySessions,
+  type EntityRow,
+  type EntityDetails,
 } from "@/lib/api";
 
-type Tab =
-  | "about"
-  | "conversations"
-  | "sessions"
-  | "memories"
-  | "decisions"
-  | "notifications";
-
-interface SessionRow {
-  session_id: string;
-  summary: string;
-  started_at: number;
-  ended_at: number;
-  turns: number;
-  tools_used: string[];
-}
+type Tab = "about" | "conversations" | "entities" | "memories" | "decisions";
 
 interface ConversationRow {
   id: number;
@@ -59,16 +46,6 @@ interface DecisionRow {
   active: boolean;
   confidence: number;
   updated_at: string;
-}
-
-interface NotificationRow {
-  id?: number;
-  text?: string;
-  status?: string;
-  source?: string;
-  delivery_type?: string;
-  created_at?: string;
-  createdAt?: string;
 }
 
 const assistantMarkdownComponents: Components = {
@@ -127,12 +104,12 @@ export default function MemoryPage() {
   const { data: session, isPending: sessionPending } = useSession();
   const [tab, setTab] = useState<Tab>("about");
   const [facts, setFacts] = useState<string[]>([]);
-  const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [memories, setMemories] = useState<MemoryRow[]>([]);
   const [decisions, setDecisions] = useState<DecisionRow[]>([]);
-  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
-  const [reliability, setReliability] = useState<Record<string, unknown>>({});
+  const [entities, setEntities] = useState<EntityRow[]>([]);
+  const [selectedEntity, setSelectedEntity] = useState<EntityDetails | null>(null);
+  const [entityLoading, setEntityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -148,30 +125,19 @@ export default function MemoryPage() {
 
     async function load() {
       try {
-        const [
-          factsRes,
-          sessionsRes,
-          convsRes,
-          memoriesRes,
-          decisionsRes,
-          notificationsRes,
-        ] = await Promise.all([
-          getMemoryFacts(userId),
-          getMemorySessions(userId),
-          getMemoryConversations(userId, 30),
-          getMemories(userId, 100),
-          getDecisions(userId, undefined, true),
-          getMemoryNotifications(userId, 200),
-        ]);
+        const [factsRes, convsRes, memoriesRes, decisionsRes, entitiesRes] =
+          await Promise.all([
+            getMemoryFacts(userId),
+            getMemoryConversations(userId, 30),
+            getMemories(userId, 100),
+            getDecisions(userId, undefined, true),
+            getEntities(userId),
+          ]);
         setFacts(factsRes.facts || []);
-        setSessions(sessionsRes.sessions || []);
         setConversations(convsRes.conversations || []);
         setMemories(memoriesRes.memories || []);
         setDecisions(decisionsRes.decisions || []);
-        setNotifications(
-          (notificationsRes.notifications || []) as NotificationRow[],
-        );
-        setReliability(notificationsRes.reliability || {});
+        setEntities(entitiesRes.entities || []);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to load memory");
       } finally {
@@ -206,11 +172,10 @@ export default function MemoryPage() {
 
   const isEmpty =
     facts.length === 0 &&
-    sessions.length === 0 &&
     conversations.length === 0 &&
+    entities.length === 0 &&
     memories.length === 0 &&
-    decisions.length === 0 &&
-    notifications.length === 0;
+    decisions.length === 0;
 
   return (
     <PageShell
@@ -247,15 +212,28 @@ export default function MemoryPage() {
           {tab === "conversations" && (
             <ConversationsTab conversations={conversations} />
           )}
-          {tab === "sessions" && <SessionsTab sessions={sessions} />}
-          {tab === "memories" && <MemoriesTab memories={memories} />}
-          {tab === "decisions" && <DecisionsTab decisions={decisions} />}
-          {tab === "notifications" && (
-            <NotificationsTab
-              notifications={notifications}
-              reliability={reliability}
+          {tab === "entities" && (
+            <EntitiesTab
+              entities={entities}
+              selectedEntity={selectedEntity}
+              entityLoading={entityLoading}
+              onSelectEntity={async (entity) => {
+                setEntityLoading(true);
+                setSelectedEntity(null);
+                try {
+                  const details = await getEntityDetails(entity.id);
+                  setSelectedEntity(details);
+                } catch {
+                  setSelectedEntity(null);
+                } finally {
+                  setEntityLoading(false);
+                }
+              }}
+              onBack={() => setSelectedEntity(null)}
             />
           )}
+          {tab === "memories" && <MemoriesTab memories={memories} />}
+          {tab === "decisions" && <DecisionsTab decisions={decisions} />}
         </div>
       )}
     </PageShell>
@@ -272,10 +250,9 @@ function TabBar({
   const tabs: { id: Tab; label: string }[] = [
     { id: "about", label: "about you" },
     { id: "conversations", label: "conversations" },
-    { id: "sessions", label: "sessions" },
+    { id: "entities", label: "entities" },
     { id: "memories", label: "memories" },
     { id: "decisions", label: "decisions" },
-    { id: "notifications", label: "notifications" },
   ];
 
   return (
@@ -378,57 +355,6 @@ function ConversationsTab({
   );
 }
 
-function SessionsTab({ sessions }: { sessions: SessionRow[] }) {
-  if (sessions.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">no sessions yet</p>
-    );
-  }
-
-  return (
-    <div className="pt-2">
-      {sessions.map((s, i) => (
-        <div
-          key={`${s.session_id}-${i}`}
-          className="animate-[fade-in_0.2s_ease]"
-        >
-          <div className="py-5">
-            <p className="text-sm text-secondary-foreground leading-relaxed max-w-[84ch]">
-              {s.summary}
-            </p>
-            <div className="flex items-center gap-3 mt-2 flex-wrap">
-              <span className="text-[10px] text-muted-foreground tracking-wider">
-                {formatRelativeTime(s.ended_at)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">·</span>
-              <span className="text-[10px] text-muted-foreground tracking-wider">
-                {s.turns} {s.turns === 1 ? "turn" : "turns"}
-              </span>
-              {s.tools_used.length > 0 && (
-                <>
-                  <span className="text-[10px] text-muted-foreground">·</span>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {s.tools_used.map((tool) => (
-                      <Badge
-                        key={tool}
-                        variant="secondary"
-                        className="text-[9px] tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
-                      >
-                        {tool}
-                      </Badge>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-          {i < sessions.length - 1 && <Separator />}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function MemoriesTab({ memories }: { memories: MemoryRow[] }) {
   if (memories.length === 0) {
     return (
@@ -499,64 +425,282 @@ function DecisionsTab({ decisions }: { decisions: DecisionRow[] }) {
   );
 }
 
-function NotificationsTab({
-  notifications,
-  reliability,
+function EntitiesTab({
+  entities,
+  selectedEntity,
+  entityLoading,
+  onSelectEntity,
+  onBack,
 }: {
-  notifications: NotificationRow[];
-  reliability: Record<string, unknown>;
+  entities: EntityRow[];
+  selectedEntity: EntityDetails | null;
+  entityLoading: boolean;
+  onSelectEntity: (entity: EntityRow) => void;
+  onBack: () => void;
 }) {
+  if (selectedEntity) {
+    return (
+      <EntityDetailView
+        details={selectedEntity}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (entityLoading) {
+    return (
+      <p className="text-muted-foreground text-xs pt-4">loading entity...</p>
+    );
+  }
+
+  if (entities.length === 0) {
+    return (
+      <p className="text-muted-foreground text-xs pt-4">
+        no entities discovered yet
+      </p>
+    );
+  }
+
+  // Group entities by type
+  const grouped = entities.reduce<Record<string, EntityRow[]>>((acc, e) => {
+    const type = e.entity_type || "other";
+    if (!acc[type]) acc[type] = [];
+    acc[type].push(e);
+    return acc;
+  }, {});
+
+  const typeOrder = ["person", "project", "organization", "topic", "place", "tool"];
+  const sortedTypes = Object.keys(grouped).sort((a, b) => {
+    const ai = typeOrder.indexOf(a);
+    const bi = typeOrder.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+
   return (
-    <div className="space-y-4 pt-2">
-      <div className="rounded-xl border border-border/70 p-3">
-        <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-          reliability
-        </p>
-        <pre className="mt-2 text-[11px] text-secondary-foreground overflow-auto whitespace-pre-wrap">
-          {JSON.stringify(reliability, null, 2)}
-        </pre>
+    <div className="space-y-6 pt-2">
+      {sortedTypes.map((type) => (
+        <div key={type}>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+            {type}s ({grouped[type].length})
+          </p>
+          <div className="space-y-2">
+            {grouped[type].map((entity) => (
+              <button
+                key={entity.id}
+                onClick={() => onSelectEntity(entity)}
+                className="w-full text-left rounded-xl border border-border/70 p-3 hover:border-foreground/20 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-foreground font-medium truncate">
+                      {entity.name}
+                    </p>
+                    {entity.summary && (
+                      <p className="text-xs text-secondary-foreground mt-0.5 line-clamp-2 leading-relaxed">
+                        {entity.summary}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {entity.interaction_count > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {entity.interaction_count} interactions
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {entity.aliases.length > 0 && (
+                  <div className="flex gap-1.5 mt-2 flex-wrap">
+                    {entity.aliases.map((alias, i) => (
+                      <Badge
+                        key={i}
+                        variant="secondary"
+                        className="text-[9px] tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
+                      >
+                        {alias}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-[10px] text-muted-foreground">
+                    last seen {formatTimestamp(entity.last_seen_at)}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="text-[10px] text-muted-foreground pt-2">
+        {entities.length} {entities.length === 1 ? "entity" : "entities"} tracked
+      </p>
+    </div>
+  );
+}
+
+function EntityDetailView({
+  details,
+  onBack,
+}: {
+  details: EntityDetails;
+  onBack: () => void;
+}) {
+  const { entity, observations, interactions, relations } = details;
+
+  return (
+    <div className="space-y-6 pt-2">
+      {/* Header with back button */}
+      <div className="flex items-center gap-3">
+        <Button
+          variant="aether-link"
+          size="aether-link"
+          onClick={onBack}
+          className="text-[11px] uppercase tracking-[0.12em]"
+        >
+          &larr; back
+        </Button>
       </div>
 
-      {notifications.length === 0 ? (
-        <p className="text-muted-foreground text-xs">
-          no notifications recorded yet
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {notifications.map((n, i) => (
-            <div
-              key={`${n.id ?? i}`}
-              className="rounded-xl border border-border/70 p-3"
-            >
-              <p className="text-sm text-secondary-foreground leading-relaxed">
-                {n.text || "(no text)"}
-              </p>
-              <div className="flex items-center gap-2 mt-2 flex-wrap">
-                {n.status && (
-                  <Badge
-                    variant="secondary"
-                    className="text-[9px] tracking-wider"
-                  >
-                    {n.status}
-                  </Badge>
-                )}
-                {n.delivery_type && (
-                  <span className="text-[10px] text-muted-foreground">
-                    {n.delivery_type}
-                  </span>
-                )}
-                {n.source && (
-                  <span className="text-[10px] text-muted-foreground">
-                    source {n.source}
-                  </span>
-                )}
-                <span className="text-[10px] text-muted-foreground">
-                  {formatTimestamp(n.created_at || n.createdAt || "")}
-                </span>
-              </div>
-            </div>
-          ))}
+      {/* Entity header */}
+      <div>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-medium text-foreground">{entity.name}</h2>
+          <Badge variant="secondary" className="text-[9px] tracking-wider">
+            {entity.entity_type}
+          </Badge>
         </div>
+        {entity.summary && (
+          <p className="text-sm text-secondary-foreground mt-1 leading-relaxed">
+            {entity.summary}
+          </p>
+        )}
+        {entity.aliases.length > 0 && (
+          <div className="flex gap-1.5 mt-2 flex-wrap">
+            {entity.aliases.map((alias, i) => (
+              <Badge
+                key={i}
+                variant="secondary"
+                className="text-[9px] tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
+              >
+                {alias}
+              </Badge>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
+          <span>{entity.interaction_count} interactions</span>
+          <span>&middot;</span>
+          <span>first seen {formatTimestamp(entity.first_seen_at)}</span>
+          <span>&middot;</span>
+          <span>last seen {formatTimestamp(entity.last_seen_at)}</span>
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Observations */}
+      {observations.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+            observations ({observations.length})
+          </p>
+          <div className="space-y-2">
+            {observations.map((obs) => (
+              <div
+                key={obs.id}
+                className="pl-3 border-l-2 border-border"
+              >
+                <p className="text-sm text-secondary-foreground leading-relaxed">
+                  {obs.observation}
+                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="secondary" className="text-[9px] tracking-wider">
+                    {obs.category}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground">
+                    {obs.source}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Relations */}
+      {relations.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+            relationships ({relations.length})
+          </p>
+          <div className="space-y-2">
+            {relations.map((rel) => {
+              const isSource = rel.source_entity_id === entity.id;
+              return (
+                <div
+                  key={rel.id}
+                  className="rounded-xl border border-border/70 p-3"
+                >
+                  <p className="text-sm text-secondary-foreground">
+                    {isSource ? (
+                      <>
+                        <span className="text-foreground font-medium">{entity.name}</span>
+                        {" "}<span className="text-muted-foreground">{rel.relation}</span>{" "}
+                        <span className="text-foreground">{rel.target_entity_id}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-foreground">{rel.source_entity_id}</span>
+                        {" "}<span className="text-muted-foreground">{rel.relation}</span>{" "}
+                        <span className="text-foreground font-medium">{entity.name}</span>
+                      </>
+                    )}
+                  </p>
+                  {rel.context && (
+                    <p className="text-xs text-muted-foreground mt-1">{rel.context}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Interactions timeline */}
+      {interactions.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+            interactions ({interactions.length})
+          </p>
+          <div className="space-y-2">
+            {interactions.map((inter) => (
+              <div
+                key={inter.id}
+                className="pl-3 border-l-2 border-border"
+              >
+                <p className="text-sm text-secondary-foreground leading-relaxed">
+                  {inter.summary}
+                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="secondary" className="text-[9px] tracking-wider">
+                    {inter.source}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatTimestamp(inter.interaction_at)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty state for sections */}
+      {observations.length === 0 && relations.length === 0 && interactions.length === 0 && (
+        <p className="text-muted-foreground text-xs">
+          no details recorded yet for this entity
+        </p>
       )}
     </div>
   );

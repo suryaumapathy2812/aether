@@ -392,6 +392,158 @@ export async function exportMemory(userId: string) {
   return api<{ export: Record<string, unknown> }>(`/api/memory/export?user_id=${encodeURIComponent(userId)}`);
 }
 
+// ── Entities ──
+
+export interface EntityRow {
+  id: string;
+  entity_type: string;
+  name: string;
+  aliases: string[];
+  summary: string;
+  properties: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+  interaction_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getEntities(userId: string, entityType?: string, limit = 50) {
+  const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
+  if (entityType && entityType.trim()) {
+    params.set("type", entityType.trim());
+  }
+  const res = await api<{
+    entities: Array<Record<string, unknown> & {
+      id?: string; ID?: string;
+      entity_type?: string; EntityType?: string;
+      name?: string; Name?: string;
+      aliases?: string[]; Aliases?: string[];
+      summary?: string; Summary?: string;
+      properties?: Record<string, unknown>; Properties?: Record<string, unknown>;
+      first_seen_at?: string; FirstSeenAt?: string;
+      last_seen_at?: string; LastSeenAt?: string;
+      interaction_count?: number; InteractionCount?: number;
+      created_at?: string; CreatedAt?: string;
+      updated_at?: string; UpdatedAt?: string;
+    }>;
+    count: number;
+  }>(`/api/memory/entities?${params.toString()}`);
+  return {
+    entities: (res.entities || []).map((e) => ({
+      id: e.id || e.ID || "",
+      entity_type: e.entity_type || e.EntityType || "",
+      name: e.name || e.Name || "",
+      aliases: e.aliases || e.Aliases || [],
+      summary: e.summary || e.Summary || "",
+      properties: e.properties || e.Properties || {},
+      first_seen_at: e.first_seen_at || e.FirstSeenAt || "",
+      last_seen_at: e.last_seen_at || e.LastSeenAt || "",
+      interaction_count: e.interaction_count ?? e.InteractionCount ?? 0,
+      created_at: e.created_at || e.CreatedAt || "",
+      updated_at: e.updated_at || e.UpdatedAt || "",
+    })) as EntityRow[],
+    count: res.count || 0,
+  };
+}
+
+export interface EntityObservationRow {
+  id: number;
+  entity_id: string;
+  observation: string;
+  category: string;
+  confidence: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntityInteractionRow {
+  id: number;
+  entity_id: string;
+  summary: string;
+  source: string;
+  source_ref: string;
+  interaction_at: string;
+  created_at: string;
+}
+
+export interface EntityRelationRow {
+  id: number;
+  source_entity_id: string;
+  relation: string;
+  target_entity_id: string;
+  context: string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntityDetails {
+  entity: EntityRow;
+  observations: EntityObservationRow[];
+  interactions: EntityInteractionRow[];
+  relations: EntityRelationRow[];
+}
+
+export async function getEntityDetails(entityId: string) {
+  const res = await api<{
+    entity: Record<string, unknown>;
+    observations: Array<Record<string, unknown>>;
+    interactions: Array<Record<string, unknown>>;
+    relations: Array<Record<string, unknown>>;
+  }>(`/api/memory/entities/${encodeURIComponent(entityId)}`);
+
+  const e = res.entity || {};
+  const entity: EntityRow = {
+    id: (e.id || e.ID || "") as string,
+    entity_type: (e.entity_type || e.EntityType || "") as string,
+    name: (e.name || e.Name || "") as string,
+    aliases: (e.aliases || e.Aliases || []) as string[],
+    summary: (e.summary || e.Summary || "") as string,
+    properties: (e.properties || e.Properties || {}) as Record<string, unknown>,
+    first_seen_at: (e.first_seen_at || e.FirstSeenAt || "") as string,
+    last_seen_at: (e.last_seen_at || e.LastSeenAt || "") as string,
+    interaction_count: (e.interaction_count ?? e.InteractionCount ?? 0) as number,
+    created_at: (e.created_at || e.CreatedAt || "") as string,
+    updated_at: (e.updated_at || e.UpdatedAt || "") as string,
+  };
+
+  const observations: EntityObservationRow[] = (res.observations || []).map((o: Record<string, unknown>) => ({
+    id: (o.id ?? o.ID ?? 0) as number,
+    entity_id: (o.entity_id || o.EntityID || "") as string,
+    observation: (o.observation || o.Observation || "") as string,
+    category: (o.category || o.Category || "trait") as string,
+    confidence: (o.confidence ?? o.Confidence ?? 1) as number,
+    source: (o.source || o.Source || "extracted") as string,
+    created_at: (o.created_at || o.CreatedAt || "") as string,
+    updated_at: (o.updated_at || o.UpdatedAt || "") as string,
+  }));
+
+  const interactions: EntityInteractionRow[] = (res.interactions || []).map((i: Record<string, unknown>) => ({
+    id: (i.id ?? i.ID ?? 0) as number,
+    entity_id: (i.entity_id || i.EntityID || "") as string,
+    summary: (i.summary || i.Summary || "") as string,
+    source: (i.source || i.Source || "") as string,
+    source_ref: (i.source_ref || i.SourceRef || "") as string,
+    interaction_at: (i.interaction_at || i.InteractionAt || "") as string,
+    created_at: (i.created_at || i.CreatedAt || "") as string,
+  }));
+
+  const relations: EntityRelationRow[] = (res.relations || []).map((r: Record<string, unknown>) => ({
+    id: (r.id ?? r.ID ?? 0) as number,
+    source_entity_id: (r.source_entity_id || r.SourceEntityID || "") as string,
+    relation: (r.relation || r.Relation || "") as string,
+    target_entity_id: (r.target_entity_id || r.TargetEntityID || "") as string,
+    context: (r.context || r.Context || "") as string,
+    confidence: (r.confidence ?? r.Confidence ?? 1) as number,
+    created_at: (r.created_at || r.CreatedAt || "") as string,
+    updated_at: (r.updated_at || r.UpdatedAt || "") as string,
+  }));
+
+  return { entity, observations, interactions, relations } as EntityDetails;
+}
+
 function toEpoch(value?: string): number {
   if (!value) return 0;
   const ms = Date.parse(value);
