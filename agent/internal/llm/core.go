@@ -11,7 +11,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-const DefaultMaxToolIterations = 10
+const DefaultMaxToolIterations = 30
 const defaultStreamRetryAttempts = 3
 
 type Core struct {

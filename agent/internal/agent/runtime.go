@@ -142,6 +142,14 @@ func (r *Runtime) workerLoop(ctx context.Context, workerID int) {
 func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 	leaseDeadline := time.Now().UTC().Add(r.leaseFor)
 	_ = r.store.RenewAgentTaskLease(ctx, task.ID, task.LockToken, leaseDeadline)
+	if task.MaxSteps > 0 && task.StepCount >= task.MaxSteps {
+		errMsg := fmt.Sprintf("max execution cycles reached (%d/%d)", task.StepCount, task.MaxSteps)
+		_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, errMsg)
+		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "error", map[string]any{"message": errMsg, "code": "max_steps_reached"})
+		task.Status = db.AgentTaskFailed
+		r.notify(ctx, task, "failed", map[string]any{"error": errMsg, "phase": "max_steps"})
+		return
+	}
 
 	if cancel, err := r.store.IsAgentTaskCancelRequested(ctx, task.ID); err == nil && cancel {
 		_ = r.store.CancelAgentTask(ctx, task.ID, task.LockToken)
@@ -311,6 +319,23 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		r.notify(ctx, task, "failed", map[string]any{"error": hadError})
 		return
 	}
+	if finishReason == "max_iterations" {
+		feedback := "Execution reached the tool-call iteration limit for this run. Continue from current progress, process the next batch, and provide concrete results."
+		_ = r.store.AppendAgentTaskMessage(ctx, task.ID, "user", map[string]any{
+			"role":    "user",
+			"content": "System feedback: " + feedback,
+		})
+		if err := r.store.SetAgentTaskNeedsMoreWork(ctx, task.ID, task.LockToken, feedback); err != nil {
+			_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, "failed to requeue after max_iterations: "+err.Error())
+			task.Status = db.AgentTaskFailed
+			r.notify(ctx, task, "failed", map[string]any{"error": err.Error(), "phase": "max_iterations"})
+			return
+		}
+		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": string(db.AgentTaskNeedsMoreWork), "message": "Execution reached max tool iterations; queued for continued work"})
+		task.Status = db.AgentTaskNeedsMoreWork
+		r.notify(ctx, task, "needs_more_work", map[string]any{"reason": "max_iterations"})
+		return
+	}
 	if toolCallCount == 0 && likelyMetaDelegationResponse(assistant) {
 		errMsg := "delegated task completed without execution: assistant acknowledged delegation instead of performing the work"
 		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "error", map[string]any{"message": errMsg, "assistant": assistant})
@@ -354,6 +379,7 @@ func (r *Runtime) runVerificationTask(ctx context.Context, task db.AgentTaskReco
 		"reason":   decision.Reason,
 		"comments": decision.Comments,
 	})
+	events, _ := r.store.ListAgentTaskEvents(ctx, task.ID, 500)
 
 	switch decision.Decision {
 	case "completed":
@@ -373,6 +399,13 @@ func (r *Runtime) runVerificationTask(ctx context.Context, task db.AgentTaskReco
 		r.notify(ctx, task, "completed", map[string]any{"summary": summary, "verified": true})
 		return
 	case "needs_more_work":
+		if countNeedsMoreWorkDecisions(events) >= 3 {
+			reason := "verification requested more work too many times (3); failing to avoid infinite loop"
+			_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, reason)
+			task.Status = db.AgentTaskFailed
+			r.notify(ctx, task, "failed", map[string]any{"error": reason, "phase": "verification_retry_exhausted"})
+			return
+		}
 		feedback := strings.TrimSpace(decision.Comments)
 		if feedback == "" {
 			feedback = strings.TrimSpace(decision.Reason)
@@ -526,6 +559,24 @@ func summarizeTaskEvidence(events []db.AgentTaskEvent) map[string]any {
 		"status_trail":   statusTrail,
 		"notable_output": notable,
 	}
+}
+
+func countNeedsMoreWorkDecisions(events []db.AgentTaskEvent) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Kind != "verification_decision" {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(ev.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		decision, _ := payload["decision"].(string)
+		if strings.EqualFold(strings.TrimSpace(decision), "needs_more_work") {
+			n++
+		}
+	}
+	return n
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {
