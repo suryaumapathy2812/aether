@@ -1230,7 +1230,15 @@ func (s *Store) ClaimNextAgentTask(ctx context.Context, now time.Time, leaseFor 
 	if affected == 0 {
 		return AgentTaskRecord{}, ErrNotFound
 	}
-	rec, err := s.GetAgentTask(ctx, id)
+	row = tx.QueryRowContext(ctx, `
+		SELECT id, user_id, session_id, title, goal, status, priority, max_steps, step_count,
+			cancel_requested, deadline_at, started_at, finished_at, last_error, result_summary, result_json,
+			metadata_json, lock_token, locked_until, created_at, updated_at
+		FROM agent_tasks
+		WHERE id = ?
+		LIMIT 1
+	`, id)
+	rec, err := scanAgentTaskRow(row)
 	if err != nil {
 		return AgentTaskRecord{}, err
 	}
