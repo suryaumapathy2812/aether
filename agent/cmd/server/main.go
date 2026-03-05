@@ -184,7 +184,7 @@ func main() {
 	memory.RegisterDedupCronHandlers(scheduler, dedupEngine)
 
 	// ── HTTP handlers ───────────────────────────────────────────────
-	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
+	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, AssetsDir: cfg.AssetsDir, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
 	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
 	llmHandler := llmhttp.New(llmhttp.Options{
 		Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService,

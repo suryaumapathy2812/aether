@@ -32,7 +32,7 @@ func NewOpenAILLMProvider(cfg config.LLMConfig) *OpenAILLMProvider {
 	}
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
-		model = "google/gemini-3.1-flash-lite-preview"
+		model = "minimax/minimax-m2.5"
 	}
 
 	headers := map[string]string{}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ type Runtime struct {
 	store      *db.Store
 	core       *llm.Core
 	builder    *llm.ContextBuilder
+	subPrompt  string
 	window     ContextWindowManager
 	workers    int
 	pollEvery  time.Duration
@@ -32,6 +35,7 @@ type RuntimeOptions struct {
 	Store     *db.Store
 	Core      *llm.Core
 	Builder   *llm.ContextBuilder
+	AssetsDir string
 	Window    ContextWindowManager
 	Workers   int
 	PollEvery time.Duration
@@ -65,6 +69,7 @@ func NewRuntime(opts RuntimeOptions) *Runtime {
 		store:     opts.Store,
 		core:      opts.Core,
 		builder:   opts.Builder,
+		subPrompt: loadSubAgentPrompt(opts.AssetsDir),
 		window:    window,
 		workers:   workers,
 		pollEvery: pollEvery,
@@ -176,9 +181,13 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		llmMessages = append(llmMessages, map[string]any{"role": "user", "content": task.Goal})
 	}
 	bounded, compactNote := r.window.Apply(llmMessages)
+	subPrompt := strings.TrimSpace(r.subPrompt)
+	if subPrompt == "" {
+		subPrompt = "You are the delegated background worker for this task. First plan the work by creating a concise todo/task checklist, then execute the checklist step-by-step. Keep updating progress mentally as you complete items. Do not call delegate_task. Do not say that you delegated the task to someone else. Return concrete execution results with clear outcomes."
+	}
 	bounded = append([]map[string]any{{
 		"role":    "system",
-		"content": "You are the delegated background worker for this task. Execute the task directly. Do not call delegate_task. Do not say that you delegated the task to someone else. Return concrete execution results.",
+		"content": subPrompt,
 	}}, bounded...)
 	if strings.TrimSpace(compactNote) != "" {
 		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": "compacted", "message": compactNote})
@@ -577,6 +586,26 @@ func countNeedsMoreWorkDecisions(events []db.AgentTaskEvent) int {
 		}
 	}
 	return n
+}
+
+func loadSubAgentPrompt(assetsDir string) string {
+	promptPath := ""
+	if strings.TrimSpace(assetsDir) != "" {
+		promptPath = filepath.Join(assetsDir, "sub-agent.md")
+	} else {
+		wd, err := os.Getwd()
+		if err == nil {
+			promptPath = filepath.Join(wd, "assets", "sub-agent.md")
+		}
+	}
+	if strings.TrimSpace(promptPath) == "" {
+		return ""
+	}
+	b, err := os.ReadFile(promptPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {

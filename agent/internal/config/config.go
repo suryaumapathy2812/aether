@@ -110,7 +110,7 @@ func Load() Config {
 
 	model := firstNonEmpty(envString("OPENAI_MODEL", ""), envString("AETHER_LLM_MODEL", ""))
 	if model == "" {
-		model = "google/gemini-3.1-flash-lite-preview"
+		model = "minimax/minimax-m2.5"
 	}
 
 	return Config{
