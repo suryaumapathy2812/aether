@@ -422,6 +422,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			UNIQUE(user_id, endpoint)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);`,
+		// --- User preferences ---
+		`CREATE TABLE IF NOT EXISTS user_preferences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			pref_key TEXT NOT NULL,
+			pref_value TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+			UNIQUE(user_id, pref_key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_user_preferences_user_key ON user_preferences(user_id, pref_key);`,
 		// --- Entity memory tables ---
 		`CREATE TABLE IF NOT EXISTS entities (
 			id TEXT PRIMARY KEY,

@@ -7,6 +7,7 @@ import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import PushOptIn from "@/components/PushOptIn";
+import ModelPreference from "@/components/ModelPreference";
 import { useSession, signOut } from "@/lib/auth-client";
 
 /**
@@ -93,6 +94,13 @@ export default function AccountPage() {
         {/* Push notification toggle */}
         <div className="w-full px-1">
           <PushOptIn />
+        </div>
+
+        <Separator className="w-full my-4 opacity-50" />
+
+        {/* Model preference */}
+        <div className="w-full px-1">
+          <ModelPreference />
         </div>
       </div>
     </PageShell>

@@ -193,7 +193,7 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 		_ = r.store.AppendAgentTaskEvent(ctx, task.ID, "status", map[string]any{"status": "compacted", "message": compactNote})
 	}
 
-	env := r.builder.Build(bounded, map[string]any{"max_tokens": 1200, "temperature": 0.2}, task.UserID, firstNonEmpty(task.SessionID, task.ID))
+	env := r.builder.Build(bounded, r.userModelPolicy(ctx, task.UserID), task.UserID, firstNonEmpty(task.SessionID, task.ID))
 	env.Kind = "delegated_task"
 
 	_ = r.store.IncrementAgentTaskStep(ctx, task.ID, task.LockToken)
@@ -484,7 +484,7 @@ func (r *Runtime) verifyTaskWithLLM(ctx context.Context, task db.AgentTaskRecord
 			"content": "Verify this delegated task result and decide completion. Mark needs_more_work if output is vague, incomplete, or missing concrete deliverables.\n\nTask payload:\n" + string(payload),
 		},
 	}
-	env := r.builder.Build(messages, map[string]any{"max_tokens": 800, "temperature": 0}, task.UserID, firstNonEmpty(task.SessionID, task.ID)+":verify")
+	env := r.builder.Build(messages, r.userModelPolicy(ctx, task.UserID), task.UserID, firstNonEmpty(task.SessionID, task.ID)+":verify")
 	env.Kind = "delegated_task_verifier"
 	env.Tools = nil
 	env.ToolChoice = "none"
@@ -651,6 +651,19 @@ func likelyNeedsHumanInput(text string) bool {
 		}
 	}
 	return false
+}
+
+func (r *Runtime) userModelPolicy(ctx context.Context, userID string) map[string]any {
+	policy := map[string]any{"max_tokens": 1200, "temperature": 0.2}
+	if userID == "" {
+		return policy
+	}
+	model, err := r.store.GetUserPreference(ctx, userID, "model")
+	if err != nil || model == "" {
+		return policy
+	}
+	policy["model"] = model
+	return policy
 }
 
 func likelyMetaDelegationResponse(text string) bool {

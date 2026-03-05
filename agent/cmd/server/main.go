@@ -201,6 +201,8 @@ func main() {
 	wsHandler.RegisterRoutes(mux)
 	pushHandler := ws.NewPushHandler(store, pushSender)
 	pushHandler.RegisterRoutes(mux)
+	preferencesHandler := ws.NewPreferencesHandler(store)
+	preferencesHandler.RegisterRoutes(mux)
 
 	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store})
 	handler.RegisterRoutes(mux)
