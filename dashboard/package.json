@@ -14,6 +14,7 @@
     "@ai-sdk/react": "^3.0.93",
     "@prisma/adapter-pg": "^7.4.1",
     "@prisma/client": "^7.4.1",
+    "@tabler/icons-react": "^3.39.0",
     "ai": "^6.0.91",
     "better-auth": "^1.2.0",
     "class-variance-authority": "^0.7.1",

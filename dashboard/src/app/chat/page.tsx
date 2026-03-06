@@ -395,17 +395,19 @@ export default function ChatPage() {
   if (isPending || !session) return null;
 
   return (
-    <div className="h-full flex flex-col w-full px-6 sm:px-8">
+    <div className="h-full flex flex-col w-full px-6 sm:px-8 pb-4">
       <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
-        <Button
-          variant="aether-ghost"
-          size="icon"
-          onClick={() => router.push("/home")}
-          className="w-8 h-8 min-w-[44px] min-h-[44px] -ml-2"
-          aria-label="Go back"
-        >
-          <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
-        </Button>
+        <div className="w-8 min-w-[44px] -ml-2 flex items-center justify-start">
+          <Button
+            variant="aether-ghost"
+            size="icon"
+            onClick={() => router.push("/home")}
+            className="w-8 h-8 min-w-[44px] min-h-[44px] md:hidden"
+            aria-label="Go back"
+          >
+            <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
+          </Button>
+        </div>
         <span className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal">
           Chat
         </span>

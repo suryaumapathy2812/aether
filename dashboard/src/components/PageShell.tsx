@@ -30,19 +30,19 @@ export default function PageShell({
     <div className="h-full flex flex-col w-full px-6 sm:px-8">
       {/* Header */}
       <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
-        {back ? (
-          <Button
-            variant="aether-ghost"
-            size="icon"
-            onClick={() => router.push(back)}
-            className="w-8 h-8 min-w-[44px] min-h-[44px] -ml-2"
-            aria-label="Go back"
-          >
-            <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
-          </Button>
-        ) : (
-          <div className="w-8 min-w-[44px]" />
-        )}
+        <div className="w-8 min-w-[44px] -ml-2 flex items-center justify-start">
+          {back && (
+            <Button
+              variant="aether-ghost"
+              size="icon"
+              onClick={() => router.push(back)}
+              className="w-8 h-8 min-w-[44px] min-h-[44px] md:hidden"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
+            </Button>
+          )}
+        </div>
 
         <h1 className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal">
           {title}

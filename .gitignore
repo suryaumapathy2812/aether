@@ -50,6 +50,8 @@ app/.skills/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 
 # IDE
 .idea/
@@ -61,6 +63,11 @@ reference_projects/
 # Temp/workspace
 workspace/
 .tmp/
+
+# Go build artifacts (air hot-reload)
+agent/tmp/
+agent/server
+orchestrator/tmp/
 
 # Local logs and build-generated service worker artifacts
 logs

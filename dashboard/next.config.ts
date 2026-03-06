@@ -5,7 +5,9 @@ const withPWA = require("next-pwa");
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  allowedDevOrigins: ["dashboard.core-ai.orb.local"],
+  allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
+    ? process.env.ALLOWED_DEV_ORIGINS.split(",").map((s) => s.trim())
+    : [],
 };
 
 export default withPWA({

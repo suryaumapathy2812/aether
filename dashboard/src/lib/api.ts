@@ -930,3 +930,74 @@ export function getOAuthStartUrl(pluginName: string): string {
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
   return `/plugins/${pluginName}/oauth/start${qs}`;
 }
+
+// ── Channels ──
+
+export interface ChannelInfo {
+  id: string;
+  user_id: string;
+  channel_type: string;
+  channel_id: string;
+  bot_token?: string;
+  display_name: string;
+  config: Record<string, string>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TelegramConnectRequest {
+  user_id?: string;
+  bot_token: string;
+  chat_id: string;
+}
+
+export interface TelegramBotInfo {
+  id: number;
+  first_name: string;
+  username: string;
+  name: string;
+}
+
+export async function listChannels(userId?: string): Promise<ChannelInfo[]> {
+  const params = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+  const data = await api<{ channels: ChannelInfo[] }>(`/api/channels${params}`);
+  return data.channels ?? [];
+}
+
+export async function connectTelegram(request: TelegramConnectRequest): Promise<{
+  success: boolean;
+  channel: ChannelInfo;
+  bot_info: TelegramBotInfo;
+}> {
+  return api("/api/channels/telegram/connect", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function disconnectChannel(channelId: string): Promise<{ success: boolean }> {
+  return api("/api/channels/telegram/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ channel_id: channelId }),
+  });
+}
+
+export async function enableChannel(channelId: string): Promise<{ success: boolean }> {
+  return api(`/api/channels/${encodeURIComponent(channelId)}/enable`, {
+    method: "POST",
+  });
+}
+
+export async function disableChannel(channelId: string): Promise<{ success: boolean }> {
+  return api(`/api/channels/${encodeURIComponent(channelId)}/disable`, {
+    method: "POST",
+  });
+}
+
+export async function sendChannelMessage(channelId: string, text: string): Promise<{ success: boolean }> {
+  return api(`/api/channels/${encodeURIComponent(channelId)}/send`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}

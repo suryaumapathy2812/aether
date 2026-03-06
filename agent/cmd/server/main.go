@@ -18,6 +18,9 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/agent"
 	agenthttp "github.com/suryaumapathy2812/core-ai/agent/internal/agent/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/channels"
+	channelshttp "github.com/suryaumapathy2812/core-ai/agent/internal/channels/httpapi"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/channels/telegram"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
@@ -230,6 +233,91 @@ func main() {
 		AdminToken: cfg.AdminToken,
 	})
 	adminHandler.RegisterRoutes(mux)
+
+	// ── Channels (Telegram, WhatsApp, etc.) ────────────────────────
+	channelMessageHandler := func(ctx context.Context, userID, text string, metadata map[string]any) error {
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+
+		log.Printf("channel message: user=%s text=%s", userID, text)
+
+		// Build the LLM request envelope (same as /v1/conversations/turn)
+		messages := []map[string]any{
+			{"role": "user", "content": text},
+		}
+		policy := map[string]any{}
+		sessionID := "channel-" + userID
+		env := llmBuilder.Build(messages, policy, userID, sessionID)
+
+		// Inject user context for tool execution
+		runtimeCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{UserID: userID})
+
+		// Run through the conversation runtime and collect the answer
+		var answerParts []string
+		for ev := range conversationRuntime.Run(runtimeCtx, env, conversation.RunOptions{AckFallback: "Working on that now."}) {
+			switch ev.EventType {
+			case conversation.EventAnswer:
+				if t, _ := ev.Payload["text"].(string); strings.TrimSpace(t) != "" {
+					answerParts = append(answerParts, t)
+				}
+			case conversation.EventError:
+				errMsg, _ := ev.Payload["message"].(string)
+				log.Printf("channel LLM error: user=%s err=%s", userID, errMsg)
+			}
+		}
+
+		answer := strings.TrimSpace(strings.Join(answerParts, ""))
+		if answer == "" {
+			answer = "I'm sorry, I couldn't generate a response."
+		}
+
+		// Record conversation in memory
+		if memoryService != nil {
+			memoryService.RecordConversation(context.Background(), userID, sessionID, text, text, answer)
+		}
+
+		// Store inbound message
+		dbChannelID, _ := metadata["channel_id_db"].(string)
+		if dbChannelID != "" {
+			_, _ = store.AddChannelMessage(ctx, db.ChannelMessageRecord{
+				ChannelID: dbChannelID,
+				Direction: "inbound",
+				Content:   text,
+			})
+		}
+
+		// Send the response back via the channel
+		channelType, _ := metadata["channel_type"].(string)
+		chatID, _ := metadata["chat_id"].(string)
+		botToken, _ := metadata["bot_token"].(string)
+
+		if channelType == string(channels.ChannelTypeTelegram) && chatID != "" && botToken != "" {
+			tgCh := telegram.NewTelegramChannel(botToken, nil)
+			if err := tgCh.SendMessage(ctx, channels.OutboundMessage{
+				ChannelID: chatID,
+				Text:      answer,
+				ParseMode: "Markdown",
+			}); err != nil {
+				log.Printf("channel send error: user=%s err=%v", userID, err)
+				return err
+			}
+
+			// Store outbound message
+			if dbChannelID != "" {
+				_, _ = store.AddChannelMessage(ctx, db.ChannelMessageRecord{
+					ChannelID: dbChannelID,
+					Direction: "outbound",
+					Content:   answer,
+				})
+			}
+		}
+
+		log.Printf("channel reply sent: user=%s len=%d", userID, len(answer))
+		return nil
+	}
+	channelHandler := channelshttp.NewHandler(store, channelMessageHandler, cfg.Channels.WebhookURL)
+	channelHandler.RegisterRoutes(mux)
 
 	// ── Start server ────────────────────────────────────────────────
 	httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: observability.Middleware(mux)}

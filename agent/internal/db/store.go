@@ -51,6 +51,31 @@ type PluginRecord struct {
 	Config      map[string]string
 }
 
+// ChannelRecord represents a communication channel (Telegram, WhatsApp, etc.)
+type ChannelRecord struct {
+	ID          string            `json:"id"`
+	UserID      string            `json:"user_id"`
+	ChannelType string            `json:"channel_type"`
+	ChannelID   string            `json:"channel_id"`
+	BotToken    string            `json:"bot_token,omitempty"`
+	DisplayName string            `json:"display_name"`
+	Config      map[string]string `json:"config"`
+	Enabled     bool              `json:"enabled"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// ChannelMessageRecord represents a message in a channel
+type ChannelMessageRecord struct {
+	ID           string    `json:"id"`
+	ChannelID    string    `json:"channel_id"`
+	MessageID    string    `json:"message_id,omitempty"`
+	Direction    string    `json:"direction"` // "inbound" or "outbound"
+	Content      string    `json:"content"`
+	MetadataJSON string    `json:"metadata_json,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
 type CronStatus string
 
 const (
@@ -495,6 +520,34 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_entity_relations_source ON entity_relations(source_entity_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_entity_relations_target ON entity_relations(target_entity_id);`,
+		// Channels table - for managing user communication channels (Telegram, WhatsApp, etc.)
+		`CREATE TABLE IF NOT EXISTS channels (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			channel_type TEXT NOT NULL,
+			channel_id TEXT NOT NULL,
+			bot_token TEXT,
+			display_name TEXT,
+			config_json TEXT,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(user_id, channel_type, channel_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_channels_user ON channels(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_channels_type ON channels(channel_type);`,
+		// Channel messages table - for storing message history
+		`CREATE TABLE IF NOT EXISTS channel_messages (
+			id TEXT PRIMARY KEY,
+			channel_id TEXT NOT NULL,
+			message_id TEXT,
+			direction TEXT NOT NULL,
+			content TEXT NOT NULL,
+			metadata_json TEXT,
+			timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, timestamp DESC);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -749,6 +802,275 @@ func (p *PluginScope) EncryptString(plaintext string) (string, error) {
 
 func (p *PluginScope) DecryptString(ciphertext string) (string, error) {
 	return p.store.DecryptString(ciphertext)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Channel Operations
+// ─────────────────────────────────────────────────────────────────────
+
+// UpsertChannel creates or updates a channel record
+func (s *Store) UpsertChannel(ctx context.Context, in ChannelRecord) (ChannelRecord, error) {
+	if s == nil || s.db == nil {
+		return ChannelRecord{}, fmt.Errorf("store unavailable")
+	}
+	if strings.TrimSpace(in.UserID) == "" {
+		in.UserID = "default"
+	}
+	if strings.TrimSpace(in.ChannelType) == "" {
+		return ChannelRecord{}, fmt.Errorf("channel_type is required")
+	}
+	if strings.TrimSpace(in.ChannelID) == "" {
+		return ChannelRecord{}, fmt.Errorf("channel_id is required")
+	}
+
+	id := strings.TrimSpace(in.ID)
+	if id == "" {
+		generated, err := newID()
+		if err != nil {
+			return ChannelRecord{}, err
+		}
+		id = generated
+	}
+
+	configJSON := "{}"
+	if in.Config != nil {
+		blob, _ := json.Marshal(in.Config)
+		configJSON = string(blob)
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO channels(id, user_id, channel_type, channel_id, bot_token, display_name, config_json, enabled)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, channel_type, channel_id) DO UPDATE SET
+			bot_token = COALESCE(excluded.bot_token, channels.bot_token),
+			display_name = COALESCE(excluded.display_name, channels.display_name),
+			config_json = COALESCE(excluded.config_json, channels.config_json),
+			enabled = COALESCE(excluded.enabled, channels.enabled),
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	`, id, in.UserID, in.ChannelType, in.ChannelID, in.BotToken, in.DisplayName, configJSON, boolToInt(in.Enabled))
+	if err != nil {
+		return ChannelRecord{}, err
+	}
+
+	return s.GetChannel(ctx, id)
+}
+
+// GetChannel retrieves a channel by ID
+func (s *Store) GetChannel(ctx context.Context, id string) (ChannelRecord, error) {
+	if s == nil || s.db == nil {
+		return ChannelRecord{}, fmt.Errorf("store unavailable")
+	}
+	var r ChannelRecord
+	var configJSON string
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, channel_type, channel_id, bot_token, display_name, config_json, enabled, created_at, updated_at
+		FROM channels WHERE id = ?
+	`, id).Scan(&r.ID, &r.UserID, &r.ChannelType, &r.ChannelID, &r.BotToken, &r.DisplayName, &configJSON, &r.Enabled, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChannelRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return ChannelRecord{}, err
+	}
+	r.Config = map[string]string{}
+	if configJSON != "" {
+		_ = json.Unmarshal([]byte(configJSON), &r.Config)
+	}
+	r.CreatedAt, _ = parseTS(created)
+	r.UpdatedAt, _ = parseTS(updated)
+	return r, nil
+}
+
+// GetChannelByUserAndType retrieves a channel by user_id and channel_type
+func (s *Store) GetChannelByUserAndType(ctx context.Context, userID, channelType, channelID string) (ChannelRecord, error) {
+	if s == nil || s.db == nil {
+		return ChannelRecord{}, fmt.Errorf("store unavailable")
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	var r ChannelRecord
+	var id string
+	var configJSON string
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, channel_type, channel_id, bot_token, display_name, config_json, enabled, created_at, updated_at
+		FROM channels WHERE user_id = ? AND channel_type = ? AND channel_id = ?
+	`, userID, channelType, channelID).Scan(&id, &r.UserID, &r.ChannelType, &r.ChannelID, &r.BotToken, &r.DisplayName, &configJSON, &r.Enabled, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChannelRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return ChannelRecord{}, err
+	}
+	r.ID = id
+	r.Config = map[string]string{}
+	if configJSON != "" {
+		_ = json.Unmarshal([]byte(configJSON), &r.Config)
+	}
+	r.CreatedAt, _ = parseTS(created)
+	r.UpdatedAt, _ = parseTS(updated)
+	return r, nil
+}
+
+// ListChannels lists all channels for a user
+func (s *Store) ListChannels(ctx context.Context, userID string) ([]ChannelRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store unavailable")
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_id, channel_type, channel_id, bot_token, display_name, config_json, enabled, created_at, updated_at
+		FROM channels WHERE user_id = ?
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChannelRecord
+	for rows.Next() {
+		var r ChannelRecord
+		var configJSON string
+		var created, updated string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.ChannelType, &r.ChannelID, &r.BotToken, &r.DisplayName, &configJSON, &r.Enabled, &created, &updated); err != nil {
+			return nil, err
+		}
+		r.Config = map[string]string{}
+		if configJSON != "" {
+			_ = json.Unmarshal([]byte(configJSON), &r.Config)
+		}
+		r.CreatedAt, _ = parseTS(created)
+		r.UpdatedAt, _ = parseTS(updated)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetChannelByTypeAndChatID looks up a channel by channel_type and channel_id (e.g. Telegram chat_id).
+// This is used by webhook handlers to map an incoming message to a user.
+func (s *Store) GetChannelByTypeAndChatID(ctx context.Context, channelType, chatID string) (ChannelRecord, error) {
+	if s == nil || s.db == nil {
+		return ChannelRecord{}, fmt.Errorf("store unavailable")
+	}
+	var r ChannelRecord
+	var configJSON string
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_id, channel_type, channel_id, bot_token, display_name, config_json, enabled, created_at, updated_at
+		FROM channels WHERE channel_type = ? AND channel_id = ?
+	`, channelType, chatID).Scan(&r.ID, &r.UserID, &r.ChannelType, &r.ChannelID, &r.BotToken, &r.DisplayName, &configJSON, &r.Enabled, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChannelRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return ChannelRecord{}, err
+	}
+	r.Config = map[string]string{}
+	if configJSON != "" {
+		_ = json.Unmarshal([]byte(configJSON), &r.Config)
+	}
+	r.CreatedAt, _ = parseTS(created)
+	r.UpdatedAt, _ = parseTS(updated)
+	return r, nil
+}
+
+// SetChannelEnabled enables or disables a channel
+func (s *Store) SetChannelEnabled(ctx context.Context, channelID string, enabled bool) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE channels SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?
+	`, boolToInt(enabled), channelID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteChannel deletes a channel by ID
+func (s *Store) DeleteChannel(ctx context.Context, channelID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, channelID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AddChannelMessage adds a message to a channel's history
+func (s *Store) AddChannelMessage(ctx context.Context, in ChannelMessageRecord) (ChannelMessageRecord, error) {
+	if s == nil || s.db == nil {
+		return ChannelMessageRecord{}, fmt.Errorf("store unavailable")
+	}
+	id := strings.TrimSpace(in.ID)
+	if id == "" {
+		generated, err := newID()
+		if err != nil {
+			return ChannelMessageRecord{}, err
+		}
+		id = generated
+	}
+	if strings.TrimSpace(in.MetadataJSON) == "" {
+		in.MetadataJSON = "{}"
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO channel_messages(id, channel_id, message_id, direction, content, metadata_json)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, id, in.ChannelID, in.MessageID, in.Direction, in.Content, in.MetadataJSON)
+	if err != nil {
+		return ChannelMessageRecord{}, err
+	}
+
+	in.ID = id
+	return in, nil
+}
+
+// ListChannelMessages lists messages for a channel
+func (s *Store) ListChannelMessages(ctx context.Context, channelID string, limit int) ([]ChannelMessageRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, channel_id, message_id, direction, content, metadata_json, timestamp
+		FROM channel_messages WHERE channel_id = ?
+		ORDER BY timestamp DESC LIMIT ?
+	`, channelID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChannelMessageRecord
+	for rows.Next() {
+		var r ChannelMessageRecord
+		var ts string
+		if err := rows.Scan(&r.ID, &r.ChannelID, &r.MessageID, &r.Direction, &r.Content, &r.MetadataJSON, &ts); err != nil {
+			return nil, err
+		}
+		r.Timestamp, _ = parseTS(ts)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ScheduleCronJob(ctx context.Context, in CronJobCreate) (CronJobRecord, error) {

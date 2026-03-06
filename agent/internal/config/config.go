@@ -25,6 +25,9 @@ type Config struct {
 	// Web Push (VAPID)
 	VAPID VAPIDConfig
 
+	// Channels (Telegram, WhatsApp, etc.)
+	Channels ChannelsConfig
+
 	// Agent identity and security
 	StateKey       string
 	AdminToken     string
@@ -71,6 +74,12 @@ type VAPIDConfig struct {
 	PublicKey  string
 	PrivateKey string
 	Subject    string
+}
+
+// ChannelsConfig holds settings for communication channels (Telegram, WhatsApp, etc.)
+type ChannelsConfig struct {
+	WebhookURL    string // Public URL for webhooks (e.g., from cloudflared)
+	WebhookSecret string // Secret token for webhook verification
 }
 
 // MediaLimitsConfig holds upload/validation size limits.
@@ -142,6 +151,11 @@ func Load() Config {
 			PublicKey:  envString("VAPID_PUBLIC_KEY", ""),
 			PrivateKey: envString("VAPID_PRIVATE_KEY", ""),
 			Subject:    envString("VAPID_SUBJECT", "mailto:admin@aether.local"),
+		},
+
+		Channels: ChannelsConfig{
+			WebhookURL:    envString("CHANNELS_WEBHOOK_URL", ""),
+			WebhookSecret: envString("CHANNELS_WEBHOOK_SECRET", ""),
 		},
 
 		StateKey:       envString("AGENT_STATE_KEY", ""),

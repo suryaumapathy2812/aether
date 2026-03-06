@@ -1,0 +1,40 @@
+# Caddyfile.local - Local development reverse proxy
+#
+# Architecture:
+#   Browser → Caddy:80 → routes to services
+#
+# Routing:
+#   /api/channels/telegram/webhook → Agent:8000  (Telegram webhook, direct)
+#   /api/channels/*                → Agent:8000  (Channel management API)
+#   Everything else                → Dashboard:3000 (Next.js handles all other routes)
+#     - /api/auth/*   → Better Auth (runs inside Next.js)
+#     - /api/go/*     → Next.js proxy → strips prefix → Agent:8000
+#     - /*            → Next.js pages
+
+:80 {
+    # 1. Channel webhook routes → Agent (must be direct, not through Next.js)
+    @channel_webhooks {
+        path /api/channels/*/webhook
+    }
+    reverse_proxy @channel_webhooks localhost:8000
+
+    # 2. Channel management API → Agent
+    @channel_api {
+        path /api/channels /api/channels/*
+    }
+    reverse_proxy @channel_api localhost:8000
+
+    # 3. Everything else → Dashboard (Next.js)
+    #    Next.js handles: /api/auth/*, /api/go/* (proxy), and all pages
+    reverse_proxy localhost:3000
+
+    # Health check
+    @health {
+        path /health
+    }
+    respond @health 200
+
+    log {
+        output file /tmp/caddy-local.log
+    }
+}

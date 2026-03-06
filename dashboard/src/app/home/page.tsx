@@ -54,6 +54,7 @@ export default function HomePage() {
           { label: "Agent", href: "/agent" },
           // Notifications entry intentionally hidden; access via bell icon.
           { label: "Memory", href: "/memory" },
+          { label: "Channels", href: "/channels" },
           { label: "Plugins", href: "/plugins" },
           { label: "Account", href: "/account" },
         ]}

@@ -1,0 +1,28 @@
+# Telegram Channel Configuration
+# https://core.telegram.org/bots/api
+
+name: telegram
+display_name: Telegram
+description: Connect via Telegram bot for messaging
+
+required_config:
+  - key: bot_token
+    description: Telegram bot token from @BotFather
+    required: true
+
+features:
+  - text
+  - media
+  - keyboard
+  - commands
+
+webhook_path: /api/channels/telegram/webhook
+
+# Commands the bot supports
+commands:
+  - command: start
+    description: Link your Telegram account to Aether
+  - command: help
+    description: Get help about using Aether
+  - command: status
+    description: Check your Aether connection status
