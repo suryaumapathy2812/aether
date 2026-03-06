@@ -89,6 +89,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/push/subscribe", s.requireIdentity(s.handlePushProxy))
 	mux.HandleFunc("/api/push/test", s.requireIdentity(s.handlePushProxy))
 
+	// Channel management — proxy to agent for Telegram/WhatsApp/etc
+	mux.HandleFunc("/api/channels", s.requireIdentity(s.proxyToAgentSamePath))
+	mux.HandleFunc("/api/channels/", s.requireIdentity(s.proxyToAgentSamePath))
+
 	return mux
 }
 
