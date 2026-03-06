@@ -90,10 +90,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/push/test", s.requireIdentity(s.handlePushProxy))
 
 	// Channel webhook — unauthenticated, called by Telegram/WhatsApp/etc.
-	// URL: /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
-	// The user_id + agent_id in the URL lets the orchestrator route to the
-	// correct agent without any authentication or DB lookups for the mapping.
-	mux.HandleFunc("POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}", s.handleChannelWebhookProxy)
+	// URL: POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+	//
+	// NOTE: We register this on /api/ (prefix) and parse the path manually to
+	// avoid net/http ServeMux wildcard conflicts with existing /api/* routes.
+	mux.HandleFunc("/api/", s.handleChannelWebhookProxy)
 
 	// Channel management — authenticated, proxy to agent for Telegram/WhatsApp/etc.
 	mux.HandleFunc("/api/channels", s.requireIdentity(s.proxyToAgentSamePath))
@@ -435,9 +436,26 @@ func (s *Server) handlePushProxy(w http.ResponseWriter, r *http.Request, id auth
 // The upstream path forwarded to the agent strips the user_id and agent_id:
 // /api/channels/{channel_type}/webhook
 func (s *Server) handleChannelWebhookProxy(w http.ResponseWriter, r *http.Request) {
-	userID := r.PathValue("user_id")
-	channelType := r.PathValue("channel_type")
-	agentID := r.PathValue("agent_id")
+	// Match only: /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+	trimmed := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 6 || parts[0] != "api" || parts[2] != "channels" || parts[4] != "webhook" {
+		// Not a channel webhook path; let this fallback handler return 404.
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID := strings.TrimSpace(parts[1])
+	channelType := strings.TrimSpace(parts[3])
+	agentID := strings.TrimSpace(parts[5])
+	if userID == "" || channelType == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
 
 	// The agent receives the standard webhook path (no user_id / agent_id).
 	upstreamPath := fmt.Sprintf("/api/channels/%s/webhook", channelType)
