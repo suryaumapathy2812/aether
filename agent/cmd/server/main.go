@@ -316,7 +316,7 @@ func main() {
 		log.Printf("channel reply sent: user=%s len=%d", userID, len(answer))
 		return nil
 	}
-	channelHandler := channelshttp.NewHandler(store, channelMessageHandler, cfg.Channels.WebhookURL)
+	channelHandler := channelshttp.NewHandler(store, channelMessageHandler, cfg.Channels.WebhookURL, cfg.Channels.AgentID)
 	channelHandler.RegisterRoutes(mux)
 
 	// ── Start server ────────────────────────────────────────────────

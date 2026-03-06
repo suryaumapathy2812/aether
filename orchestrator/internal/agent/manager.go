@@ -59,6 +59,11 @@ type ManagerConfig struct {
 	UpdateRepo    string
 	UpdateToken   string
 
+	// PublicBaseURL is the public base URL (e.g. "https://aether.example.com")
+	// from AETHER_PUBLIC_BASE_URL. Passed to agent containers so the agent
+	// can construct webhook callback URLs for Telegram, WhatsApp, etc.
+	PublicBaseURL string
+
 	// OAuthEnvVars holds "KEY=VALUE" pairs for OAuth provider credentials
 	// (e.g. GOOGLE_CLIENT_ID=…, SPOTIFY_CLIENT_SECRET=…) that are forwarded
 	// to agent containers so plugins can use env-backed credentials.
@@ -344,7 +349,14 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 		return "", err
 	}
 
-	env := []string{"PORT=" + strconv.Itoa(m.cfg.AgentPort)}
+	agentID := agentIDForUser(userID)
+	env := []string{
+		"PORT=" + strconv.Itoa(m.cfg.AgentPort),
+		"AETHER_AGENT_ID=" + agentID,
+	}
+	if strings.TrimSpace(m.cfg.PublicBaseURL) != "" {
+		env = append(env, "AETHER_PUBLIC_BASE_URL="+strings.TrimSpace(m.cfg.PublicBaseURL))
+	}
 	if strings.TrimSpace(m.cfg.AdminToken) != "" {
 		env = append(env, "AGENT_ADMIN_TOKEN="+strings.TrimSpace(m.cfg.AdminToken))
 	}

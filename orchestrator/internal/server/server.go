@@ -89,7 +89,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/push/subscribe", s.requireIdentity(s.handlePushProxy))
 	mux.HandleFunc("/api/push/test", s.requireIdentity(s.handlePushProxy))
 
-	// Channel management — proxy to agent for Telegram/WhatsApp/etc
+	// Channel webhook — unauthenticated, called by Telegram/WhatsApp/etc.
+	// URL: /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+	// The user_id + agent_id in the URL lets the orchestrator route to the
+	// correct agent without any authentication or DB lookups for the mapping.
+	mux.HandleFunc("POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}", s.handleChannelWebhookProxy)
+
+	// Channel management — authenticated, proxy to agent for Telegram/WhatsApp/etc.
 	mux.HandleFunc("/api/channels", s.requireIdentity(s.proxyToAgentSamePath))
 	mux.HandleFunc("/api/channels/", s.requireIdentity(s.proxyToAgentSamePath))
 
@@ -416,6 +422,95 @@ func (s *Server) handlePluginsProxy(w http.ResponseWriter, r *http.Request, id a
 
 func (s *Server) handlePushProxy(w http.ResponseWriter, r *http.Request, id auth.Identity) {
 	s.proxyToAgentSamePath(w, r, id)
+}
+
+// handleChannelWebhookProxy proxies inbound channel webhooks (e.g. Telegram)
+// to the correct agent without requiring user authentication.
+//
+// URL: POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+//
+// The user_id in the URL allows the orchestrator to resolve the correct agent
+// via the standard resolveAgent() path. The agent_id is used for direct DB
+// lookup as a fast path; user_id is the fallback.
+// The upstream path forwarded to the agent strips the user_id and agent_id:
+// /api/channels/{channel_type}/webhook
+func (s *Server) handleChannelWebhookProxy(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("user_id")
+	channelType := r.PathValue("channel_type")
+	agentID := r.PathValue("agent_id")
+
+	// The agent receives the standard webhook path (no user_id / agent_id).
+	upstreamPath := fmt.Sprintf("/api/channels/%s/webhook", channelType)
+
+	// In local dev mode, proxy directly to the configured agent URL.
+	if local := strings.TrimSpace(s.cfg.LocalAgentURL); local != "" {
+		u, err := url.Parse(local)
+		if err != nil || u.Hostname() == "" {
+			log.Printf("channel webhook: invalid local agent URL")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		port := u.Port()
+		if port == "" {
+			if strings.EqualFold(u.Scheme, "https") {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		n, _ := strconv.Atoi(port)
+		if !proxy.HTTPStream(s.httpClient, w, r, u.Hostname(), n, upstreamPath, "", false) {
+			w.WriteHeader(http.StatusOK) // 200 to avoid Telegram retries
+		}
+		return
+	}
+
+	// Production: try agent_id first (fast path), then fall back to user_id resolution.
+	var host string
+	var port int
+
+	if agentID != "" {
+		err := s.db.QueryRow(r.Context(), `
+			SELECT host, port FROM agents
+			WHERE id = $1 AND status = 'running'
+			LIMIT 1
+		`, agentID).Scan(&host, &port)
+		if err == nil {
+			goto forward
+		}
+		log.Printf("channel webhook: agent_id=%s not found, falling back to user_id=%s", agentID, userID)
+	}
+
+	// Fallback: resolve agent by user_id (same path as authenticated requests).
+	if userID != "" {
+		target, err := s.resolveAgent(r.Context(), userID)
+		if err == nil {
+			host = target.Host
+			port = target.Port
+			goto forward
+		}
+		log.Printf("channel webhook: resolveAgent failed for user_id=%s: %v", userID, err)
+	}
+
+	// Last resort: any running agent.
+	{
+		err := s.db.QueryRow(r.Context(), `
+			SELECT host, port FROM agents
+			WHERE status = 'running'
+			ORDER BY last_health DESC NULLS LAST
+			LIMIT 1
+		`).Scan(&host, &port)
+		if err != nil {
+			log.Printf("channel webhook: no running agent found: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
+forward:
+	if !proxy.HTTPStream(s.httpClient, w, r, host, port, upstreamPath, "", false) {
+		w.WriteHeader(http.StatusOK) // 200 to Telegram even on failure
+	}
 }
 
 func (s *Server) proxyToAgentSamePath(w http.ResponseWriter, r *http.Request, id auth.Identity) {

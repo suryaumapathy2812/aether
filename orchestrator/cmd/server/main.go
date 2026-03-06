@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -76,6 +77,7 @@ func main() {
 			S3GetTTL:      cfg.S3GetURLTTLSeconds,
 			UpdateRepo:    cfg.AgentUpdateRepo,
 			UpdateToken:   cfg.AgentUpdateToken,
+			PublicBaseURL: strings.TrimSpace(os.Getenv("AETHER_PUBLIC_BASE_URL")),
 			OAuthEnvVars:  config.CollectOAuthEnvVars(),
 		})
 		if err != nil {

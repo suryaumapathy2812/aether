@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels"
@@ -19,16 +20,20 @@ type Handler struct {
 	store          *db.Store
 	messageHandler channels.MessageHandler
 	webhookBaseURL string // e.g. "https://xyz.trycloudflare.com"
+	agentID        string // agent identity for multi-agent webhook routing
 }
 
 // NewHandler creates a new channel HTTP handler.
 // webhookBaseURL is the public base URL for webhooks (e.g. CHANNELS_WEBHOOK_URL).
 // If empty, the webhook URL is derived from the incoming request (won't work behind tunnels).
-func NewHandler(store *db.Store, messageHandler channels.MessageHandler, webhookBaseURL string) *Handler {
+// agentID is the orchestrator-assigned agent identifier; when set, it is appended to
+// the webhook URL so the orchestrator can route inbound webhooks to the correct agent.
+func NewHandler(store *db.Store, messageHandler channels.MessageHandler, webhookBaseURL, agentID string) *Handler {
 	return &Handler{
 		store:          store,
 		messageHandler: messageHandler,
 		webhookBaseURL: strings.TrimRight(webhookBaseURL, "/"),
+		agentID:        strings.TrimSpace(agentID),
 	}
 }
 
@@ -130,7 +135,7 @@ func (h *Handler) handleTelegramConnect(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Set the webhook
-	webhookURL := h.getWebhookURL(r, channels.ChannelTypeTelegram)
+	webhookURL := h.getWebhookURL(r, channels.ChannelTypeTelegram, userID)
 	if webhookURL != "" {
 		_ = ch.SetWebhook(r.Context(), webhookURL)
 	}
@@ -366,15 +371,29 @@ func (h *Handler) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) 
 
 // getWebhookURL returns the public webhook URL for a channel type.
 // Uses the configured webhookBaseURL if set, otherwise falls back to the request host.
-func (h *Handler) getWebhookURL(r *http.Request, channelType channels.ChannelType) string {
+// Preferred URL pattern:
+// /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+func (h *Handler) getWebhookURL(r *http.Request, channelType channels.ChannelType, userID string) string {
+	var base string
 	if h.webhookBaseURL != "" {
-		return fmt.Sprintf("%s/api/channels/%s/webhook", h.webhookBaseURL, channelType)
+		base = h.webhookBaseURL
+	} else {
+		// Fallback: derive from request (won't work behind tunnels/proxies)
+		scheme := "https"
+		if r.TLS == nil {
+			scheme = "http"
+		}
+		base = fmt.Sprintf("%s://%s", scheme, r.Host)
 	}
-	// Fallback: derive from request (won't work behind tunnels/proxies)
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
+	base = strings.TrimRight(base, "/")
+	uid := strings.TrimSpace(userID)
+	if uid == "" {
+		// Backward-compatible fallback when user_id is unavailable.
+		return fmt.Sprintf("%s/api/channels/%s/webhook", base, channelType)
 	}
-	host := r.Host
-	return fmt.Sprintf("%s://%s/api/channels/%s/webhook", scheme, host, channelType)
+	agentID := strings.TrimSpace(h.agentID)
+	if agentID == "" {
+		agentID = "unassigned"
+	}
+	return fmt.Sprintf("%s/api/%s/channels/%s/webhook/%s", base, url.PathEscape(uid), channelType, url.PathEscape(agentID))
 }

@@ -80,6 +80,7 @@ type VAPIDConfig struct {
 type ChannelsConfig struct {
 	WebhookURL    string // Public URL for webhooks (e.g., from cloudflared)
 	WebhookSecret string // Secret token for webhook verification
+	AgentID       string // Agent identity used in webhook URL routing (set by orchestrator)
 }
 
 // MediaLimitsConfig holds upload/validation size limits.
@@ -154,8 +155,9 @@ func Load() Config {
 		},
 
 		Channels: ChannelsConfig{
-			WebhookURL:    envString("CHANNELS_WEBHOOK_URL", ""),
+			WebhookURL:    firstNonEmpty(envString("CHANNELS_WEBHOOK_URL", ""), envString("AETHER_PUBLIC_BASE_URL", "")),
 			WebhookSecret: envString("CHANNELS_WEBHOOK_SECRET", ""),
+			AgentID:       envString("AETHER_AGENT_ID", ""),
 		},
 
 		StateKey:       envString("AGENT_STATE_KEY", ""),
