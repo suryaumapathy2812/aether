@@ -83,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/v1/", s.requireIdentity(s.handleV1Proxy))
 	mux.HandleFunc("/api/memory/", s.requireIdentity(s.handleMemoryProxy))
+	mux.HandleFunc("/api/preferences", s.requireIdentity(s.proxyToAgentSamePath))
+	mux.HandleFunc("/api/preferences/", s.requireIdentity(s.proxyToAgentSamePath))
 	mux.HandleFunc("/api/plugins", s.requireIdentity(s.handlePluginsProxy))
 	mux.HandleFunc("/api/plugins/", s.requireIdentity(s.handlePluginsProxy))
 	mux.HandleFunc("/api/push/vapid-key", s.requireIdentity(s.handlePushProxy))
