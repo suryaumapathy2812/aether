@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -183,7 +184,7 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 		return Target{}, err
 	}
 	if err := m.ensureUserMediaBucket(ctx, userID, target); err != nil {
-		return Target{}, err
+		log.Printf("media bucket ensure warning (new provision): user=%s err=%v", userID, err)
 	}
 
 	agentID := agentIDForUser(userID)
@@ -317,7 +318,7 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 	}
 	if started {
 		if err := m.ensureUserMediaBucket(ctx, rec.UserID, Target{Host: host, Port: port}); err != nil {
-			return Target{}, false, err
+			log.Printf("media bucket ensure warning (container restart): user=%s err=%v", rec.UserID, err)
 		}
 	}
 
