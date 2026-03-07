@@ -38,6 +38,22 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 		ALTER TABLE devices ADD COLUMN IF NOT EXISTS plugin_name TEXT DEFAULT '';
 		ALTER TABLE devices ADD COLUMN IF NOT EXISTS config_json TEXT DEFAULT '{}';
 
+		CREATE TABLE IF NOT EXISTS pair_requests (
+			code TEXT PRIMARY KEY,
+			device_type TEXT DEFAULT 'ios',
+			device_name TEXT DEFAULT 'Unknown Device',
+			created_at TIMESTAMPTZ DEFAULT now(),
+			expires_at TIMESTAMPTZ DEFAULT now() + interval '10 minutes',
+			claimed_by TEXT,
+			issued_channel_id TEXT,
+			issued_token TEXT,
+			issued_at TIMESTAMPTZ
+		);
+
+		ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS issued_channel_id TEXT;
+		ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS issued_token TEXT;
+		ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS issued_at TIMESTAMPTZ;
+
 		CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY,
 			user_id TEXT UNIQUE,
@@ -56,6 +72,7 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 		CREATE INDEX IF NOT EXISTS idx_session_token_expires ON session(token, expires_at);
 		CREATE INDEX IF NOT EXISTS idx_devices_token ON devices(token);
 		CREATE INDEX IF NOT EXISTS idx_devices_user_type ON devices(user_id, device_type, plugin_name);
+		CREATE INDEX IF NOT EXISTS idx_pair_requests_expires_at ON pair_requests(expires_at);
 	`)
 	return err
 }

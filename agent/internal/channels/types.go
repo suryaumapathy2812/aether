@@ -10,6 +10,7 @@ type ChannelType string
 
 const (
 	ChannelTypeTelegram ChannelType = "telegram"
+	ChannelTypeIOS      ChannelType = "ios"
 	ChannelTypeWhatsApp ChannelType = "whatsapp"
 	ChannelTypeSlack    ChannelType = "slack"
 	ChannelTypeEmail    ChannelType = "email"

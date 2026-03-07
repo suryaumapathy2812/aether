@@ -7,34 +7,40 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		6462A60A79C2F649B141A538 /* MediaUploadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A33D2554CD03873E326D85 /* MediaUploadService.swift */; };
 		6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728985C43549280D7EE48F1B /* VoiceOrbView.swift */; };
 		8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E72DC6F87F8AB249C304B76 /* AudioService.swift */; };
+		9CDD9F617E67A58F1C691B39 /* Pods_Aether.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 485F1F72CED742F7F6902D7C /* Pods_Aether.framework */; };
 		A21BF8D298679D261E473934 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4B279EFBA85A2B5140ED04 /* PairingView.swift */; };
 		B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC9C2F61237F70A4030DD272 /* PairingService.swift */; };
+		C17BEAE46DB70B536194C950 /* ConversationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A778AE137E4DF2968F1D02EC /* ConversationService.swift */; };
 		CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */; };
-		D214CF928A099372643E374F /* Pods_Aether.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */; };
 		E3724BB607C2D4F2836A5BBB /* WebRTCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */; };
+		EA81D9930E4C47C4FFD4ACE3 /* AudioRecorderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.release.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.release.xcconfig"; sourceTree = "<group>"; };
+		485F1F72CED742F7F6902D7C /* Pods_Aether.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Aether.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E72DC6F87F8AB249C304B76 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
+		55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderService.swift; sourceTree = "<group>"; };
 		728985C43549280D7EE48F1B /* VoiceOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOrbView.swift; sourceTree = "<group>"; };
 		7A4B279EFBA85A2B5140ED04 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCService.swift; sourceTree = "<group>"; };
+		A32F55E3ABA416F179046477 /* Pods-Aether.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.release.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.release.xcconfig"; sourceTree = "<group>"; };
+		A778AE137E4DF2968F1D02EC /* ConversationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationService.swift; sourceTree = "<group>"; };
 		AF079DE4E9E495EEF6637D03 /* Aether.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Aether.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AetherApp.swift; sourceTree = "<group>"; };
-		E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.debug.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.debug.xcconfig"; sourceTree = "<group>"; };
-		F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Aether.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1A33D2554CD03873E326D85 /* MediaUploadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaUploadService.swift; sourceTree = "<group>"; };
+		F9C6B077CC2490167F6A30F9 /* Pods-Aether.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.debug.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.debug.xcconfig"; sourceTree = "<group>"; };
 		FC9C2F61237F70A4030DD272 /* PairingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		F0AA3F27472F0CFC0A0E3460 /* Frameworks */ = {
+		6B5FD43B260CC1024A3EE371 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D214CF928A099372643E374F /* Pods_Aether.framework in Frameworks */,
+				9CDD9F617E67A58F1C691B39 /* Pods_Aether.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,14 +65,12 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		19492C5216FE3DDA8055E3D3 /* Pods */ = {
+		59A9CB07DEDFB08DC019FF30 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */,
-				32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */,
+				485F1F72CED742F7F6902D7C /* Pods_Aether.framework */,
 			);
-			name = Pods;
-			path = Pods;
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		7CCE34B3C0A23C3EA91514B0 = {
@@ -74,9 +78,19 @@
 			children = (
 				01EBE4DD8916DF7BB0D0EAD5 /* Aether */,
 				8A93DD82B280EDA489D217FB /* Products */,
-				19492C5216FE3DDA8055E3D3 /* Pods */,
-				93CF6A2C5FDA3A42B248696C /* Frameworks */,
+				87F38E50CA0F0FB12EDAD57B /* Pods */,
+				59A9CB07DEDFB08DC019FF30 /* Frameworks */,
 			);
+			sourceTree = "<group>";
+		};
+		87F38E50CA0F0FB12EDAD57B /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				F9C6B077CC2490167F6A30F9 /* Pods-Aether.debug.xcconfig */,
+				A32F55E3ABA416F179046477 /* Pods-Aether.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
 			sourceTree = "<group>";
 		};
 		8A93DD82B280EDA489D217FB /* Products */ = {
@@ -87,18 +101,13 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		93CF6A2C5FDA3A42B248696C /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				F8E170C4C4C0AD78B251E0CD /* Pods_Aether.framework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		984DA071728CC425F5BBE1CC /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */,
 				4E72DC6F87F8AB249C304B76 /* AudioService.swift */,
+				A778AE137E4DF2968F1D02EC /* ConversationService.swift */,
+				F1A33D2554CD03873E326D85 /* MediaUploadService.swift */,
 				FC9C2F61237F70A4030DD272 /* PairingService.swift */,
 				93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */,
 			);
@@ -121,10 +130,10 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1098AD2A372F4DD2918AFFA /* Build configuration list for PBXNativeTarget "Aether" */;
 			buildPhases = (
-				E4DC708E7439CE4089DAD121 /* [CP] Check Pods Manifest.lock */,
+				0AA299E03B2F14B3AA9BD85F /* [CP] Check Pods Manifest.lock */,
 				E885CAA05B4AF3999B54E2C7 /* Sources */,
-				F0AA3F27472F0CFC0A0E3460 /* Frameworks */,
-				3869B46611F49E613BD5CA1B /* [CP] Embed Pods Frameworks */,
+				6B5FD43B260CC1024A3EE371 /* Frameworks */,
+				0D1DBBB84FA41587696150D2 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -170,24 +179,7 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		3869B46611F49E613BD5CA1B /* [CP] Embed Pods Frameworks */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-input-files.xcfilelist",
-			);
-			name = "[CP] Embed Pods Frameworks";
-			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
-		E4DC708E7439CE4089DAD121 /* [CP] Check Pods Manifest.lock */ = {
+		0AA299E03B2F14B3AA9BD85F /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -209,6 +201,23 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
+		0D1DBBB84FA41587696150D2 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -217,7 +226,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */,
+				EA81D9930E4C47C4FFD4ACE3 /* AudioRecorderService.swift in Sources */,
 				8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */,
+				C17BEAE46DB70B536194C950 /* ConversationService.swift in Sources */,
+				6462A60A79C2F649B141A538 /* MediaUploadService.swift in Sources */,
 				B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */,
 				A21BF8D298679D261E473934 /* PairingView.swift in Sources */,
 				6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */,
@@ -286,13 +298,14 @@
 		};
 		8F65DEFA5F0FDB923D7B6E4B /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = E549AFA55B15ED4BE7BB1012 /* Pods-Aether.debug.xcconfig */;
+			baseConfigurationReference = F9C6B077CC2490167F6A30F9 /* Pods-Aether.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Aether/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -310,13 +323,14 @@
 		};
 		D117200E3E6E0A8910494FAE /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 32EB3D634D4810E2EEA24079 /* Pods-Aether.release.xcconfig */;
+			baseConfigurationReference = A32F55E3ABA416F179046477 /* Pods-Aether.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Aether/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

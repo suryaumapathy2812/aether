@@ -10,6 +10,7 @@ import {
   IconBrandTelegram,
   IconBrandWhatsapp,
   IconBrandSlack,
+  IconDeviceMobile,
 } from "@tabler/icons-react";
 
 /** Available channel types — add new ones here as they're implemented. */
@@ -20,6 +21,14 @@ const CHANNEL_TYPES = [
     description: "Message Aether through a Telegram bot",
     icon: IconBrandTelegram,
     href: "/channels/telegram",
+    available: true,
+  },
+  {
+    type: "ios",
+    name: "iOS",
+    description: "Pair your iPhone with Aether using a one-time code",
+    icon: IconDeviceMobile,
+    href: "/channels/ios",
     available: true,
   },
   {

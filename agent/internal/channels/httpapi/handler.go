@@ -41,6 +41,7 @@ func NewHandler(store *db.Store, messageHandler channels.MessageHandler, webhook
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Channel management
 	mux.HandleFunc("/api/channels", h.handleListChannels)
+	mux.HandleFunc("/api/channels/ios/connect", h.handleIOSConnect)
 	mux.HandleFunc("/api/channels/telegram/connect", h.handleTelegramConnect)
 	mux.HandleFunc("/api/channels/telegram/disconnect", h.handleTelegramDisconnect)
 
@@ -49,6 +50,59 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Channel actions
 	mux.HandleFunc("/api/channels/", h.handleChannelAction)
+}
+
+// handleIOSConnect handles POST /api/channels/ios/connect
+func (h *Handler) handleIOSConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		UserID      string `json:"user_id"`
+		ChannelID   string `json:"channel_id"`
+		DisplayName string `json:"display_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		channels.JSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = "default"
+	}
+	channelID := strings.TrimSpace(req.ChannelID)
+	if channelID == "" {
+		channels.JSONError(w, http.StatusBadRequest, "channel_id is required")
+		return
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = "iOS Device"
+	}
+
+	record := db.ChannelRecord{
+		UserID:      userID,
+		ChannelType: string(channels.ChannelTypeIOS),
+		ChannelID:   channelID,
+		DisplayName: displayName,
+		Enabled:     true,
+	}
+
+	saved, err := h.store.UpsertChannel(r.Context(), record)
+	if err != nil {
+		channels.JSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save channel: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"channel": saved,
+	})
 }
 
 // handleListChannels handles GET /api/channels

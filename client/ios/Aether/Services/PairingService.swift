@@ -132,10 +132,27 @@ class PairingService: ObservableObject {
         if trimmed.isEmpty {
             return Self.defaultOrchestratorURL
         }
+        let normalized: String
         if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-            return trimmed
+            normalized = trimmed
+        } else {
+            normalized = "https://\(trimmed)"
         }
-        return "https://\(trimmed)"
+
+        // Local dev convenience:
+        // The dashboard runs on :3000, but pairing + voice APIs live on orchestrator :4000.
+        if let url = URL(string: normalized), let host = url.host?.lowercased() {
+            let isLocalHost = host == "localhost" || host == "127.0.0.1"
+            if isLocalHost && url.port == 3000 {
+                var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                comps?.port = 4000
+                if let rewritten = comps?.url?.absoluteString {
+                    return rewritten.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                }
+            }
+        }
+
+        return normalized
     }
 
     func getDeviceToken() -> String? {

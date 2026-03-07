@@ -42,7 +42,7 @@ func New(cfg config.Config, db *pgxpool.Pool, mgr *agent.Manager) *Server {
 	return &Server{
 		cfg:      cfg,
 		db:       db,
-		auth:     auth.New(db),
+		auth:     auth.New(db, cfg.AgentSecret),
 		agentMgr: mgr,
 		httpClient: &http.Client{
 			Timeout: cfg.ProxyTimeout,
@@ -75,6 +75,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/webrtc/ice", s.requireIdentity(s.handleWebRTCIce))
 	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
 	mux.HandleFunc("/api/ws", s.requireIdentity(s.handleNotificationsWS))
+	mux.HandleFunc("/api/pair/request", s.handlePairRequest)
+	mux.HandleFunc("/api/pair/status/", s.handlePairStatus)
+	mux.HandleFunc("/api/pair/claim", s.requireIdentity(s.handlePairClaim))
 	mux.HandleFunc("/api/devices", s.requireIdentity(s.handleDevices))
 	mux.HandleFunc("/api/devices/telegram", s.requireIdentity(s.handleTelegramDevice))
 	mux.HandleFunc("/api/devices/", s.requireIdentity(s.handleDeviceByID))

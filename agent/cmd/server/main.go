@@ -194,7 +194,7 @@ func main() {
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
-	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService})
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Limits: cfg.Media})
 	convHandler.RegisterRoutes(mux)
 	agentHandler := agenthttp.New(store, mediaService)
 	agentHandler.RegisterRoutes(mux)

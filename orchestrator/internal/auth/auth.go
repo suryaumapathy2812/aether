@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,11 +17,12 @@ type Identity struct {
 }
 
 type Authenticator struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	secret string
 }
 
-func New(db *pgxpool.Pool) *Authenticator {
-	return &Authenticator{db: db}
+func New(db *pgxpool.Pool, secret string) *Authenticator {
+	return &Authenticator{db: db, secret: strings.TrimSpace(secret)}
 }
 
 func (a *Authenticator) IdentityFromRequest(r *http.Request) (Identity, error) {
@@ -42,6 +44,15 @@ func (a *Authenticator) IdentityFromRequest(r *http.Request) (Identity, error) {
 		`, token).Scan(&userID)
 		if err == nil && strings.TrimSpace(userID) != "" {
 			return Identity{UserID: userID, Token: token}, nil
+		}
+
+		if claims, ok := a.VerifyChannelToken(token); ok {
+			if claims.ExpiresAt > 0 && time.Now().Unix() > claims.ExpiresAt {
+				continue
+			}
+			if strings.TrimSpace(claims.UserID) != "" {
+				return Identity{UserID: claims.UserID, DeviceID: claims.ChannelID, Token: token}, nil
+			}
 		}
 
 		var deviceID string

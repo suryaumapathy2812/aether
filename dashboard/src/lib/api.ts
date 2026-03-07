@@ -74,7 +74,7 @@ function getOrchestratorBaseUrl(): string {
     return ""; // Same-origin - Traefik proxies /api/* to orchestrator in production
   }
   // SSR fallback
-  return process.env.AGENT_BASE_URL || "http://localhost:4000";
+  return process.env.ORCHESTRATOR_BASE_URL || process.env.AGENT_BASE_URL || "http://localhost:4000";
 }
 
 export async function orchestratorFetch(
@@ -999,5 +999,12 @@ export async function sendChannelMessage(channelId: string, text: string): Promi
   return api(`/api/channels/${encodeURIComponent(channelId)}/send`, {
     method: "POST",
     body: JSON.stringify({ text }),
+  });
+}
+
+export async function claimPairingCode(code: string): Promise<{ status: string }> {
+  return api<{ status: string }>("/api/pair/claim", {
+    method: "POST",
+    body: JSON.stringify({ code }),
   });
 }
