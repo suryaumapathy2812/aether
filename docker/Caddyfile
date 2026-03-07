@@ -22,7 +22,13 @@ aether.suryaumapathy.in {
 
 # Public MinIO S3 API endpoint (used by presigned upload/download URLs)
 s3.aether.suryaumapathy.in {
-    reverse_proxy localhost:9000
+    reverse_proxy localhost:9000 {
+        # Preserve the original Host for AWS SigV4 presigned URLs.
+        # If Host is rewritten to localhost:9000, MinIO returns 403 SignatureDoesNotMatch.
+        header_up Host {http.request.host}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+    }
 }
 
 # MinIO Console
