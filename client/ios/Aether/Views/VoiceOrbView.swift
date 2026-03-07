@@ -126,13 +126,13 @@ struct VoiceOrbView: View {
             Circle()
                 .fill(orbTint.opacity(orbOpacity * 0.16))
                 .frame(width: orbBaseSize + 92, height: orbBaseSize + 92)
-                .blur(radius: 34)
+                .blur(radius: 18)
                 .scaleEffect(orbScale * 1.12)
 
             Circle()
                 .fill(orbTint.opacity(orbOpacity * 0.34))
                 .frame(width: orbBaseSize + 46, height: orbBaseSize + 46)
-                .blur(radius: 22)
+                .blur(radius: 12)
                 .scaleEffect(orbScale * 1.08)
 
             Circle()
@@ -151,7 +151,7 @@ struct VoiceOrbView: View {
             Circle()
                 .fill(Color.white.opacity(orbOpacity * 0.5))
                 .frame(width: orbBaseSize * 0.30, height: orbBaseSize * 0.30)
-                .blur(radius: 7)
+                .blur(radius: 3)
                 .offset(x: -orbBaseSize * 0.16, y: -orbBaseSize * 0.16)
                 .scaleEffect(orbScale)
         }
@@ -224,7 +224,6 @@ struct VoiceOrbView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: audio.lastResponse)
-        .animation(.easeInOut(duration: 0.3), value: audio.statusText)
         .animation(.easeInOut(duration: 0.2), value: cancelArmed)
     }
 
@@ -289,13 +288,13 @@ struct VoiceOrbView: View {
                 .fill(RadialGradient(colors: [Color.white.opacity(0.1), .clear], center: .center, startRadius: 10, endRadius: 320))
                 .frame(width: 360, height: 360)
                 .offset(x: -160, y: -300)
-                .blur(radius: 12)
+                .blur(radius: 6)
 
             Circle()
                 .fill(RadialGradient(colors: [orbTint.opacity(0.14), .clear], center: .center, startRadius: 20, endRadius: 310))
                 .frame(width: 380, height: 380)
                 .offset(x: 170, y: 260)
-                .blur(radius: 16)
+                .blur(radius: 8)
 
             Rectangle()
                 .fill(LinearGradient(colors: [Color.black.opacity(0.52), .clear, Color.black.opacity(0.64)], startPoint: .top, endPoint: .bottom))

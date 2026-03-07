@@ -14,6 +14,7 @@ class PairingService: ObservableObject {
     private var cachedToken: String?
     private var pollTimer: Timer?
     private static let defaultOrchestratorURL = "https://aether.suryaumapathy.in"
+    private static let proxyPrefix = "/api/go"
 
     init() {
         // Load from UserDefaults or use default
@@ -35,7 +36,7 @@ class PairingService: ObservableObject {
     /// Generate a new pairing code and register with orchestrator.
     func startPairing() {
         let normalizedBaseURL = normalizedOrchestratorURL(orchestratorURL)
-        guard let pairURL = URL(string: "\(normalizedBaseURL)/api/pair/request") else {
+        guard let pairURL = URL(string: "\(normalizedBaseURL)\(Self.proxyPrefix)/api/pair/request") else {
             DispatchQueue.main.async {
                 self.status = "invalid orchestrator URL"
             }
@@ -91,7 +92,7 @@ class PairingService: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
-            guard let url = URL(string: "\(baseURL)/api/pair/status/\(code)") else {
+            guard let url = URL(string: "\(baseURL)\(Self.proxyPrefix)/api/pair/status/\(code)") else {
                 DispatchQueue.main.async {
                     self.status = "invalid orchestrator URL"
                 }
@@ -137,19 +138,6 @@ class PairingService: ObservableObject {
             normalized = trimmed
         } else {
             normalized = "https://\(trimmed)"
-        }
-
-        // Local dev convenience:
-        // The dashboard runs on :3000, but pairing + voice APIs live on orchestrator :4000.
-        if let url = URL(string: normalized), let host = url.host?.lowercased() {
-            let isLocalHost = host == "localhost" || host == "127.0.0.1"
-            if isLocalHost && url.port == 3000 {
-                var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                comps?.port = 4000
-                if let rewritten = comps?.url?.absoluteString {
-                    return rewritten.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                }
-            }
         }
 
         return normalized

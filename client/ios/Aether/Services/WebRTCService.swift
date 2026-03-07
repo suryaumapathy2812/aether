@@ -12,6 +12,8 @@ import WebRTC
 /// The server's SmallWebRTCTransport (aiortc) handles the other end.
 class WebRTCService: NSObject, ObservableObject {
 
+    private let proxyPrefix = "/api/go"
+
     // MARK: - Published State
 
     @Published var connectionState: RTCIceConnectionState = .new
@@ -248,7 +250,7 @@ class WebRTCService: NSObject, ObservableObject {
     }
 
     private func sendOffer(sdp: String, type: String) async throws -> SignalingAnswer {
-        let url = URL(string: "\(baseURL)/api/webrtc/offer")!
+        let url = URL(string: "\(baseURL)\(proxyPrefix)/api/webrtc/offer")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -284,7 +286,7 @@ class WebRTCService: NSObject, ObservableObject {
     private func sendIceCandidates(_ candidates: [RTCIceCandidate]) async {
         guard let pcId = pcId else { return }
 
-        let url = URL(string: "\(baseURL)/api/webrtc/ice")!
+        let url = URL(string: "\(baseURL)\(proxyPrefix)/api/webrtc/ice")!
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

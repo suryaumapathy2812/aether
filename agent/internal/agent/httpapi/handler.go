@@ -24,6 +24,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/agent/tasks", h.handleTasks)
 	mux.HandleFunc("/v1/agent/tasks/", h.handleTaskByID)
 	mux.HandleFunc("/v1/agent/jobs", h.handleJobs)
+	mux.HandleFunc("/api/media/ensure-bucket", h.handleEnsureMediaBucket)
 	mux.HandleFunc("/api/memory/facts", h.handleMemoryFacts)
 	mux.HandleFunc("/api/memory/sessions", h.handleMemorySessions)
 	mux.HandleFunc("/api/memory/conversations", h.handleMemoryConversations)
@@ -33,6 +34,38 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/export", h.handleMemoryExport)
 	mux.HandleFunc("/api/memory/entities", h.handleEntities)
 	mux.HandleFunc("/api/memory/entities/", h.handleEntityByID)
+}
+
+func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.media == nil || !h.media.Enabled() {
+		writeError(w, http.StatusBadRequest, "media storage is not configured")
+		return
+	}
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = "default"
+	}
+	bucket := h.media.BucketForUser(userID)
+	if strings.TrimSpace(bucket) == "" {
+		writeError(w, http.StatusBadRequest, "media bucket is not configured")
+		return
+	}
+	if err := h.media.EnsureBucket(r.Context(), bucket); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "bucket": bucket})
 }
 
 func (h *Handler) memoryUserID(r *http.Request) string {

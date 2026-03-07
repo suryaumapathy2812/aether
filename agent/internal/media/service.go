@@ -230,6 +230,12 @@ func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
 		_ = s.ensurePublicReadPolicy(ctx, bucket)
 		return nil
 	}
+	// Some production IAM policies do not allow HeadBucket/ListBucket but still
+	// allow object-level Put/Get with presigned URLs. In that case we should not
+	// fail media init; skip bucket management and continue.
+	if isAccessDenied(err) {
+		return nil
+	}
 	_, err = s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
 	if err != nil {
 		var apiErr smithy.APIError
@@ -390,4 +396,18 @@ func normalizeBucketName(v string) string {
 func IsNotFound(err error) bool {
 	var nsk *types.NotFound
 	return errors.As(err, &nsk)
+}
+
+func isAccessDenied(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	code := strings.TrimSpace(strings.ToLower(apiErr.ErrorCode()))
+	switch code {
+	case "accessdenied", "forbidden", "unauthorized", "unauthorizedoperation":
+		return true
+	default:
+		return false
+	}
 }

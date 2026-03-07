@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -180,6 +182,9 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 	if err := m.waitHealthy(ctx, ctrID, target.Host, target.Port); err != nil {
 		return Target{}, err
 	}
+	if err := m.ensureUserMediaBucket(ctx, userID, target); err != nil {
+		return Target{}, err
+	}
 
 	agentID := agentIDForUser(userID)
 	_, err = m.db.Exec(ctx, `
@@ -290,10 +295,12 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 		return Target{}, false, err
 	}
 
+	started := false
 	if inspect.State == nil || !inspect.State.Running {
 		if err := m.ensureContainerStarted(ctx, rec.ContainerID); err != nil {
 			return Target{}, false, err
 		}
+		started = true
 	}
 
 	host := m.agentHostFromInspect(inspect, containerNameForUser(rec.UserID))
@@ -307,6 +314,11 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 
 	if err := m.waitHealthy(ctx, rec.ContainerID, host, port); err != nil {
 		return Target{}, false, err
+	}
+	if started {
+		if err := m.ensureUserMediaBucket(ctx, rec.UserID, Target{Host: host, Port: port}); err != nil {
+			return Target{}, false, err
+		}
 	}
 
 	_, _ = m.db.Exec(ctx, `
@@ -518,6 +530,39 @@ func (m *Manager) waitHealthy(ctx context.Context, containerID string, host stri
 		return fmt.Errorf("agent failed health check before timeout: %s (%s)", healthURL, detail)
 	}
 	return fmt.Errorf("agent failed health check before timeout: %s", healthURL)
+}
+
+func (m *Manager) ensureUserMediaBucket(ctx context.Context, userID string, target Target) error {
+	uid := strings.TrimSpace(userID)
+	if uid == "" {
+		return nil
+	}
+	if strings.TrimSpace(m.cfg.S3Bucket) == "" && strings.TrimSpace(m.cfg.S3Template) == "" {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{"user_id": uid})
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://%s:%d/api/media/ensure-bucket", target.Host, target.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ensure media bucket request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		if msg := strings.TrimSpace(string(b)); msg != "" {
+			return fmt.Errorf("ensure media bucket failed: status=%d body=%s", resp.StatusCode, msg)
+		}
+		return fmt.Errorf("ensure media bucket failed: status=%d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (m *Manager) agentHostFromInspect(inspect container.InspectResponse, fallback string) string {

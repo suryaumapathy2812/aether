@@ -154,6 +154,8 @@ final class AudioService: ObservableObject {
         }
 
         var assistantAnswer = ""
+        var lastRenderedCount = 0
+        var lastRenderedAt = Date.distantPast
         try await conversation.streamTurn(messages: messages, sessionID: sessionID) { [weak self] (event: ConversationTurnEvent) in
             guard let self else { return }
             DispatchQueue.main.async {
@@ -165,14 +167,23 @@ final class AudioService: ObservableObject {
                 case "answer":
                     let chunk = event.text ?? ""
                     assistantAnswer += chunk
-                    self.lastResponse = assistantAnswer
-                    self.bumpAgentSpeechLevel(for: chunk)
+                    let shouldRender =
+                        (assistantAnswer.count - lastRenderedCount) >= 24 ||
+                        Date().timeIntervalSince(lastRenderedAt) >= 0.1 ||
+                        chunk.contains("\n")
+                    if shouldRender {
+                        self.lastResponse = assistantAnswer
+                        self.bumpAgentSpeechLevel(for: chunk)
+                        lastRenderedCount = assistantAnswer.count
+                        lastRenderedAt = Date()
+                    }
                     self.state = .speaking
                     self.statusText = "responding..."
                 case "error":
                     self.state = .error
                     self.statusText = event.error ?? "conversation failed"
                 case "done":
+                    self.lastResponse = assistantAnswer
                     self.state = .idle
                     self.statusText = "hold to record"
                 default:

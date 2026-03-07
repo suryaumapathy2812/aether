@@ -24,6 +24,7 @@ struct MediaRef {
 final class MediaUploadService {
     private let baseURL: String
     private let token: String
+    private let proxyPrefix = "/api/go"
 
     init(baseURL: String, token: String) {
         self.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -43,7 +44,7 @@ final class MediaUploadService {
             "size": size,
             "kind": "audio",
         ]
-        let initResponse = try await postJSON(path: "/v1/media/upload/init", body: initBody)
+        let initResponse = try await postJSON(path: "\(proxyPrefix)/v1/media/upload/init", body: initBody)
 
         guard
             let uploadURL = initResponse["upload_url"] as? String,
@@ -75,7 +76,7 @@ final class MediaUploadService {
             "size": size,
             "kind": "audio",
         ]
-        let completeResponse = try await postJSON(path: "/v1/media/upload/complete", body: completeBody)
+        let completeResponse = try await postJSON(path: "\(proxyPrefix)/v1/media/upload/complete", body: completeBody)
         guard let media = completeResponse["media"] as? [String: Any], let key = media["key"] as? String else {
             throw NSError(domain: "MediaUploadService", code: 3, userInfo: [NSLocalizedDescriptionKey: "invalid upload complete response"])
         }
