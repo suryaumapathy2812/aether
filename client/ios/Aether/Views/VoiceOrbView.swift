@@ -9,6 +9,7 @@ struct VoiceOrbView: View {
     @State private var isPressingOrb = false
     @State private var dragOffsetX: CGFloat = 0
     @State private var cancelArmed = false
+    @State private var didRunIntro = false
     @State private var textInput = ""
     @FocusState private var isTextFieldFocused: Bool
 
@@ -16,85 +17,87 @@ struct VoiceOrbView: View {
 
     private var orbBaseSize: CGFloat {
         switch audio.state {
-        case .idle: return 122
-        case .recording: return 144
-        case .uploading: return 110
-        case .thinking: return 118
-        case .speaking: return 136
-        case .error: return 102
+        case .idle: return 116
+        case .recording: return 126
+        case .uploading: return 112
+        case .thinking: return 114
+        case .speaking: return 120
+        case .error: return 112
         }
     }
 
     private var orbScale: CGFloat {
-        let userBoost = audio.userSpeechLevel * 0.18
-        let agentBoost = audio.agentSpeechLevel * 0.16
+        let userBoost = audio.userSpeechLevel * 0.08
+        let agentBoost = audio.agentSpeechLevel * 0.07
         switch audio.state {
-        case .recording: return (breathe ? 1.10 : 0.94) + userBoost
-        case .speaking: return (breathe ? 1.08 : 0.95) + agentBoost
-        case .thinking: return breathe ? 1.04 : 0.97
-        case .uploading: return breathe ? 1.03 : 0.98
-        default: return breathe ? 1.02 : 0.99
+        case .recording: return (breathe ? 1.05 : 0.98) + userBoost
+        case .speaking: return (breathe ? 1.04 : 0.98) + agentBoost
+        case .thinking: return breathe ? 1.02 : 0.99
+        case .uploading: return breathe ? 1.01 : 0.99
+        default: return breathe ? 1.01 : 1.0
         }
     }
 
     private var orbOpacity: Double {
         switch audio.state {
-        case .idle: return 0.07
-        case .recording: return 0.28
-        case .uploading: return 0.11
-        case .thinking: return 0.14
-        case .speaking: return 0.26
-        case .error: return 0.06
+        case .idle: return 0.12
+        case .recording: return 0.22
+        case .uploading: return 0.14
+        case .thinking: return 0.15
+        case .speaking: return 0.18
+        case .error: return 0.2
         }
     }
 
     private var glowRadius: CGFloat {
         switch audio.state {
-        case .recording: return breathe ? 66 : 42
-        case .speaking: return breathe ? 58 : 34
-        case .thinking: return breathe ? 40 : 22
-        case .uploading: return breathe ? 26 : 14
-        case .error: return 8
-        case .idle: return 16
+        case .recording: return breathe ? 24 : 16
+        case .speaking: return breathe ? 20 : 14
+        case .thinking: return breathe ? 18 : 12
+        case .uploading: return breathe ? 14 : 10
+        case .error: return 18
+        case .idle: return 10
         }
     }
 
     private var pulseSpeed: Double {
         switch audio.state {
-        case .recording: return 0.55
-        case .uploading: return 1.8
+        case .recording: return 0.95
+        case .uploading: return 1.3
         case .thinking: return 1.2
-        case .speaking: return 0.9
-        default: return 2.8
+        case .speaking: return 1.0
+        default: return 1.6
         }
     }
 
     private var orbTint: Color {
         switch audio.state {
-        case .recording: return Color(red: 1.0, green: 0.53, blue: 0.44)
-        case .speaking: return Color(red: 0.99, green: 0.95, blue: 0.82)
-        case .thinking: return Color(red: 0.88, green: 0.92, blue: 1.0)
-        case .uploading: return Color(red: 0.78, green: 0.85, blue: 0.98)
-        case .error: return Color(red: 1.0, green: 0.60, blue: 0.60)
-        case .idle: return .white
+        case .recording: return Color(red: 0.90, green: 0.52, blue: 0.47)
+        case .error: return Color(red: 0.93, green: 0.42, blue: 0.42)
+        default: return Color.white
         }
     }
 
     var body: some View {
         ZStack {
-            sceneBackground
+            Color(hex: "111111").ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                Spacer()
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    Spacer(minLength: 34)
 
-                orbSection
+                    orbSection
+                        .padding(.top, 6)
 
-                statusSection
+                    statusSection
+                        .padding(.top, 16)
 
-                Spacer()
-                Spacer()
+                    Spacer(minLength: 24)
 
-                bottomControls
+                    bottomControls
+                        .padding(.bottom, 10)
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
         }
         .preferredColorScheme(.dark)
@@ -102,6 +105,9 @@ struct VoiceOrbView: View {
             let token = pairing.getDeviceToken() ?? ""
             audio.configure(token: token, orchestratorURL: pairing.orchestratorURL)
             startBreathing(speed: pulseSpeed)
+            if !didRunIntro {
+                didRunIntro = true
+            }
         }
         .onChange(of: audio.state) {
             breathe = false
@@ -124,40 +130,29 @@ struct VoiceOrbView: View {
     private var orbSection: some View {
         ZStack {
             Circle()
-                .fill(orbTint.opacity(orbOpacity * 0.16))
-                .frame(width: orbBaseSize + 92, height: orbBaseSize + 92)
-                .blur(radius: 18)
-                .scaleEffect(orbScale * 1.12)
-
-            Circle()
                 .fill(orbTint.opacity(orbOpacity * 0.34))
-                .frame(width: orbBaseSize + 46, height: orbBaseSize + 46)
-                .blur(radius: 12)
-                .scaleEffect(orbScale * 1.08)
+                .frame(width: orbBaseSize + 34, height: orbBaseSize + 34)
+                .blur(radius: 10)
+                .scaleEffect(orbScale * 1.04)
 
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [orbTint.opacity(orbOpacity * 1.06), orbTint.opacity(orbOpacity * 0.62)],
+                        colors: [orbTint.opacity(orbOpacity * 1.04), orbTint.opacity(orbOpacity * 0.82)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .frame(width: orbBaseSize, height: orbBaseSize)
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.8))
-                .shadow(color: orbTint.opacity(orbOpacity * 0.88), radius: glowRadius)
-                .scaleEffect(orbScale)
-
-            Circle()
-                .fill(Color.white.opacity(orbOpacity * 0.5))
-                .frame(width: orbBaseSize * 0.30, height: orbBaseSize * 0.30)
-                .blur(radius: 3)
-                .offset(x: -orbBaseSize * 0.16, y: -orbBaseSize * 0.16)
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.2), lineWidth: 0.7))
+                .shadow(color: orbTint.opacity(orbOpacity * 0.64), radius: glowRadius)
                 .scaleEffect(orbScale)
         }
         .animation(.easeInOut(duration: pulseSpeed), value: breathe)
         .animation(.easeInOut(duration: 0.45), value: audio.state)
         .offset(x: audio.state == .recording ? max(-60, min(0, dragOffsetX * 0.35)) : 0)
+        .scaleEffect(didRunIntro ? 1.0 : 0.72, anchor: .center)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: didRunIntro)
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
@@ -191,19 +186,22 @@ struct VoiceOrbView: View {
     private var statusSection: some View {
         VStack(spacing: 10) {
             Text(audio.statusText)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .tracking(3.1)
-                .foregroundStyle(.white.opacity(0.34))
-                .padding(.top, 28)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .tracking(1.4)
+                .foregroundStyle(.white.opacity(0.58))
+                .padding(.top, 24)
 
             if !audio.lastResponse.isEmpty {
                 Text(audio.lastResponse)
-                    .font(.system(size: 16, weight: .light, design: .serif))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(6)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 4)
+                    .font(.system(size: 24, weight: .regular, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: 58, alignment: .topLeading)
+                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 2)
                     .transition(.opacity)
             }
 
@@ -230,13 +228,7 @@ struct VoiceOrbView: View {
     private var bottomControls: some View {
         VStack(spacing: 0) {
             textInputRow
-                .padding(.bottom, 12)
-
-            Text("aether")
-                .font(.system(size: 11, weight: .ultraLight, design: .serif))
-                .tracking(9)
-                .foregroundStyle(.white.opacity(0.17))
-                .padding(.bottom, 40)
+                .padding(.bottom, 28)
         }
     }
 
@@ -245,14 +237,14 @@ struct VoiceOrbView: View {
             TextField("type a message...", text: $textInput)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.74))
+                .foregroundStyle(.white.opacity(0.86))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.white.opacity(0.07))
+                .background(Color.white.opacity(0.05))
                 .clipShape(.rect(cornerRadius: 20))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                        .stroke(Color.white.opacity(0.11), lineWidth: 0.8)
                 )
                 .focused($isTextFieldFocused)
                 .onSubmit { sendTextMessage() }
@@ -260,8 +252,8 @@ struct VoiceOrbView: View {
             if !textInput.isEmpty {
                 Button(action: { sendTextMessage() }) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.46))
+                        .font(.system(size: 25))
+                        .foregroundStyle(.white.opacity(0.62))
                 }
                 .buttonStyle(.plain)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
@@ -269,37 +261,6 @@ struct VoiceOrbView: View {
         }
         .padding(.horizontal, 20)
         .animation(.easeInOut(duration: 0.2), value: textInput.isEmpty)
-    }
-
-    private var sceneBackground: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.04, blue: 0.05),
-                    Color(red: 0.05, green: 0.07, blue: 0.09),
-                    Color(red: 0.04, green: 0.05, blue: 0.07),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            Circle()
-                .fill(RadialGradient(colors: [Color.white.opacity(0.1), .clear], center: .center, startRadius: 10, endRadius: 320))
-                .frame(width: 360, height: 360)
-                .offset(x: -160, y: -300)
-                .blur(radius: 6)
-
-            Circle()
-                .fill(RadialGradient(colors: [orbTint.opacity(0.14), .clear], center: .center, startRadius: 20, endRadius: 310))
-                .frame(width: 380, height: 380)
-                .offset(x: 170, y: 260)
-                .blur(radius: 8)
-
-            Rectangle()
-                .fill(LinearGradient(colors: [Color.black.opacity(0.52), .clear, Color.black.opacity(0.64)], startPoint: .top, endPoint: .bottom))
-                .ignoresSafeArea()
-        }
     }
 
     private func sendTextMessage() {

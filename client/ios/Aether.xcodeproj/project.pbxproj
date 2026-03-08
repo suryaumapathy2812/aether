@@ -7,40 +7,58 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		387B978A0453A90CA283BB1B /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D7FC0FE58F27508D74A141 /* APIClient.swift */; };
+		42CE23DDC22674A39D090BB3 /* Pods_Aether.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADDA62AFC71A3E6822B01406 /* Pods_Aether.framework */; };
+		56351FF7186D97CEBF3BDF81 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C6A18D2A17F3E46690FC04 /* HistoryView.swift */; };
 		6462A60A79C2F649B141A538 /* MediaUploadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A33D2554CD03873E326D85 /* MediaUploadService.swift */; };
+		6ABB17581A4791B54849A770 /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914A29F90472048DCE182586 /* MemoryView.swift */; };
 		6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728985C43549280D7EE48F1B /* VoiceOrbView.swift */; };
-		71BAEC6EA2350F2DDD996BE8 /* Pods_Aether.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 00CB124F005241A8B6D57667 /* Pods_Aether.framework */; };
+		73ED11964C4D97FF919136E6 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B2ED5EE2F13425EE7FB15E9 /* AppModels.swift */; };
 		8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E72DC6F87F8AB249C304B76 /* AudioService.swift */; };
+		93B5CF366893D468A8BE2959 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFAA8ABFCA46D08D699C95B6 /* AppRootView.swift */; };
+		99DF6F58FEA1E699C9C50DA4 /* PluginsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E85BB56290A339A2E49D0A66 /* PluginsView.swift */; };
 		A21BF8D298679D261E473934 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4B279EFBA85A2B5140ED04 /* PairingView.swift */; };
 		B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC9C2F61237F70A4030DD272 /* PairingService.swift */; };
+		B8690194479D2EEC4F67343B /* PluginsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29152FE78A752B39609924F3 /* PluginsService.swift */; };
 		C17BEAE46DB70B536194C950 /* ConversationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A778AE137E4DF2968F1D02EC /* ConversationService.swift */; };
 		CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */; };
+		D8C33E34F5339E491EA3D87B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76B5F7AF197E95D6A4D617FC /* Assets.xcassets */; };
 		E3724BB607C2D4F2836A5BBB /* WebRTCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */; };
 		EA81D9930E4C47C4FFD4ACE3 /* AudioRecorderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */; };
+		F92CAA66D89299C6DCE4F3E6 /* MemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1FFC729B107A7CA7544D37 /* MemoryService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		00CB124F005241A8B6D57667 /* Pods_Aether.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Aether.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		197B46B839C5B0CC45E9CDED /* Pods-Aether.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.release.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.release.xcconfig"; sourceTree = "<group>"; };
+		0813B6267A8EF422DD5685F6 /* Pods-Aether.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.debug.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.debug.xcconfig"; sourceTree = "<group>"; };
+		1E160D7AE9705E52C21D61A3 /* Pods-Aether.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.release.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.release.xcconfig"; sourceTree = "<group>"; };
+		29152FE78A752B39609924F3 /* PluginsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginsService.swift; sourceTree = "<group>"; };
+		2B2ED5EE2F13425EE7FB15E9 /* AppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModels.swift; sourceTree = "<group>"; };
 		4E72DC6F87F8AB249C304B76 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderService.swift; sourceTree = "<group>"; };
+		59D7FC0FE58F27508D74A141 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		728985C43549280D7EE48F1B /* VoiceOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOrbView.swift; sourceTree = "<group>"; };
+		76B5F7AF197E95D6A4D617FC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7A4B279EFBA85A2B5140ED04 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		7E1FFC729B107A7CA7544D37 /* MemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryService.swift; sourceTree = "<group>"; };
+		914A29F90472048DCE182586 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
 		93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCService.swift; sourceTree = "<group>"; };
 		A778AE137E4DF2968F1D02EC /* ConversationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationService.swift; sourceTree = "<group>"; };
+		ADDA62AFC71A3E6822B01406 /* Pods_Aether.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Aether.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF079DE4E9E495EEF6637D03 /* Aether.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aether.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AetherApp.swift; sourceTree = "<group>"; };
+		E85BB56290A339A2E49D0A66 /* PluginsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginsView.swift; sourceTree = "<group>"; };
+		EFAA8ABFCA46D08D699C95B6 /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
 		F1A33D2554CD03873E326D85 /* MediaUploadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaUploadService.swift; sourceTree = "<group>"; };
+		F7C6A18D2A17F3E46690FC04 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		FC9C2F61237F70A4030DD272 /* PairingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingService.swift; sourceTree = "<group>"; };
-		FE28A843E2F08DF4077D7CB4 /* Pods-Aether.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Aether.debug.xcconfig"; path = "Target Support Files/Pods-Aether/Pods-Aether.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		18E32FF55B221457EE05FAC7 /* Frameworks */ = {
+		F2ED06BDFCF4716B84703DA3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				71BAEC6EA2350F2DDD996BE8 /* Pods_Aether.framework in Frameworks */,
+				42CE23DDC22674A39D090BB3 /* Pods_Aether.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -51,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				D3E3C0C518EFFF023A4DA3E3 /* AetherApp.swift */,
+				76B5F7AF197E95D6A4D617FC /* Assets.xcassets */,
 				099C352F423E2984433965C0 /* Models */,
 				984DA071728CC425F5BBE1CC /* Services */,
 				A2C0BE802BE522838D6D8B7B /* Views */,
@@ -61,8 +80,17 @@
 		099C352F423E2984433965C0 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				2B2ED5EE2F13425EE7FB15E9 /* AppModels.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		76DCDDBE5DAEFF2B88B8F9E5 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				ADDA62AFC71A3E6822B01406 /* Pods_Aether.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		7CCE34B3C0A23C3EA91514B0 = {
@@ -70,9 +98,18 @@
 			children = (
 				01EBE4DD8916DF7BB0D0EAD5 /* Aether */,
 				8A93DD82B280EDA489D217FB /* Products */,
-				B53F4565020B97D3E09AC1BD /* Pods */,
-				EE9C23EFBCB347D6AA23AF8D /* Frameworks */,
+				810C854698CB49620ED4B9BE /* Pods */,
+				76DCDDBE5DAEFF2B88B8F9E5 /* Frameworks */,
 			);
+			sourceTree = "<group>";
+		};
+		810C854698CB49620ED4B9BE /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				0813B6267A8EF422DD5685F6 /* Pods-Aether.debug.xcconfig */,
+				1E160D7AE9705E52C21D61A3 /* Pods-Aether.release.xcconfig */,
+			);
+			path = Pods;
 			sourceTree = "<group>";
 		};
 		8A93DD82B280EDA489D217FB /* Products */ = {
@@ -86,11 +123,14 @@
 		984DA071728CC425F5BBE1CC /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				59D7FC0FE58F27508D74A141 /* APIClient.swift */,
 				55AC2660C4FDB852A3E025DC /* AudioRecorderService.swift */,
 				4E72DC6F87F8AB249C304B76 /* AudioService.swift */,
 				A778AE137E4DF2968F1D02EC /* ConversationService.swift */,
 				F1A33D2554CD03873E326D85 /* MediaUploadService.swift */,
+				7E1FFC729B107A7CA7544D37 /* MemoryService.swift */,
 				FC9C2F61237F70A4030DD272 /* PairingService.swift */,
+				29152FE78A752B39609924F3 /* PluginsService.swift */,
 				93E1C0E4CCF4BA6BC3798328 /* WebRTCService.swift */,
 			);
 			path = Services;
@@ -99,28 +139,14 @@
 		A2C0BE802BE522838D6D8B7B /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				EFAA8ABFCA46D08D699C95B6 /* AppRootView.swift */,
+				F7C6A18D2A17F3E46690FC04 /* HistoryView.swift */,
+				914A29F90472048DCE182586 /* MemoryView.swift */,
 				7A4B279EFBA85A2B5140ED04 /* PairingView.swift */,
+				E85BB56290A339A2E49D0A66 /* PluginsView.swift */,
 				728985C43549280D7EE48F1B /* VoiceOrbView.swift */,
 			);
 			path = Views;
-			sourceTree = "<group>";
-		};
-		B53F4565020B97D3E09AC1BD /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				FE28A843E2F08DF4077D7CB4 /* Pods-Aether.debug.xcconfig */,
-				197B46B839C5B0CC45E9CDED /* Pods-Aether.release.xcconfig */,
-			);
-			name = Pods;
-			path = Pods;
-			sourceTree = "<group>";
-		};
-		EE9C23EFBCB347D6AA23AF8D /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				00CB124F005241A8B6D57667 /* Pods_Aether.framework */,
-			);
-			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -130,10 +156,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1098AD2A372F4DD2918AFFA /* Build configuration list for PBXNativeTarget "Aether" */;
 			buildPhases = (
-				9FEF1C9AF75606ED58E5BDCE /* [CP] Check Pods Manifest.lock */,
+				400EC61F3B95F9793E9EAE02 /* [CP] Check Pods Manifest.lock */,
 				E885CAA05B4AF3999B54E2C7 /* Sources */,
-				18E32FF55B221457EE05FAC7 /* Frameworks */,
-				A60DAEEC7FB4FEEE8D3C22DF /* [CP] Embed Pods Frameworks */,
+				54FC1522C074745B3897AA41 /* Resources */,
+				F2ED06BDFCF4716B84703DA3 /* Frameworks */,
+				61D3068D6A0213E6BD82DA7C /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -151,7 +178,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1600;
+				LastUpgradeCheck = 2630;
 			};
 			buildConfigurationList = B356F83369813E0209654ED2 /* Build configuration list for PBXProject "Aether" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -172,8 +199,19 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		54FC1522C074745B3897AA41 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D8C33E34F5339E491EA3D87B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXShellScriptBuildPhase section */
-		9FEF1C9AF75606ED58E5BDCE /* [CP] Check Pods Manifest.lock */ = {
+		400EC61F3B95F9793E9EAE02 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -195,7 +233,7 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
-		A60DAEEC7FB4FEEE8D3C22DF /* [CP] Embed Pods Frameworks */ = {
+		61D3068D6A0213E6BD82DA7C /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -203,9 +241,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Aether/Pods-Aether-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -219,13 +261,21 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				387B978A0453A90CA283BB1B /* APIClient.swift in Sources */,
 				CD86AA353B3B31E7EF5BF4E6 /* AetherApp.swift in Sources */,
+				73ED11964C4D97FF919136E6 /* AppModels.swift in Sources */,
+				93B5CF366893D468A8BE2959 /* AppRootView.swift in Sources */,
 				EA81D9930E4C47C4FFD4ACE3 /* AudioRecorderService.swift in Sources */,
 				8935CD8DC8CCEA20BDA4F422 /* AudioService.swift in Sources */,
 				C17BEAE46DB70B536194C950 /* ConversationService.swift in Sources */,
+				56351FF7186D97CEBF3BDF81 /* HistoryView.swift in Sources */,
 				6462A60A79C2F649B141A538 /* MediaUploadService.swift in Sources */,
+				F92CAA66D89299C6DCE4F3E6 /* MemoryService.swift in Sources */,
+				6ABB17581A4791B54849A770 /* MemoryView.swift in Sources */,
 				B4502F007953C115BC0E35C4 /* PairingService.swift in Sources */,
 				A21BF8D298679D261E473934 /* PairingView.swift in Sources */,
+				B8690194479D2EEC4F67343B /* PluginsService.swift in Sources */,
+				99DF6F58FEA1E699C9C50DA4 /* PluginsView.swift in Sources */,
 				6E217EA2F1E12C49215CD76D /* VoiceOrbView.swift in Sources */,
 				E3724BB607C2D4F2836A5BBB /* WebRTCService.swift in Sources */,
 			);
@@ -238,6 +288,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -268,6 +319,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -284,6 +336,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
@@ -292,10 +345,11 @@
 		};
 		8F65DEFA5F0FDB923D7B6E4B /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = FE28A843E2F08DF4077D7CB4 /* Pods-Aether.debug.xcconfig */;
+			baseConfigurationReference = 0813B6267A8EF422DD5685F6 /* Pods-Aether.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6LVHHH6325;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Aether/Info.plist;
@@ -315,10 +369,11 @@
 		};
 		D117200E3E6E0A8910494FAE /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 197B46B839C5B0CC45E9CDED /* Pods-Aether.release.xcconfig */;
+			baseConfigurationReference = 1E160D7AE9705E52C21D61A3 /* Pods-Aether.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6LVHHH6325;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Aether/Info.plist;
@@ -340,6 +395,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -370,6 +426,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -393,6 +450,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
