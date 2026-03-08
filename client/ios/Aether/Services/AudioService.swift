@@ -26,7 +26,7 @@ final class AudioService: ObservableObject {
 
     private var token = ""
     private var baseURL = ""
-    private var sessionID = "ios-voice"
+    private var mediaSessionID = "ios"
 
     private var history: [[String: Any]] = []
     private let maxHistoryMessages = 20
@@ -101,7 +101,7 @@ final class AudioService: ObservableObject {
 
             do {
                 guard let uploader else { throw NSError(domain: "AudioService", code: 1, userInfo: [NSLocalizedDescriptionKey: "uploader unavailable"]) }
-                let media = try await uploader.uploadAudio(fileURL: fileURL, sessionID: sessionID)
+                let media = try await uploader.uploadAudio(fileURL: fileURL, sessionID: mediaSessionID)
                 try? FileManager.default.removeItem(at: fileURL)
                 try await sendTurn(userContent: [
                     ["type": "audio_ref", "media": media.asDictionary()],
@@ -156,7 +156,7 @@ final class AudioService: ObservableObject {
         var assistantAnswer = ""
         var lastRenderedCount = 0
         var lastRenderedAt = Date.distantPast
-        try await conversation.streamTurn(messages: messages, sessionID: sessionID) { [weak self] (event: ConversationTurnEvent) in
+        try await conversation.streamTurn(messages: messages, sessionID: "") { [weak self] (event: ConversationTurnEvent) in
             guard let self else { return }
             DispatchQueue.main.async {
                 switch event.phase {

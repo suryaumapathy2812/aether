@@ -242,12 +242,15 @@ func main() {
 
 		log.Printf("channel message: user=%s text=%s", userID, text)
 
-		// Build the LLM request envelope (same as /v1/conversations/turn)
-		messages := []map[string]any{
-			{"role": "user", "content": text},
-		}
+		dbChannelID, _ := metadata["channel_id_db"].(string)
+
+		// Build the LLM request envelope with shared cross-channel context.
+		messages := buildSharedConversationMessages(ctx, store, userID, text, 8)
 		policy := map[string]any{}
-		sessionID := "channel-" + userID
+		sessionID := strings.TrimSpace(userID)
+		if sessionID == "" {
+			sessionID = "default"
+		}
 		env := llmBuilder.Build(messages, policy, userID, sessionID)
 
 		// Inject user context for tool execution
@@ -278,7 +281,6 @@ func main() {
 		}
 
 		// Store inbound message
-		dbChannelID, _ := metadata["channel_id_db"].(string)
 		if dbChannelID != "" {
 			_, _ = store.AddChannelMessage(ctx, db.ChannelMessageRecord{
 				ChannelID: dbChannelID,
@@ -410,6 +412,41 @@ func anyToString(v any) string {
 		return s
 	}
 	return strings.TrimSpace(fmt.Sprintf("%v", v))
+}
+
+func buildSharedConversationMessages(ctx context.Context, store *db.Store, userID, latestText string, maxTurns int) []map[string]any {
+	latestText = strings.TrimSpace(latestText)
+	if latestText == "" {
+		return nil
+	}
+	if store == nil {
+		return []map[string]any{{"role": "user", "content": latestText}}
+	}
+	if maxTurns <= 0 {
+		maxTurns = 8
+	}
+
+	conversations, err := store.ListMemoryConversations(ctx, strings.TrimSpace(userID), maxTurns)
+	if err != nil || len(conversations) == 0 {
+		return []map[string]any{{"role": "user", "content": latestText}}
+	}
+
+	messages := make([]map[string]any, 0, len(conversations)*2+1)
+	for i := len(conversations) - 1; i >= 0; i-- {
+		c := conversations[i]
+		if um := strings.TrimSpace(c.UserMessage); um != "" {
+			messages = append(messages, map[string]any{"role": "user", "content": um})
+		}
+		if am := strings.TrimSpace(c.AssistantMessage); am != "" {
+			messages = append(messages, map[string]any{"role": "assistant", "content": am})
+		}
+	}
+
+	messages = append(messages, map[string]any{"role": "user", "content": latestText})
+	if len(messages) > maxTurns*2+1 {
+		messages = messages[len(messages)-(maxTurns*2+1):]
+	}
+	return messages
 }
 
 func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skills.Manager, pluginsManager *plugins.Manager, toolRegistry *tools.Registry, pluginRegistry *plugins.CronRegistry, reminderRegistry *reminders.Registry) {
