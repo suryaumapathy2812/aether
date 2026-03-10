@@ -133,9 +133,6 @@ if [ "$SKIP_DASHBOARD" = false ]; then
     echo "Building Next.js app..."
     npm run build
     
-    echo "Running database migrations..."
-    npx prisma db push --skip-generate
-    
     echo -e "${GREEN}Dashboard build complete!${NC}"
     echo ""
 else
