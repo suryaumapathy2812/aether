@@ -384,8 +384,9 @@ func (t *DelegateTaskTool) Definition() tools.Definition {
 			{Name: "user_id", Type: "string", Description: "Task owner user id", Required: false, Default: "default"},
 			{Name: "session_id", Type: "string", Description: "Optional session id", Required: false, Default: ""},
 			{Name: "priority", Type: "integer", Description: "Priority score (higher first)", Required: false, Default: 0},
-			{Name: "max_steps", Type: "integer", Description: "Maximum autonomous loop steps", Required: false, Default: 10},
+			{Name: "max_steps", Type: "integer", Description: "Maximum autonomous loop steps", Required: false, Default: 30},
 			{Name: "constraints", Type: "object", Description: "Optional constraints metadata", Required: false, Default: map[string]any{}},
+			{Name: "conversation_context", Type: "array", Description: "Recent conversation turns for context (last 3-5 user/assistant messages)", Required: false, Default: []any{}, Items: map[string]any{"type": "object"}},
 		},
 	}
 }
@@ -419,13 +420,16 @@ func (t *DelegateTaskTool) Execute(ctx context.Context, call tools.Call) tools.R
 	if maxSteps > 0 && maxSteps < 3 {
 		maxSteps = 3
 	}
+	if maxSteps > 100 {
+		maxSteps = 100
+	}
 	constraints, _ := call.Args["constraints"].(map[string]any)
 	if constraints == nil {
 		constraints = map[string]any{}
 	}
 	goal = strings.TrimSpace(goal)
 	if goal != "" {
-		goal += "\n\nDelegation execution rules:\n- If you need missing user input before continuing, call request_human_approval and wait instead of finishing with a plain-text question.\n- If user provides natural-language time (e.g. 'tomorrow 8pm IST' or 'in 10 minutes'), convert it to RFC3339/ISO first.\n- schedule_reminder requires a future RFC3339 datetime; use world_time when needed to validate timezone and future time before calling schedule_reminder."
+		goal += "\n\nDelegation execution rules:\n- If conversation context was provided, use it to understand user preferences and prior discussion.\n- If you need missing user input before continuing, call request_human_approval and wait instead of finishing with a plain-text question.\n- If user provides natural-language time (e.g. 'tomorrow 8pm IST' or 'in 10 minutes'), convert it to RFC3339/ISO first.\n- schedule_reminder requires a future RFC3339 datetime; use world_time when needed to validate timezone and future time before calling schedule_reminder."
 	}
 	task, err := call.Ctx.Store.CreateAgentTask(ctx, db.AgentTaskCreate{
 		UserID:    userID,
@@ -441,6 +445,17 @@ func (t *DelegateTaskTool) Execute(ctx context.Context, call tools.Call) tools.R
 	})
 	if err != nil {
 		return tools.Fail("Failed to delegate task: "+err.Error(), nil)
+	}
+	// Store conversation context as initial task messages so the delegated agent has context
+	if convContext, ok := call.Args["conversation_context"].([]any); ok && len(convContext) > 0 {
+		for _, turn := range convContext {
+			if msg, ok := turn.(map[string]any); ok {
+				role, _ := msg["role"].(string)
+				if role == "user" || role == "assistant" {
+					_ = call.Ctx.Store.AppendAgentTaskMessage(ctx, task.ID, role, msg)
+				}
+			}
+		}
 	}
 	return tools.Success("Task delegated to background agent runtime.", map[string]any{"task_id": task.ID, "status": task.Status, "user_id": userID, "title": task.Title})
 }
@@ -485,7 +500,14 @@ func (t *ListTasksTool) Execute(ctx context.Context, call tools.Call) tools.Resu
 	if call.Ctx.Store == nil {
 		return tools.Fail("State store is unavailable", nil)
 	}
-	userID, _ := call.Args["user_id"].(string)
+	// Prefer authenticated user ID from context over LLM-provided argument.
+	userID := ""
+	if rtCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(rtCtx.UserID) != "" {
+		userID = rtCtx.UserID
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID, _ = call.Args["user_id"].(string)
+	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -612,7 +634,14 @@ func (t *ResumeTaskTool) Execute(ctx context.Context, call tools.Call) tools.Res
 		return tools.Fail("State store is unavailable", nil)
 	}
 	taskID, _ := call.Args["task_id"].(string)
-	userID, _ := call.Args["user_id"].(string)
+	// Prefer authenticated user ID from context over LLM-provided argument.
+	userID := ""
+	if rtCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(rtCtx.UserID) != "" {
+		userID = rtCtx.UserID
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID, _ = call.Args["user_id"].(string)
+	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -640,7 +669,14 @@ func (t *ListPendingApprovalsTool) Execute(ctx context.Context, call tools.Call)
 	if call.Ctx.Store == nil {
 		return tools.Fail("State store is unavailable", nil)
 	}
-	userID, _ := call.Args["user_id"].(string)
+	// Prefer authenticated user ID from context over LLM-provided argument.
+	userID := ""
+	if rtCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(rtCtx.UserID) != "" {
+		userID = rtCtx.UserID
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID, _ = call.Args["user_id"].(string)
+	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -686,7 +722,14 @@ func (t *ApproveTaskTool) Execute(ctx context.Context, call tools.Call) tools.Re
 		return tools.Fail("State store is unavailable", nil)
 	}
 	taskID, _ := call.Args["task_id"].(string)
-	userID, _ := call.Args["user_id"].(string)
+	// Prefer authenticated user ID from context over LLM-provided argument.
+	userID := ""
+	if rtCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(rtCtx.UserID) != "" {
+		userID = rtCtx.UserID
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID, _ = call.Args["user_id"].(string)
+	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -730,7 +773,14 @@ func (t *RejectTaskTool) Execute(ctx context.Context, call tools.Call) tools.Res
 		return tools.Fail("State store is unavailable", nil)
 	}
 	taskID, _ := call.Args["task_id"].(string)
-	userID, _ := call.Args["user_id"].(string)
+	// Prefer authenticated user ID from context over LLM-provided argument.
+	userID := ""
+	if rtCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(rtCtx.UserID) != "" {
+		userID = rtCtx.UserID
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID, _ = call.Args["user_id"].(string)
+	}
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}

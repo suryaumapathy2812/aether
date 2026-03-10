@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,6 +196,7 @@ func (r *Runtime) runTask(ctx context.Context, task db.AgentTaskRecord) {
 
 	env := r.builder.Build(bounded, r.userModelPolicy(ctx, task.UserID), task.UserID, firstNonEmpty(task.SessionID, task.ID))
 	env.Kind = "delegated_task"
+	log.Printf("delegated task %s: built context with %d tools for user %s", task.ID, len(env.Tools), task.UserID)
 
 	_ = r.store.IncrementAgentTaskStep(ctx, task.ID, task.LockToken)
 	assistantParts := []string{}
@@ -476,12 +478,34 @@ func (r *Runtime) verifyTaskWithLLM(ctx context.Context, task db.AgentTaskRecord
 	}, "", "  ")
 	messages := []map[string]any{
 		{
-			"role":    "system",
-			"content": "You are a strict delegated-task verifier. Decide whether execution actually completed the requested goal. Return only JSON with keys: decision, reason, comments, revised_summary. decision must be one of: completed, needs_more_work, failed.",
+			"role": "system",
+			"content": `You are a strict delegated-task verifier. Evaluate whether execution ACTUALLY completed the goal with CONCRETE evidence.
+
+VERIFICATION CHECKLIST (ALL must be true for "completed"):
+1. At least one meaningful tool was called (not just queries or read-only operations)
+2. The result contains specific, verifiable outcomes (numbers, names, actual data)
+3. No "I will do this" or "you can do this" language - only actual completion evidence
+4. If the goal was "process all X" or similar, there's a count showing completion (e.g. "5/5 processed")
+5. The result directly addresses what the user asked for
+
+Mark "needs_more_work" if:
+- Tool calls were made but no concrete results produced
+- The output is vague or lacks specific evidence
+- The agent asked a question instead of completing work
+- Processing was partial without explicit completion (e.g., "processed some items" without count)
+- The result summary says what COULD be done instead of what WAS done
+
+Mark "failed" if:
+- Critical errors occurred that cannot be recovered
+- The task is fundamentally impossible
+- Required tools or integrations are unavailable
+
+Return JSON: {"decision": "...", "reason": "...", "comments": "...", "revised_summary": "..."}
+decision must be one of: completed, needs_more_work, failed.`,
 		},
 		{
 			"role":    "user",
-			"content": "Verify this delegated task result and decide completion. Mark needs_more_work if output is vague, incomplete, or missing concrete deliverables.\n\nTask payload:\n" + string(payload),
+			"content": "Verify this delegated task result and decide completion. Be strict - require concrete evidence of work done.\n\nTask payload:\n" + string(payload),
 		},
 	}
 	env := r.builder.Build(messages, r.userModelPolicy(ctx, task.UserID), task.UserID, firstNonEmpty(task.SessionID, task.ID)+":verify")

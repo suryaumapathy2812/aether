@@ -99,6 +99,9 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		if section := b.memoryPromptSection(userID, messages); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
+		if section := b.tasksPromptSection(userID); strings.TrimSpace(section) != "" {
+			promptParts = append(promptParts, section)
+		}
 	}
 	finalMessages := make([]map[string]any, 0, len(messages)+1)
 	if len(promptParts) > 0 {
@@ -244,6 +247,34 @@ func (b *ContextBuilder) memoryPromptSection(userID string, messages []map[strin
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (b *ContextBuilder) tasksPromptSection(userID string) string {
+	if b == nil || b.store == nil {
+		return ""
+	}
+	// Only fetch recent active tasks to avoid clutter
+	tasks, err := b.store.ListAgentTasksByUserWithStatus(context.Background(), normalizedUserID(userID), "", 10)
+	if err != nil || len(tasks) == 0 {
+		return ""
+	}
+	active := 0
+	queued := 0
+	waiting := 0
+	for _, t := range tasks {
+		switch t.Status {
+		case db.AgentTaskRunning, db.AgentTaskNeedsMoreWork, db.AgentTaskVerifying, db.AgentTaskVerifyPending:
+			active++
+		case db.AgentTaskQueued:
+			queued++
+		case db.AgentTaskWaitingInput:
+			waiting++
+		}
+	}
+	if active+queued+waiting == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Background tasks: %d active, %d queued, %d waiting for input. Use list_tasks to see details.", active, queued, waiting)
 }
 
 func latestUserMessage(messages []map[string]any) string {

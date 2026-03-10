@@ -12,18 +12,27 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-type staticProvider struct{}
+type staticProvider struct {
+	callCount int
+}
 
 func (p *staticProvider) Name() string { return "static" }
 
 func (p *staticProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
-	_ = opts
+	p.callCount++
 	out := make(chan providers.LLMStreamEvent, 2)
 	go func() {
 		defer close(out)
-		out <- providers.LLMStreamEvent{Type: providers.EventToken, Content: "completed delegated task"}
-		out <- providers.LLMStreamEvent{Type: providers.EventDone, FinishReason: "stop"}
+		// First call is task execution, subsequent calls are verification
+		if p.callCount == 1 {
+			out <- providers.LLMStreamEvent{Type: providers.EventToken, Content: "Task completed: processed 5 items successfully with concrete results."}
+			out <- providers.LLMStreamEvent{Type: providers.EventDone, FinishReason: "stop"}
+		} else {
+			// Verification response - return valid JSON
+			out <- providers.LLMStreamEvent{Type: providers.EventToken, Content: `{"decision": "completed", "reason": "Task shows concrete results", "comments": "", "revised_summary": "Task completed successfully"}`}
+			out <- providers.LLMStreamEvent{Type: providers.EventDone, FinishReason: "stop"}
+		}
 	}()
 	return out, nil
 }
