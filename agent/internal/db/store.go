@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 )
 
 var (
@@ -29,6 +31,7 @@ var (
 type Store struct {
 	db   *instrumentedDB
 	aead cipher.AEAD
+	path string // DB file path for vector store
 }
 
 type SkillRecord struct {
@@ -217,7 +220,7 @@ func Open(path, stateKey string) (*Store, error) {
 	// Note: sqlite_vec.Auto() registers the extension globally when the package is imported
 	// The vec0 virtual table will be available after this connection is opened
 
-	store := &Store{db: newInstrumentedDB(db)}
+	store := &Store{db: newInstrumentedDB(db), path: path}
 	if err := store.ConfigureCrypto(stateKey); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -242,6 +245,17 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// VectorStore returns a CortexDB instance for vector semantic search
+// It uses the SAME SQLite file as the main store
+func (s *Store) VectorStore() (*cortexdb.DB, error) {
+	if s == nil || s.path == "" {
+		return nil, fmt.Errorf("store not initialized")
+	}
+	// Open CortexDB on the same file
+	config := cortexdb.DefaultConfig(s.path)
+	return cortexdb.Open(config)
 }
 
 func (s *Store) migrate(ctx context.Context) error {

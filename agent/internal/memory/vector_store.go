@@ -8,10 +8,10 @@ import (
 )
 
 // VectorStore provides semantic memory search using CortexDB
+// This wraps the CortexDB connection for use in memory tools
 type VectorStore struct {
-	db   *cortexdb.DB
-	opts []cortexdb.Option
-	mu   sync.RWMutex
+	db *cortexdb.DB
+	mu sync.RWMutex
 }
 
 // VectorMemoryResult represents a memory search result with score
@@ -24,22 +24,11 @@ type VectorMemoryResult struct {
 	Metadata   map[string]string
 }
 
-// NewVectorStore creates a new vector memory store
-// Note: An embedder is needed for automatic text embedding.
-// For now, this stores vectors directly.
-func NewVectorStore(dbPath string) (*VectorStore, error) {
-	config := cortexdb.DefaultConfig(dbPath)
-
-	db, err := cortexdb.Open(config)
-	if err != nil {
-		return nil, err
-	}
-
-	vs := &VectorStore{
+// NewVectorStore creates a new vector memory store from an existing CortexDB instance
+func NewVectorStore(db *cortexdb.DB) *VectorStore {
+	return &VectorStore{
 		db: db,
 	}
-
-	return vs, nil
 }
 
 // AddMemory stores a memory with its embedding for semantic search
