@@ -1,6 +1,6 @@
 FROM golang:1.24-alpine
 
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev libsqlite3-dev
 
 ARG VERSION=dev
 ARG COMMIT=unknown
