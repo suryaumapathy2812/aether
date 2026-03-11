@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 
+	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
@@ -23,4 +24,10 @@ type ExecContext struct {
 	PluginState   plugins.PluginState
 	RuntimeHints  map[string]any
 	PushDeliverer PushDeliverer
+	// VectorDB provides semantic memory search using CortexDB (optional)
+	VectorDB *cortexdb.DB
+	// EmbeddingProvider generates embeddings for semantic search (optional)
+	EmbeddingProvider interface {
+		EmbedSingle(ctx context.Context, text string) ([]float32, error)
+	}
 }

@@ -40,12 +40,28 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, call tools.Call) tools.Res
 	if taskCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(taskCtx.UserID) != "" {
 		userID = strings.TrimSpace(taskCtx.UserID)
 	}
+
+	// Save to SQLite (existing behavior)
 	if err := call.Ctx.Store.StoreMemory(ctx, userID, content, category, 0, nil); err != nil {
 		return tools.Fail("Failed to save memory: "+err.Error(), nil)
 	}
 	if strings.EqualFold(category, "preference") {
 		_ = call.Ctx.Store.StoreMemoryDecision(ctx, userID, content, "preference", "explicit", 0)
 	}
+
+	// Also save to vector store for semantic search (if available)
+	if call.Ctx.VectorDB != nil && call.Ctx.EmbeddingProvider != nil {
+		// Generate embedding for the content
+		embedding, err := call.Ctx.EmbeddingProvider.EmbedSingle(ctx, content)
+		if err != nil {
+			// Log but don't fail - vector storage is optional
+			fmt.Printf("warning: failed to generate embedding for memory: %v\n", err)
+		} else if embedding != nil {
+			// Store in CortexDB for semantic search
+			call.Ctx.VectorDB.Quick().Add(ctx, embedding, content)
+		}
+	}
+
 	return tools.Success("Saved to memory.", map[string]any{"category": category})
 }
 
@@ -78,34 +94,77 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, call tools.Call) tools.R
 	if taskCtx, ok := tools.TaskRuntimeContextFromContext(ctx); ok && strings.TrimSpace(taskCtx.UserID) != "" {
 		userID = strings.TrimSpace(taskCtx.UserID)
 	}
-	results, err := call.Ctx.Store.SearchMemory(ctx, userID, query, limit)
-	if err != nil {
-		return tools.Fail("Failed to search memory: "+err.Error(), nil)
+
+	// Track all results with their sources
+	type memResult struct {
+		content string
+		source  string // "token" or "semantic"
+		score   float64
 	}
-	if len(results) == 0 {
-		return tools.Success("No relevant memories found.", map[string]any{"count": 0})
-	}
-	lines := make([]string, 0, len(results))
-	for i, r := range results {
-		idx := i + 1
-		switch r.Type {
-		case "fact":
-			lines = append(lines, fmt.Sprintf("%d. [fact] %s", idx, r.Fact))
-		case "memory":
-			lines = append(lines, fmt.Sprintf("%d. [memory/%s] %s", idx, r.Category, r.Memory))
-		case "decision":
-			lines = append(lines, fmt.Sprintf("%d. [decision/%s] %s", idx, r.Category, r.Decision))
-		case "action":
-			lines = append(lines, fmt.Sprintf("%d. [action] %s: %s", idx, r.ToolName, truncateOutput(r.Output, 120)))
-		case "session":
-			lines = append(lines, fmt.Sprintf("%d. [session] %s", idx, truncateOutput(r.Summary, 140)))
-		case "conversation":
-			lines = append(lines, fmt.Sprintf("%d. [conversation] User: %s", idx, truncateOutput(r.UserMessage, 140)))
-		case "entity":
-			lines = append(lines, fmt.Sprintf("%d. [entity/%s] %s: %s", idx, r.EntityType, r.EntityName, truncateOutput(r.EntitySummary, 120)))
+	allResults := make([]memResult, 0)
+
+	// 1. Token-based search (SQLite) - existing behavior
+	tokenResults, err := call.Ctx.Store.SearchMemory(ctx, userID, query, limit)
+	if err == nil {
+		for _, r := range tokenResults {
+			switch r.Type {
+			case "fact":
+				allResults = append(allResults, memResult{content: r.Fact, source: "token", score: 0})
+			case "memory":
+				allResults = append(allResults, memResult{content: r.Memory, source: "token", score: 0})
+			case "decision":
+				allResults = append(allResults, memResult{content: r.Decision, source: "token", score: 0})
+			case "action":
+				allResults = append(allResults, memResult{content: fmt.Sprintf("%s: %s", r.ToolName, r.Output), source: "token", score: 0})
+			case "session":
+				allResults = append(allResults, memResult{content: r.Summary, source: "token", score: 0})
+			case "conversation":
+				allResults = append(allResults, memResult{content: r.UserMessage, source: "token", score: 0})
+			case "entity":
+				allResults = append(allResults, memResult{content: fmt.Sprintf("%s: %s", r.EntityName, r.EntitySummary), source: "token", score: 0})
+			}
 		}
 	}
-	return tools.Success("Found relevant memories:\n"+strings.Join(lines, "\n"), map[string]any{"count": len(results)})
+
+	// 2. Semantic vector search (CortexDB) - if available
+	if call.Ctx.VectorDB != nil && call.Ctx.EmbeddingProvider != nil {
+		// Generate embedding for the query
+		queryEmbedding, err := call.Ctx.EmbeddingProvider.EmbedSingle(ctx, query)
+		if err == nil && queryEmbedding != nil {
+			// Search CortexDB
+			vectorResults, err := call.Ctx.VectorDB.Quick().Search(ctx, queryEmbedding, limit)
+			if err == nil {
+				for _, r := range vectorResults {
+					allResults = append(allResults, memResult{
+						content: r.Content,
+						source:  "semantic",
+						score:   r.Score,
+					})
+				}
+			}
+		}
+	}
+
+	if len(allResults) == 0 {
+		return tools.Success("No relevant memories found.", map[string]any{"count": 0})
+	}
+
+	// Format results - show both token and semantic results
+	lines := make([]string, 0, len(allResults))
+	for i, r := range allResults {
+		idx := i + 1
+		source := r.source
+		if r.source == "semantic" {
+			source = fmt.Sprintf("semantic (score: %.2f)", r.score)
+		}
+		lines = append(lines, fmt.Sprintf("%d. [%s] %s", idx, source, truncateOutput(r.content, 100)))
+	}
+
+	sourceInfo := ""
+	if len(tokenResults) > 0 && len(allResults) > len(tokenResults) {
+		sourceInfo = " (hybrid: token + semantic)"
+	}
+	return tools.Success("Found relevant memories"+sourceInfo+":\n"+strings.Join(lines, "\n"), map[string]any{"count": len(allResults), "token_results": len(tokenResults)})
 }
 
 func truncateOutput(v string, max int) string {

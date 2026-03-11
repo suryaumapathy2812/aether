@@ -154,12 +154,28 @@ func main() {
 	llmProvider := providers.NewOpenAILLMProvider(cfg.LLM)
 	llmCore := llm.NewCore(llmProvider, toolOrchestrator)
 
-	// Embedding provider for memory vector search (wired for future use)
-	_ = providers.NewEmbeddingProvider(
+	// Get VectorDB for semantic memory search (uses same state.db)
+	vectorDB, err := store.VectorStore()
+	if err != nil {
+		log.Printf("warning: failed to open vector store: %v", err)
+	}
+
+	// Embedding provider for memory vector search
+	embeddingProvider := providers.NewEmbeddingProvider(
 		cfg.LLM.EmbeddingAPIKey,
 		cfg.LLM.EmbeddingBaseURL,
 		cfg.LLM.EmbeddingModel,
 	)
+
+	toolOrchestrator = tools.NewOrchestrator(toolRegistry, tools.ExecContext{
+		WorkingDir:        workspaceDir,
+		Store:             store,
+		Skills:            skillsManager,
+		Plugins:           pluginsManager,
+		PushDeliverer:     pushDeliverer,
+		VectorDB:          vectorDB,
+		EmbeddingProvider: embeddingProvider,
+	})
 
 	mediaService, err := media.New(context.Background(), cfg.S3)
 	if err != nil {
