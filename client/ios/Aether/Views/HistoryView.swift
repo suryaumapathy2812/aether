@@ -32,17 +32,69 @@ final class HistoryViewModel: ObservableObject {
 struct HistoryView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = HistoryViewModel()
-    var embedded = false
     @State private var lastLoadedToken = ""
 
     var body: some View {
-        Group {
-            if embedded {
-                content
-            } else {
-                NavigationStack {
-                    content
-                        .navigationTitle("History")
+        ZStack {
+            // Same atmospheric gradient as home/menu for visual consistency
+            AetherTheme.atmosphericGradient
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("HISTORY")
+                            .font(.system(size: 11, weight: .semibold))
+                            .tracking(3.0)
+                            .foregroundStyle(AetherTheme.softText)
+
+                        Text("\(model.conversations.count) conversations")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AetherTheme.mutedText)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 0.5)
+
+                // Content
+                if model.loading {
+                    Spacer()
+                    ProgressView()
+                        .tint(.white.opacity(0.3))
+                    Spacer()
+                } else if !model.error.isEmpty {
+                    Spacer()
+                    Text(model.error)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(AetherTheme.mutedText)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Spacer()
+                } else if model.conversations.isEmpty {
+                    Spacer()
+                    Text("No messages yet")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(AetherTheme.mutedText)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(model.conversations.reversed()) { item in
+                                conversationCard(item)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 100)
+                    }
+                    .scrollIndicators(.hidden)
                 }
             }
         }
@@ -57,54 +109,37 @@ struct HistoryView: View {
         }
     }
 
-    private var content: some View {
-        Group {
-            if model.loading {
-                ProgressView("Loading history...")
-                    .tint(.white)
-            } else if !model.error.isEmpty {
-                ContentUnavailableView("Could not load history", systemImage: "exclamationmark.triangle", description: Text(model.error))
-            } else if model.conversations.isEmpty {
-                ContentUnavailableView("No messages yet", systemImage: "text.bubble")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        ForEach(model.conversations.reversed()) { item in
-                            VStack(spacing: 8) {
-                                HStack {
-                                    Spacer(minLength: 48)
-                                    Text(item.userMessage)
-                                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
-                                        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                }
-                                HStack {
-                                    Text(item.assistantMessage)
-                                        .font(.system(size: 14, weight: .regular, design: .rounded))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
-                                        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                    Spacer(minLength: 48)
-                                }
-                                if item.timestamp > 0 {
-                                    Text(relativeTime(fromEpoch: item.timestamp))
-                                        .font(.system(size: 11, weight: .regular, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.4))
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                        }
-                    }
-                    .padding(.top, embedded ? 12 : 10)
-                    .padding(.bottom, 18)
-                }
-                .refreshable {
-                    await model.load()
-                }
-                .background(Color.black.opacity(0.18))
+    private func conversationCard(_ item: MemoryConversationItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(item.userMessage)
+                .font(.system(size: 13, weight: .medium))
+                .tracking(0.4)
+                .foregroundStyle(.white.opacity(0.80))
+                .lineLimit(2)
+
+            Text(item.assistantMessage)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.white.opacity(0.40))
+                .lineLimit(3)
+
+            if item.timestamp > 0 {
+                Text(relativeTime(fromEpoch: item.timestamp))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AetherTheme.mutedText)
+                    .padding(.top, 2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
     }
 }
 

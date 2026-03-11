@@ -56,52 +56,41 @@ final class PluginsViewModel: ObservableObject {
 struct PluginsView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = PluginsViewModel()
-    var embedded = false
     @State private var lastLoadedToken = ""
+    @State private var selectedPlugin: PluginItem?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if model.loading {
-                    ProgressView("Loading plugins...")
-                        .tint(.white)
-                } else if !model.error.isEmpty {
-                    ContentUnavailableView("Could not load plugins", systemImage: "exclamationmark.triangle", description: Text(model.error))
-                } else if model.plugins.isEmpty {
-                    ContentUnavailableView("No plugins", systemImage: "puzzlepiece.extension")
-                } else {
-                    List(model.plugins) { plugin in
-                        NavigationLink {
-                            PluginDetailView(plugin: plugin, model: model, baseURL: pairing.orchestratorURL, token: pairing.getDeviceToken() ?? "")
-                        } label: {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(plugin.displayName.isEmpty ? plugin.name : plugin.displayName)
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.9))
-                                    Text(plugin.description.isEmpty ? "Use this plugin with Aether." : plugin.description)
-                                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.62))
-                                        .lineLimit(2)
-                                }
-                                Spacer()
-                                statusBadge(plugin)
-                            }
-                            .padding(.vertical, 4)
-                        }
+        ZStack {
+            AetherTheme.atmosphericGradient
+                .ignoresSafeArea()
+
+            if let plugin = selectedPlugin {
+                PluginDetailView(
+                    plugin: plugin,
+                    model: model,
+                    baseURL: pairing.orchestratorURL,
+                    token: pairing.getDeviceToken() ?? "",
+                    onBack: {
+                        AetherHaptics.tap()
+                        selectedPlugin = nil
                     }
-                    .listStyle(.insetGrouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.black.opacity(0.15))
-                    .refreshable {
-                        await model.reload()
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                mainContent
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: selectedPlugin?.id)
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.width > 100 && selectedPlugin != nil {
+                        AetherHaptics.tap()
+                        selectedPlugin = nil
                     }
                 }
-            }
-            .navigationTitle("Plugins")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
-        }
+        )
         .preferredColorScheme(.dark)
         .task(id: pairing.getDeviceToken() ?? "") {
             let token = pairing.getDeviceToken() ?? ""
@@ -113,36 +102,135 @@ struct PluginsView: View {
         }
     }
 
-    private func statusBadge(_ plugin: PluginItem) -> some View {
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PLUGINS")
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(3.0)
+                        .foregroundStyle(AetherTheme.softText)
+
+                    Text("\(model.plugins.count) available")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(AetherTheme.mutedText)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 0.5)
+
+            if model.loading {
+                Spacer()
+                ProgressView().tint(.white.opacity(0.3))
+                Spacer()
+            } else if !model.error.isEmpty {
+                Spacer()
+                Text(model.error)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(AetherTheme.mutedText)
+                    .padding(.horizontal, 40)
+                Spacer()
+            } else if model.plugins.isEmpty {
+                Spacer()
+                Text("No plugins available")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(AetherTheme.mutedText)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(model.plugins) { plugin in
+                            pluginCard(plugin)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    private func pluginCard(_ plugin: PluginItem) -> some View {
+        Button {
+            AetherHaptics.tap()
+            selectedPlugin = plugin
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text((plugin.displayName.isEmpty ? plugin.name : plugin.displayName).uppercased())
+                        .font(.system(size: 13, weight: .medium))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.78))
+                    Spacer()
+                    statusText(plugin)
+                }
+                Text(plugin.description.isEmpty ? "Use this plugin with Aether." : plugin.description)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.30))
+                    .lineLimit(2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(PluginCardButtonStyle())
+    }
+
+    private func statusText(_ plugin: PluginItem) -> some View {
         let text: String
         let color: Color
         if !plugin.installed {
-            text = "set up"
+            text = "SET UP"
             color = .blue
         } else if plugin.needsReconnect || (plugin.authType == "oauth2" && !plugin.connected) {
-            text = "needs attention"
+            text = "ATTENTION"
             color = .orange
         } else if !plugin.enabled {
-            text = "off"
+            text = "OFF"
             color = .gray
         } else {
-            text = "connected"
+            text = "CONNECTED"
             color = .green
         }
         return Text(text)
-            .font(.system(size: 10, weight: .medium, design: .rounded))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(color.opacity(0.2), in: Capsule())
-            .foregroundStyle(color.opacity(0.95))
+            .font(.system(size: 10, weight: .medium))
+            .tracking(1.0)
+            .foregroundStyle(color.opacity(0.70))
     }
 }
+
+private struct PluginCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Plugin Detail
 
 private struct PluginDetailView: View {
     let plugin: PluginItem
     @ObservedObject var model: PluginsViewModel
     let baseURL: String
     let token: String
+    var onBack: () -> Void
 
     @State private var config: [String: String] = [:]
     @State private var busy = false
@@ -151,72 +239,226 @@ private struct PluginDetailView: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        List {
-            Section {
-                Text(plugin.description)
-                    .font(.system(size: 14, weight: .regular, design: .rounded))
-            }
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    onBack()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("BACK")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(1.5)
+                    }
+                    .foregroundStyle(AetherTheme.softText)
+                }
+                .buttonStyle(.plain)
 
-            if !plugin.configFields.isEmpty {
-                Section("Configuration") {
-                    ForEach(plugin.configFields, id: \.key) { field in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(field.label)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                            if field.type == "password" {
-                                SecureField(field.description.isEmpty ? field.label : field.description, text: binding(for: field.key))
-                                    .textInputAutocapitalization(.never)
-                            } else {
-                                TextField(field.description.isEmpty ? field.label : field.description, text: binding(for: field.key))
-                                    .textInputAutocapitalization(.never)
+                Spacer()
+
+                Text((plugin.displayName.isEmpty ? plugin.name : plugin.displayName).uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(2.0)
+                    .foregroundStyle(AetherTheme.softText)
+
+                Spacer()
+                Color.clear.frame(width: 60, height: 1)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 0.5)
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    if !plugin.description.isEmpty {
+                        pluginDetailCard {
+                            Text(plugin.description)
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundStyle(.white.opacity(0.60))
+                        }
+                    }
+
+                    if !plugin.configFields.isEmpty {
+                        sectionHeader("CONFIGURATION")
+
+                        VStack(spacing: 12) {
+                            ForEach(plugin.configFields, id: \.key) { field in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(field.label.uppercased())
+                                        .font(.system(size: 10, weight: .medium))
+                                        .tracking(1.2)
+                                        .foregroundStyle(.white.opacity(0.40))
+
+                                    if field.type == "password" {
+                                        SecureField(
+                                            field.description.isEmpty ? field.label : field.description,
+                                            text: binding(for: field.key)
+                                        )
+                                        .textInputAutocapitalization(.never)
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 12)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                                .fill(Color.white.opacity(0.05))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                                        )
+                                    } else {
+                                        TextField(
+                                            field.description.isEmpty ? field.label : field.description,
+                                            text: binding(for: field.key)
+                                        )
+                                        .textInputAutocapitalization(.never)
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 12)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                                .fill(Color.white.opacity(0.05))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                                        )
+                                    }
+                                }
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                        )
+
+                        Button {
+                            Task { await saveConfig() }
+                        } label: {
+                            Text(busy ? "SAVING..." : "SAVE")
+                                .font(.system(size: 12, weight: .medium))
+                                .tracking(1.5)
+                                .foregroundStyle(.white.opacity(busy ? 0.3 : 0.75))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(
+                                    RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                        .fill(Color.white.opacity(0.08))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: AetherTheme.smallRadius, style: .continuous)
+                                        .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy)
                     }
 
-                    Button(busy ? "Saving..." : "Save") {
-                        Task { await saveConfig() }
+                    sectionHeader("CONNECTION")
+
+                    VStack(spacing: 0) {
+                        if plugin.authType == "oauth2" {
+                            actionRow(
+                                title: plugin.connected ? "RECONNECT" : "CONNECT",
+                                disabled: token.isEmpty
+                            ) {
+                                startOAuth()
+                            }
+
+                            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5)
+                                .padding(.horizontal, 16)
+                        }
+
+                        actionRow(
+                            title: plugin.enabled ? "TURN OFF" : "TURN ON",
+                            disabled: busy
+                        ) {
+                            Task { await toggleEnabled() }
+                        }
                     }
-                    .disabled(busy)
-                }
-            }
+                    .background(
+                        RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous))
 
-            Section("Connection") {
-                if plugin.authType == "oauth2" {
-                    Button(plugin.connected ? "Reconnect" : "Connect") {
-                        startOAuth()
+                    if !info.isEmpty {
+                        Text(info)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.green.opacity(0.70))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .disabled(token.isEmpty)
+                    if !error.isEmpty {
+                        Text(error)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.red.opacity(0.70))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-
-                Button(plugin.enabled ? "Turn Off" : "Turn On") {
-                    Task { await toggleEnabled() }
-                }
-                .disabled(busy)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 100)
             }
-
-            if !info.isEmpty {
-                Section {
-                    Text(info)
-                        .foregroundStyle(.green)
-                }
-            }
-            if !error.isEmpty {
-                Section {
-                    Text(error)
-                        .foregroundStyle(.red)
-                }
-            }
-        }
-        .navigationTitle(plugin.displayName.isEmpty ? plugin.name : plugin.displayName)
-        .navigationBarTitleDisplayMode(.inline)
-        .refreshable {
-            await loadConfig()
-            await model.reload()
+            .scrollIndicators(.hidden)
         }
         .task {
             await loadConfig()
         }
+    }
+
+    private func pluginDetailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(2.0)
+            .foregroundStyle(.white.opacity(0.28))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 12)
+            .padding(.bottom, 2)
+    }
+
+    private func actionRow(title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .tracking(1.2)
+                    .foregroundStyle(.white.opacity(disabled ? 0.20 : 0.65))
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
     }
 
     private func binding(for key: String) -> Binding<String> {

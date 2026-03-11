@@ -8,7 +8,9 @@ struct AetherApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                Color(hex: "111111").ignoresSafeArea()
+                // Synced with the app's gradient top color for seamless status bar
+                Color(red: 0.10, green: 0.12, blue: 0.16)
+                    .ignoresSafeArea()
 
                 if pairingService.isPaired {
                     AppRootView()

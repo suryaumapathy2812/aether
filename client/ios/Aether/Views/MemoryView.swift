@@ -8,12 +8,12 @@ enum MemorySection: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var icon: String {
+    var subtitle: String {
         switch self {
-        case .about: return "person.text.rectangle"
-        case .entities: return "person.2"
-        case .memories: return "archivebox"
-        case .decisions: return "checkmark.seal"
+        case .about:     return "FACTS ABOUT YOU"
+        case .entities:  return "PEOPLE & THINGS"
+        case .memories:  return "EPISODIC RECALL"
+        case .decisions: return "RULES & PREFERENCES"
         }
     }
 }
@@ -68,9 +68,9 @@ final class MemoryViewModel: ObservableObject {
 
     func count(for section: MemorySection) -> Int {
         switch section {
-        case .about: return facts.count
-        case .entities: return entities.count
-        case .memories: return memories.count
+        case .about:     return facts.count
+        case .entities:  return entities.count
+        case .memories:  return memories.count
         case .decisions: return decisions.count
         }
     }
@@ -79,17 +79,34 @@ final class MemoryViewModel: ObservableObject {
 struct MemoryView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = MemoryViewModel()
-    var embedded = false
     @State private var lastLoadedToken = ""
+    @State private var activeSection: MemorySection?
+    @State private var showEntitySheet = false
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("Memory")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
+        ZStack {
+            AetherTheme.atmosphericGradient
+                .ignoresSafeArea()
+
+            if let section = activeSection {
+                sectionDetailView(section)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                mainContent
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
         }
+        .animation(.easeInOut(duration: 0.25), value: activeSection)
         .preferredColorScheme(.dark)
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.width > 100 && activeSection != nil {
+                        AetherHaptics.tap()
+                        activeSection = nil
+                    }
+                }
+        )
         .task(id: pairing.getDeviceToken() ?? "") {
             let token = pairing.getDeviceToken() ?? ""
             model.configure(baseURL: pairing.orchestratorURL, token: token)
@@ -98,188 +115,454 @@ struct MemoryView: View {
                 await model.load()
             }
         }
-        .sheet(isPresented: Binding(
-            get: { model.selectedEntity != nil },
-            set: { if !$0 { model.selectedEntity = nil } }
-        )) {
-            if let details = model.selectedEntity {
-                EntityDetailSheet(details: details)
-            }
-        }
     }
 
-    private var content: some View {
-        Group {
+    // MARK: - Main
+
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("MEMORY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(3.0)
+                    .foregroundStyle(AetherTheme.softText)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 0.5)
+
             if model.loading {
-                ProgressView("Loading memory...")
-                    .tint(.white)
+                Spacer()
+                ProgressView().tint(.white.opacity(0.3))
+                Spacer()
             } else if !model.error.isEmpty {
-                ContentUnavailableView("Could not load memory", systemImage: "exclamationmark.triangle", description: Text(model.error))
+                Spacer()
+                Text(model.error)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(AetherTheme.mutedText)
+                    .padding(.horizontal, 40)
+                Spacer()
             } else {
-                List {
-                    ForEach(MemorySection.allCases) { section in
-                        NavigationLink {
-                            destinationView(for: section)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: section.icon)
-                                    .foregroundStyle(.white.opacity(0.78))
-                                Text(section.rawValue)
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.9))
-                                Spacer()
-                                Text("\(model.count(for: section))")
-                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.46))
-                            }
-                            .padding(.vertical, 4)
+                ScrollView {
+                    VStack(spacing: 10) {
+                        ForEach(MemorySection.allCases) { section in
+                            sectionCard(section)
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
                 }
-                .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
-                .background(Color.black.opacity(0.15))
-                .refreshable {
-                    await model.load()
-                }
+                .scrollIndicators(.hidden)
             }
         }
     }
 
-    @ViewBuilder
-    private func destinationView(for section: MemorySection) -> some View {
-        switch section {
-        case .about:
-            List {
-                if model.facts.isEmpty {
-                    Text("No facts yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(model.facts.enumerated()), id: \.offset) { _, fact in
-                        Text(fact)
+    private func sectionCard(_ section: MemorySection) -> some View {
+        Button {
+            AetherHaptics.tap()
+            activeSection = section
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 0) {
+                        Text(section.rawValue.uppercased())
+                            .font(.system(size: 13, weight: .medium))
+                            .tracking(1.8)
+                            .foregroundStyle(.white.opacity(0.78))
+                        Text("  ·  \(model.count(for: section))")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.40))
                     }
+                    Text(section.subtitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .tracking(0.8)
+                        .foregroundStyle(.white.opacity(0.30))
                 }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.25))
             }
-            .navigationTitle("About")
-        case .entities:
-            List {
-                if model.entities.isEmpty {
-                    Text("No entities yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.entities) { entity in
-                        Button {
-                            Task { await model.loadEntityDetails(entityID: entity.id) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entity.name)
-                                    .foregroundStyle(.white.opacity(0.9))
-                                if !entity.summary.isEmpty {
-                                    Text(entity.summary)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 18)
+            .background(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(MemoryCardButtonStyle())
+    }
+
+    // MARK: - Section Detail Views
+
+    @ViewBuilder
+    private func sectionDetailView(_ section: MemorySection) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    AetherHaptics.tap()
+                    activeSection = nil
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("BACK")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(1.5)
+                    }
+                    .foregroundStyle(AetherTheme.softText)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text(section.rawValue.uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(2.0)
+                    .foregroundStyle(AetherTheme.softText)
+
+                Spacer()
+                Color.clear.frame(width: 60, height: 1)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 0.5)
+
+            switch section {
+            case .about:     aboutDetail
+            case .entities:  entitiesDetail
+            case .memories:  memoriesDetail
+            case .decisions: decisionsDetail
+            }
+        }
+    }
+
+    private func detailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+    }
+
+    private var aboutDetail: some View {
+        Group {
+            if model.facts.isEmpty {
+                Spacer()
+                Text("No facts yet")
+                    .font(.system(size: 13)).foregroundStyle(AetherTheme.mutedText)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(Array(model.facts.enumerated()), id: \.offset) { _, fact in
+                            detailCard {
+                                Text(fact)
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(.white.opacity(0.72))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    private var entitiesDetail: some View {
+        Group {
+            if model.entities.isEmpty {
+                Spacer()
+                Text("No entities yet")
+                    .font(.system(size: 13)).foregroundStyle(AetherTheme.mutedText)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        ForEach(Array(groupedEntities.keys).sorted(), id: \.self) { entityType in
+                            VStack(spacing: 8) {
+                                // Entity type header
+                                Text(entityType.uppercased())
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .tracking(2.0)
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 8)
+                                
+                                // Entities of this type
+                                ForEach(groupedEntities[entityType]!) { entity in
+                                    Button {
+                                        Task { await model.loadEntityDetails(entityID: entity.id) }
+                                        showEntitySheet = true
+                                    } label: {
+                                        detailCard {
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text(entity.name.uppercased())
+                                                    .font(.system(size: 13, weight: .medium))
+                                                    .tracking(1.2)
+                                                    .foregroundStyle(.white.opacity(0.78))
+                                                if !entity.summary.isEmpty {
+                                                    Text(entity.summary)
+                                                        .font(.system(size: 11, weight: .regular))
+                                                        .foregroundStyle(.white.opacity(0.35))
+                                                        .lineLimit(2)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(MemoryCardButtonStyle())
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
+                }
+                .scrollIndicators(.hidden)
+                .sheet(isPresented: $showEntitySheet) {
+                    if let details = model.selectedEntity {
+                        EntityDetailOverlay(details: details)
                     }
                 }
             }
-            .navigationTitle("Entities")
-        case .memories:
-            List {
-                if model.memories.isEmpty {
-                    Text("No episodic memories yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.memories) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(item.memory)
-                            Text("\(item.category) · \(Int((item.confidence * 100).rounded()))%")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var groupedEntities: [String: [EntityItem]] {
+        Dictionary(grouping: model.entities, by: \.entityType)
+    }
+
+    private var memoriesDetail: some View {
+        Group {
+            if model.memories.isEmpty {
+                Spacer()
+                Text("No episodic memories yet")
+                    .font(.system(size: 13)).foregroundStyle(AetherTheme.mutedText)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(model.memories) { item in
+                            detailCard {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(item.memory)
+                                        .font(.system(size: 13, weight: .regular))
+                                        .foregroundStyle(.white.opacity(0.72))
+                                    Text("\(item.category.uppercased())  ·  \(Int((item.confidence * 100).rounded()))%")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .tracking(1.0)
+                                        .foregroundStyle(.white.opacity(0.30))
+                                }
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
                 }
+                .scrollIndicators(.hidden)
             }
-            .navigationTitle("Memories")
-        case .decisions:
-            List {
-                if model.decisions.isEmpty {
-                    Text("No decisions yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.decisions) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(item.decision)
-                            Text("\(item.category) · \(item.active ? "active" : "inactive")")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var decisionsDetail: some View {
+        Group {
+            if model.decisions.isEmpty {
+                Spacer()
+                Text("No decisions yet")
+                    .font(.system(size: 13)).foregroundStyle(AetherTheme.mutedText)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(model.decisions) { item in
+                            detailCard {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(item.decision)
+                                        .font(.system(size: 13, weight: .regular))
+                                        .foregroundStyle(.white.opacity(0.72))
+                                    Text("\(item.category.uppercased())  ·  \(item.active ? "ACTIVE" : "INACTIVE")")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .tracking(1.0)
+                                        .foregroundStyle(.white.opacity(0.30))
+                                }
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 100)
                 }
+                .scrollIndicators(.hidden)
             }
-            .navigationTitle("Decisions")
         }
     }
 }
 
-private struct EntityDetailSheet: View {
+// MARK: - Entity Detail Overlay
+
+struct EntityDetailOverlay: View {
     let details: EntityDetails
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Entity") {
-                    Text(details.entity.name)
-                    Text(details.entity.summary)
-                        .foregroundStyle(.secondary)
-                }
+        ZStack {
+            AetherTheme.atmosphericGradient
+                .ignoresSafeArea()
 
-                if !details.observations.isEmpty {
-                    Section("Observations") {
-                        ForEach(details.observations) { row in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(row.observation)
-                                Text("\(row.category) · \(row.source)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Text("CLOSE")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(1.5)
+                            .foregroundStyle(AetherTheme.softText)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Text(details.entity.name.uppercased())
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(2.0)
+                        .foregroundStyle(AetherTheme.softText)
+
+                    Spacer()
+                    Color.clear.frame(width: 50, height: 1)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+                Rectangle().fill(Color.white.opacity(0.12)).frame(height: 0.5)
+
+                ScrollView {
+                    VStack(spacing: 12) {
+                        if !details.entity.summary.isEmpty {
+                            entityDetailCard {
+                                Text(details.entity.summary)
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(.white.opacity(0.65))
                             }
                         }
-                    }
-                }
 
-                if !details.relations.isEmpty {
-                    Section("Relations") {
-                        ForEach(details.relations) { row in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(row.sourceEntityID) \(row.relation) \(row.targetEntityID)")
-                                if !row.context.isEmpty {
-                                    Text(row.context)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                        if !details.observations.isEmpty {
+                            detailSectionHeader("OBSERVATIONS")
+                            ForEach(details.observations) { row in
+                                entityDetailCard {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(row.observation)
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                        Text("\(row.category.uppercased())  ·  \(row.source.uppercased())")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .tracking(0.8)
+                                            .foregroundStyle(.white.opacity(0.28))
+                                    }
+                                }
+                            }
+                        }
+
+                        if !details.relations.isEmpty {
+                            detailSectionHeader("RELATIONS")
+                            ForEach(details.relations) { row in
+                                entityDetailCard {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("\(row.sourceEntityID) → \(row.relation) → \(row.targetEntityID)")
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                        if !row.context.isEmpty {
+                                            Text(row.context)
+                                                .font(.system(size: 11, weight: .regular))
+                                                .foregroundStyle(.white.opacity(0.28))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if !details.interactions.isEmpty {
+                            detailSectionHeader("INTERACTIONS")
+                            ForEach(details.interactions) { row in
+                                entityDetailCard {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(row.summary)
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                        Text(row.interactionAt)
+                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.28))
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 40)
                 }
-
-                if !details.interactions.isEmpty {
-                    Section("Interactions") {
-                        ForEach(details.interactions) { row in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(row.summary)
-                                Text(row.interactionAt)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
+                .scrollIndicators(.hidden)
             }
-            .navigationTitle(details.entity.name)
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .preferredColorScheme(.dark)
+    }
+
+    private func entityDetailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AetherTheme.cardRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+    }
+
+    private func detailSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(2.0)
+            .foregroundStyle(.white.opacity(0.28))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 12)
+            .padding(.bottom, 2)
+    }
+}
+
+private struct MemoryCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
 }
