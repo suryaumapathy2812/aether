@@ -6,7 +6,7 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
-	github.com/asg017/sqlite-vec-go-bindings v0.1.3
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
