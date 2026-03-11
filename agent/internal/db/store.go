@@ -17,10 +17,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/asg017/sqlite-vec-go-bindings/cgo"
-	_ "github.com/mattn/go-sqlite3"
-
-	sqlitevec "github.com/asg017/sqlite-vec-go-bindings/cgo"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -28,12 +25,6 @@ var (
 	ErrCryptoUnavailable = errors.New("encryption key is not configured")
 	ErrInvalidCiphertext = errors.New("invalid ciphertext")
 )
-
-func init() {
-	// Initialize sqlite-vec extension when this package is loaded
-	// This registers the vec0 virtual table for vector search
-	sqlitevec.Auto()
-}
 
 type Store struct {
 	db   *instrumentedDB
@@ -203,7 +194,7 @@ func Open(path, stateKey string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
@@ -571,25 +562,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, timestamp DESC);`,
-
-		// Vector embeddings for semantic memory search (sqlite-vec)
-		// Minimal schema - vec0 only supports id and embedding columns
-		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
-			id INTEGER PRIMARY KEY,
-			embedding float[1536]
-		);`,
-		// Shadow table for metadata (user_id, memory_type, source_table, source_id, content, created_at)
-		`CREATE TABLE IF NOT EXISTS memory_embeddings_meta (
-			id INTEGER PRIMARY KEY,
-			user_id text NOT NULL DEFAULT 'default',
-			memory_type text NOT NULL DEFAULT '',
-			source_table text NOT NULL DEFAULT '',
-			source_id INTEGER,
-			content text NOT NULL DEFAULT '',
-			created_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-			UNIQUE(user_id, memory_type, source_table, source_id)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_meta_user ON memory_embeddings_meta(user_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
