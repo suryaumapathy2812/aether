@@ -524,7 +524,7 @@ decision must be one of: completed, needs_more_work, failed.`,
 		}
 	}
 	if strings.TrimSpace(hadErr) != "" {
-		return decision, fmt.Errorf(hadErr)
+		return decision, fmt.Errorf("%s", hadErr)
 	}
 	raw := strings.TrimSpace(buf.String())
 	if raw == "" {
