@@ -16,6 +16,10 @@ type scriptedProvider struct {
 
 func (p *scriptedProvider) Name() string { return "scripted" }
 
+func (p *scriptedProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.DefaultCapabilities
+}
+
 func (p *scriptedProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
 	_ = opts

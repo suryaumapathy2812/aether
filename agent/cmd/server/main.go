@@ -153,6 +153,14 @@ func main() {
 	mux := http.NewServeMux()
 	llmProvider := providers.NewOpenAILLMProvider(cfg.LLM)
 	llmCore := llm.NewCore(llmProvider, toolOrchestrator)
+
+	// Embedding provider for memory vector search (wired for future use)
+	_ = providers.NewEmbeddingProvider(
+		cfg.LLM.EmbeddingAPIKey,
+		cfg.LLM.EmbeddingBaseURL,
+		cfg.LLM.EmbeddingModel,
+	)
+
 	mediaService, err := media.New(context.Background(), cfg.S3)
 	if err != nil {
 		log.Fatalf("failed to init media storage: %v", err)
@@ -194,7 +202,7 @@ func main() {
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
-	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Limits: cfg.Media})
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media})
 	convHandler.RegisterRoutes(mux)
 	agentHandler := agenthttp.New(store, mediaService)
 	agentHandler.RegisterRoutes(mux)
@@ -322,7 +330,15 @@ func main() {
 	channelHandler.RegisterRoutes(mux)
 
 	// ── Start server ────────────────────────────────────────────────
-	httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: observability.Middleware(mux)}
+	corsMiddleware := observability.CORSMiddleware(observability.CORSConfig{
+		AllowedOrigins:   cfg.CORS.AllowedOrigins,
+		AllowedMethods:   cfg.CORS.AllowedMethods,
+		AllowedHeaders:   cfg.CORS.AllowedHeaders,
+		ExposeHeaders:    cfg.CORS.ExposeHeaders,
+		MaxAge:           cfg.CORS.MaxAge,
+		AllowCredentials: cfg.CORS.AllowCredentials,
+	})
+	httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: corsMiddleware(observability.Middleware(mux))}
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("http server error: %v", err)

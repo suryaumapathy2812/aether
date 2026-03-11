@@ -38,6 +38,10 @@ type roundTripProvider struct {
 
 func (p *fakeProvider) Name() string { return "fake" }
 
+func (p *fakeProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.DefaultCapabilities
+}
+
 func (p *fakeProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
 	_ = opts
@@ -52,6 +56,10 @@ func (p *fakeProvider) StreamWithTools(ctx context.Context, opts providers.Gener
 }
 
 func (p *roundTripProvider) Name() string { return "roundtrip" }
+
+func (p *roundTripProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.DefaultCapabilities
+}
 
 func (p *roundTripProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
@@ -275,5 +283,196 @@ func TestChatCompletionsToolCallRoundTrip(t *testing.T) {
 	}
 	if !p.sawToolResult {
 		t.Fatalf("expected tool role message with tool_call_id and output in second provider call")
+	}
+}
+
+func TestResponsesSync(t *testing.T) {
+	h := buildHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(map[string]any{
+		"model": "aether",
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": "hi",
+		}},
+		"stream": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid json response: %v", err)
+	}
+	if resp["object"] != "response" {
+		t.Fatalf("expected object=response, got %v", resp["object"])
+	}
+	if !strings.HasPrefix(resp["id"].(string), "resp-") {
+		t.Fatalf("expected id to start with resp-, got %v", resp["id"])
+	}
+	output, ok := resp["output"].([]any)
+	if !ok || len(output) == 0 {
+		t.Fatalf("expected non-empty output array, got %v", resp["output"])
+	}
+	item := output[0].(map[string]any)
+	if item["type"] != "output_text" {
+		t.Fatalf("expected output_text item, got %v", item["type"])
+	}
+	if !strings.Contains(item["content"].(string), "hello world") {
+		t.Fatalf("expected model text in output, got: %s", item["content"])
+	}
+}
+
+func TestResponsesStream(t *testing.T) {
+	h := buildHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(map[string]any{
+		"model": "aether",
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": "hi",
+		}},
+		"stream": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	resp := w.Body.String()
+	if !strings.Contains(resp, "response.created") {
+		t.Fatalf("expected response.created event, got: %s", resp)
+	}
+	if !strings.Contains(resp, "response.output_text.delta") {
+		t.Fatalf("expected response.output_text.delta event, got: %s", resp)
+	}
+	if !strings.Contains(resp, "response.completed") {
+		t.Fatalf("expected response.completed event, got: %s", resp)
+	}
+	if !strings.Contains(resp, "data: [DONE]") {
+		t.Fatalf("expected done event, got: %s", resp)
+	}
+}
+
+func TestResponsesSyncToolCallRoundTrip(t *testing.T) {
+	r := tools.NewRegistry()
+	if err := r.Register(&echoTool{}, ""); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+	p := &roundTripProvider{test: t}
+	b := llm.NewContextBuilder(r, nil, nil, nil, llm.ContextBuilderConfig{})
+	c := llm.NewCore(p, tools.NewOrchestrator(r, tools.ExecContext{}))
+	h := New(Options{Core: c, Builder: b, Model: "test-model", MediaLimits: agentcfg.MediaLimitsConfig{
+		MaxImageBytes: 5 * 1024 * 1024, MaxAudioBytes: 12 * 1024 * 1024,
+		MaxTotalMediaBytes: 20 * 1024 * 1024, MaxMediaParts: 4,
+	}})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(map[string]any{
+		"model": "aether",
+		"input": []map[string]any{{
+			"type":    "message",
+			"role":    "user",
+			"content": "use a tool",
+		}},
+		"stream": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid json response: %v", err)
+	}
+	if resp["object"] != "response" {
+		t.Fatalf("expected object=response, got %v", resp["object"])
+	}
+	output, ok := resp["output"].([]any)
+	if !ok {
+		t.Fatalf("expected output array, got %v", resp["output"])
+	}
+	// Should have function_call, function_call_output, and output_text items
+	hasToolCall := false
+	hasToolResult := false
+	hasText := false
+	for _, item := range output {
+		m := item.(map[string]any)
+		switch m["type"] {
+		case "function_call":
+			hasToolCall = true
+			if m["name"] != "echo" {
+				t.Fatalf("expected tool name echo, got %v", m["name"])
+			}
+		case "function_call_output":
+			hasToolResult = true
+			if out, _ := m["output"].(string); !strings.Contains(out, "tool:ping") {
+				t.Fatalf("expected tool output containing tool:ping, got %v", m["output"])
+			}
+		case "output_text":
+			hasText = true
+			if !strings.Contains(m["content"].(string), "roundtrip ok") {
+				t.Fatalf("expected roundtrip ok in text output, got %v", m["content"])
+			}
+		}
+	}
+	if !hasToolCall {
+		t.Fatalf("expected function_call item in output")
+	}
+	if !hasToolResult {
+		t.Fatalf("expected function_call_output item in output")
+	}
+	if !hasText {
+		t.Fatalf("expected output_text item in output")
+	}
+}
+
+func TestNormalizeResponsesInput(t *testing.T) {
+	input := []map[string]any{
+		{"type": "message", "role": "user", "content": "hello"},
+		{"type": "function_call", "id": "call_1", "name": "echo", "arguments": `{"text":"hi"}`},
+		{"type": "function_call_output", "call_id": "call_1", "output": "echoed"},
+		{"content": "plain text"},
+	}
+	out := normalizeResponsesInput(input)
+	if len(out) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(out))
+	}
+	// message → user role
+	if out[0]["role"] != "user" || out[0]["content"] != "hello" {
+		t.Fatalf("message normalization failed: %v", out[0])
+	}
+	// function_call → assistant with tool_calls
+	if out[1]["role"] != "assistant" {
+		t.Fatalf("function_call should become assistant role: %v", out[1])
+	}
+	tcs, ok := out[1]["tool_calls"].([]map[string]any)
+	if !ok || len(tcs) != 1 {
+		t.Fatalf("expected tool_calls array with 1 item: %v", out[1])
+	}
+	fn, _ := tcs[0]["function"].(map[string]any)
+	if fn["name"] != "echo" {
+		t.Fatalf("expected tool name echo: %v", fn)
+	}
+	// function_call_output → tool role
+	if out[2]["role"] != "tool" || out[2]["tool_call_id"] != "call_1" || out[2]["content"] != "echoed" {
+		t.Fatalf("function_call_output normalization failed: %v", out[2])
+	}
+	// default → user role
+	if out[3]["role"] != "user" || out[3]["content"] != "plain text" {
+		t.Fatalf("default normalization failed: %v", out[3])
 	}
 }

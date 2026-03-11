@@ -410,8 +410,8 @@ func (r *Runtime) runVerificationTask(ctx context.Context, task db.AgentTaskReco
 		r.notify(ctx, task, "completed", map[string]any{"summary": summary, "verified": true})
 		return
 	case "needs_more_work":
-		if countNeedsMoreWorkDecisions(events) >= 3 {
-			reason := "verification requested more work too many times (3); failing to avoid infinite loop"
+		if countNeedsMoreWorkDecisions(events) >= 5 {
+			reason := "verification requested more work too many times (5); failing to avoid infinite loop"
 			_ = r.store.FailAgentTask(ctx, task.ID, task.LockToken, reason)
 			task.Status = db.AgentTaskFailed
 			r.notify(ctx, task, "failed", map[string]any{"error": reason, "phase": "verification_retry_exhausted"})
@@ -678,7 +678,7 @@ func likelyNeedsHumanInput(text string) bool {
 }
 
 func (r *Runtime) userModelPolicy(ctx context.Context, userID string) map[string]any {
-	policy := map[string]any{"max_tokens": 1200, "temperature": 0.2}
+	policy := map[string]any{"max_tokens": 4096, "temperature": 0.2}
 	if userID == "" {
 		return policy
 	}

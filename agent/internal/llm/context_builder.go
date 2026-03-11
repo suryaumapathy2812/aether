@@ -93,6 +93,9 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		if section := b.decisionsPromptSection(userID); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
+		if section := b.factsPromptSection(userID); strings.TrimSpace(section) != "" {
+			promptParts = append(promptParts, section)
+		}
 		if section := b.entitiesPromptSection(userID); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
@@ -126,7 +129,7 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		env.Policy = map[string]any{}
 	}
 	if _, ok := env.Policy["max_tokens"]; !ok {
-		env.Policy["max_tokens"] = 1200
+		env.Policy["max_tokens"] = 2048
 	}
 	if _, ok := env.Policy["temperature"]; !ok {
 		env.Policy["temperature"] = 0.2
@@ -183,6 +186,32 @@ func (b *ContextBuilder) decisionsPromptSection(userID string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (b *ContextBuilder) factsPromptSection(userID string) string {
+	if b == nil || b.store == nil {
+		return ""
+	}
+	facts, err := b.store.GetMemoryFacts(context.Background(), normalizedUserID(userID))
+	if err != nil || len(facts) == 0 {
+		return ""
+	}
+	// Limit to 30 most recent facts to avoid prompt bloat
+	maxFacts := 30
+	if len(facts) > maxFacts {
+		facts = facts[len(facts)-maxFacts:]
+	}
+	lines := []string{"Known facts about the user:"}
+	for _, f := range facts {
+		if strings.TrimSpace(f) == "" {
+			continue
+		}
+		lines = append(lines, "- "+strings.TrimSpace(f))
+	}
+	if len(lines) <= 1 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (b *ContextBuilder) entitiesPromptSection(userID string) string {
 	if b == nil || b.store == nil {
 		return ""
@@ -220,7 +249,7 @@ func (b *ContextBuilder) memoryPromptSection(userID string, messages []map[strin
 	if strings.TrimSpace(query) == "" {
 		return ""
 	}
-	results, err := b.store.SearchMemory(context.Background(), normalizedUserID(userID), query, 6)
+	results, err := b.store.SearchMemory(context.Background(), normalizedUserID(userID), query, 12)
 	if err != nil || len(results) == 0 {
 		return ""
 	}

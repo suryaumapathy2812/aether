@@ -66,6 +66,9 @@ func (h *Hub) Unregister(c *Client) {
 }
 
 // Broadcast sends a message to all connected clients for a given user.
+// The read lock is held for the entire iteration to prevent concurrent
+// modification of the client set (e.g. by Unregister) which would cause
+// a data race on the map and potential send-on-closed-channel panic.
 func (h *Hub) Broadcast(userID string, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -73,13 +76,12 @@ func (h *Hub) Broadcast(userID string, msg Message) {
 		return
 	}
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	set := h.clients[userID]
-	h.mu.RUnlock()
 	for c := range set {
 		select {
 		case c.send <- data:
 		default:
-			// Client too slow — drop message to avoid blocking.
 			log.Printf("ws hub: dropping message for slow client user=%s", userID)
 		}
 	}

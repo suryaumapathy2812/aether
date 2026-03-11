@@ -44,6 +44,9 @@ type Config struct {
 
 	// Proactive engine
 	Proactive ProactiveConfig
+
+	// CORS
+	CORS CORSConfig
 }
 
 // LLMConfig holds LLM provider credentials and model settings.
@@ -53,6 +56,11 @@ type LLMConfig struct {
 	Model             string
 	OpenRouterSiteURL string
 	OpenRouterAppName string
+
+	// Embedding provider settings (fall back to LLM settings if not set)
+	EmbeddingModel   string
+	EmbeddingAPIKey  string
+	EmbeddingBaseURL string
 }
 
 // S3Config holds S3/MinIO connection and behaviour settings.
@@ -96,6 +104,16 @@ type ProactiveConfig struct {
 	PlanIntervalSeconds int
 }
 
+// CORSConfig holds Cross-Origin Resource Sharing settings for the HTTP server.
+type CORSConfig struct {
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	ExposeHeaders    []string
+	MaxAge           int
+	AllowCredentials bool
+}
+
 // Load reads all configuration from environment variables and returns
 // a fully populated Config.  It does NOT validate required fields —
 // call Validate() for that.
@@ -123,7 +141,7 @@ func Load() Config {
 		model = "minimax/minimax-m2.5"
 	}
 
-	return Config{
+	cfg := Config{
 		Port:      envInt("PORT", 8000),
 		AssetsDir: assetsDir,
 
@@ -133,6 +151,11 @@ func Load() Config {
 			Model:             model,
 			OpenRouterSiteURL: envString("OPENROUTER_SITE_URL", ""),
 			OpenRouterAppName: envString("OPENROUTER_APP_NAME", ""),
+
+			// Embedding config - fall back to LLM settings
+			EmbeddingModel:   strings.TrimSpace(envString("EMBEDDING_MODEL", "")),
+			EmbeddingAPIKey:  strings.TrimSpace(envString("EMBEDDING_API_KEY", "")),
+			EmbeddingBaseURL: strings.TrimSpace(envString("EMBEDDING_BASE_URL", "")),
 		},
 
 		S3: S3Config{
@@ -179,7 +202,29 @@ func Load() Config {
 		Proactive: ProactiveConfig{
 			PlanIntervalSeconds: envInt("AETHER_PROACTIVE_PLAN_INTERVAL", 10800),
 		},
+
+		CORS: CORSConfig{
+			AllowedOrigins:   envCSV("CORS_ALLOWED_ORIGINS", []string{"*"}),
+			AllowedMethods:   envCSV("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"}),
+			AllowedHeaders:   envCSV("CORS_ALLOWED_HEADERS", []string{"Content-Type", "Authorization", "X-Request-ID", "Accept"}),
+			ExposeHeaders:    envCSV("CORS_EXPOSE_HEADERS", []string{"X-Request-ID"}),
+			MaxAge:           envInt("CORS_MAX_AGE", 86400),
+			AllowCredentials: strings.EqualFold(envString("CORS_ALLOW_CREDENTIALS", "false"), "true"),
+		},
 	}
+
+	// Apply fallback values for embedding config
+	if cfg.LLM.EmbeddingModel == "" {
+		cfg.LLM.EmbeddingModel = "text-embedding-3-small"
+	}
+	if cfg.LLM.EmbeddingAPIKey == "" {
+		cfg.LLM.EmbeddingAPIKey = cfg.LLM.APIKey
+	}
+	if cfg.LLM.EmbeddingBaseURL == "" {
+		cfg.LLM.EmbeddingBaseURL = cfg.LLM.BaseURL
+	}
+
+	return cfg
 }
 
 // Validate checks that all required environment variables are present.
@@ -249,6 +294,27 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(n) * time.Second
+}
+
+// envCSV reads a comma-separated environment variable and returns a trimmed
+// slice of strings.  If the variable is unset or empty, fallback is returned.
+func envCSV(name string, fallback []string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	raw = stripWrappingQuotes(raw)
+	if raw == "" {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {

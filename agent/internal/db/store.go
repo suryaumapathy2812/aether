@@ -17,7 +17,10 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/asg017/sqlite-vec-go-bindings/cgo"
+	_ "github.com/mattn/go-sqlite3"
+
+	sqlitevec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 )
 
 var (
@@ -25,6 +28,12 @@ var (
 	ErrCryptoUnavailable = errors.New("encryption key is not configured")
 	ErrInvalidCiphertext = errors.New("invalid ciphertext")
 )
+
+func init() {
+	// Initialize sqlite-vec extension when this package is loaded
+	// This registers the vec0 virtual table for vector search
+	sqlitevec.Auto()
+}
 
 type Store struct {
 	db   *instrumentedDB
@@ -194,7 +203,7 @@ func Open(path, stateKey string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +221,11 @@ func Open(path, stateKey string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+
+	// Load sqlite-vec extension for vector search
+	// Note: sqlite_vec.Auto() registers the extension globally when the package is imported
+	// The vec0 virtual table will be available after this connection is opened
+
 	store := &Store{db: newInstrumentedDB(db)}
 	if err := store.ConfigureCrypto(stateKey); err != nil {
 		_ = db.Close()
@@ -339,6 +353,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			timestamp TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_conversations_user_timestamp ON conversations(user_id, timestamp DESC);`,
+		`CREATE TABLE IF NOT EXISTS chat_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			session_id TEXT NOT NULL DEFAULT 'chat',
+			role TEXT NOT NULL,
+			content_json TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(user_id, session_id, id);`,
 		`CREATE TABLE IF NOT EXISTS facts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -548,6 +571,25 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, timestamp DESC);`,
+
+		// Vector embeddings for semantic memory search (sqlite-vec)
+		// Minimal schema - vec0 only supports id and embedding columns
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
+			id INTEGER PRIMARY KEY,
+			embedding float[1536]
+		);`,
+		// Shadow table for metadata (user_id, memory_type, source_table, source_id, content, created_at)
+		`CREATE TABLE IF NOT EXISTS memory_embeddings_meta (
+			id INTEGER PRIMARY KEY,
+			user_id text NOT NULL DEFAULT 'default',
+			memory_type text NOT NULL DEFAULT '',
+			source_table text NOT NULL DEFAULT '',
+			source_id INTEGER,
+			content text NOT NULL DEFAULT '',
+			created_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(user_id, memory_type, source_table, source_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_meta_user ON memory_embeddings_meta(user_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {

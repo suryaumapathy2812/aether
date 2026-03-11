@@ -11,7 +11,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-const DefaultMaxToolIterations = 30
+const DefaultMaxToolIterations = 50
 const defaultStreamRetryAttempts = 3
 
 type Core struct {
@@ -78,7 +78,15 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 					}
 				case providers.EventDone:
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, map[string]any{"finish_reason": firstNonEmpty(ev.FinishReason, "stop")})
+					payload := map[string]any{"finish_reason": firstNonEmpty(ev.FinishReason, "stop")}
+					if ev.Usage != nil {
+						payload["usage"] = map[string]any{
+							"prompt_tokens":     ev.Usage.PromptTokens,
+							"completion_tokens": ev.Usage.CompletionTokens,
+							"total_tokens":      ev.Usage.TotalTokens,
+						}
+					}
+					out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, payload)
 					return
 				}
 			}
@@ -119,6 +127,11 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 		}
 		recentSignatures := []string{}
 
+		// Accumulated token usage across all LLM iterations.
+		totalPromptTokens := 0
+		totalCompletionTokens := 0
+		totalTokens := 0
+
 		for iteration := 0; iteration < maxIter; iteration++ {
 			opts := providers.GenerateOptions{
 				Messages:    env.Messages,
@@ -132,6 +145,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			finishReason := "stop"
 			streamErr := error(nil)
 			hadOutput := false
+			hasUsage := false
 			attempt := 0
 			for {
 				attempt++
@@ -163,6 +177,12 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 						pendingToolCalls = append(pendingToolCalls, ev.ToolCalls...)
 					case providers.EventDone:
 						finishReason = firstNonEmpty(ev.FinishReason, "stop")
+						if ev.Usage != nil {
+							hasUsage = true
+							totalPromptTokens += ev.Usage.PromptTokens
+							totalCompletionTokens += ev.Usage.CompletionTokens
+							totalTokens += ev.Usage.TotalTokens
+						}
 					case providers.EventError:
 						if ev.Err != nil {
 							streamErr = ev.Err
@@ -188,7 +208,15 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 
 			if len(pendingToolCalls) == 0 {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, map[string]any{"finish_reason": finishReason})
+				payload := map[string]any{"finish_reason": finishReason}
+				if hasUsage || totalTokens > 0 {
+					payload["usage"] = map[string]any{
+						"prompt_tokens":     totalPromptTokens,
+						"completion_tokens": totalCompletionTokens,
+						"total_tokens":      totalTokens,
+					}
+				}
+				out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, payload)
 				return
 			}
 
@@ -203,7 +231,15 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "doom_loop", "message": "Detected repeated identical tool calls", "recoverable": false})
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, map[string]any{"finish_reason": "doom_loop"})
+				doomPayload := map[string]any{"finish_reason": "doom_loop"}
+				if totalTokens > 0 {
+					doomPayload["usage"] = map[string]any{
+						"prompt_tokens":     totalPromptTokens,
+						"completion_tokens": totalCompletionTokens,
+						"total_tokens":      totalTokens,
+					}
+				}
+				out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, doomPayload)
 				return
 			}
 
@@ -222,8 +258,8 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 
 				result := c.orchestrator.Execute(ctx, tc.Name, tc.Arguments, tc.ID)
 				toolText := result.Output
-				if len(toolText) > 2000 {
-					toolText = toolText[:2000] + "\n...truncated"
+				if len(toolText) > 4000 {
+					toolText = toolText[:4000] + "\n...truncated"
 				}
 				awaitHuman, _ := result.Metadata["await_human"].(bool)
 				toolPayload := map[string]any{"tool_name": tc.Name, "output": toolText, "call_id": tc.ID, "error": result.Error, "arguments": tc.Arguments}
@@ -240,7 +276,15 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				})
 				if awaitHuman {
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, map[string]any{"finish_reason": "waiting_input"})
+					awaitPayload := map[string]any{"finish_reason": "waiting_input"}
+					if totalTokens > 0 {
+						awaitPayload["usage"] = map[string]any{
+							"prompt_tokens":     totalPromptTokens,
+							"completion_tokens": totalCompletionTokens,
+							"total_tokens":      totalTokens,
+						}
+					}
+					out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, awaitPayload)
 					return
 				}
 			}
@@ -249,7 +293,15 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventTextChunk, seq, map[string]any{"text": "I've done many tool steps and will stop here.", "role": "assistant"})
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, map[string]any{"finish_reason": "max_iterations"})
+		maxIterPayload := map[string]any{"finish_reason": "max_iterations"}
+		if totalTokens > 0 {
+			maxIterPayload["usage"] = map[string]any{
+				"prompt_tokens":     totalPromptTokens,
+				"completion_tokens": totalCompletionTokens,
+				"total_tokens":      totalTokens,
+			}
+		}
+		out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, maxIterPayload)
 	}()
 
 	return out

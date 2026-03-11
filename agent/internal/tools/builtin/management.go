@@ -384,7 +384,7 @@ func (t *DelegateTaskTool) Definition() tools.Definition {
 			{Name: "user_id", Type: "string", Description: "Task owner user id", Required: false, Default: "default"},
 			{Name: "session_id", Type: "string", Description: "Optional session id", Required: false, Default: ""},
 			{Name: "priority", Type: "integer", Description: "Priority score (higher first)", Required: false, Default: 0},
-			{Name: "max_steps", Type: "integer", Description: "Maximum autonomous loop steps", Required: false, Default: 30},
+			{Name: "max_steps", Type: "integer", Description: "Maximum autonomous loop steps", Required: false, Default: 50},
 			{Name: "constraints", Type: "object", Description: "Optional constraints metadata", Required: false, Default: map[string]any{}},
 			{Name: "conversation_context", Type: "array", Description: "Recent conversation turns for context (last 3-5 user/assistant messages)", Required: false, Default: []any{}, Items: map[string]any{"type": "object"}},
 		},

@@ -65,6 +65,16 @@ func (p *OpenAILLMProvider) Name() string {
 	return p.provider
 }
 
+func (p *OpenAILLMProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		SupportsChat:           true,
+		SupportsResponses:      true,
+		SupportsResponsesWS:    false,
+		SupportsRealtime:       false,
+		SupportsStructuredJSON: false,
+	}
+}
+
 func (p *OpenAILLMProvider) StreamWithTools(ctx context.Context, opts GenerateOptions) (<-chan LLMStreamEvent, error) {
 	if strings.TrimSpace(p.apiKey) == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY is not set")
@@ -88,6 +98,9 @@ func (p *OpenAILLMProvider) StreamWithTools(ctx context.Context, opts GenerateOp
 		"max_tokens":  maxTokens,
 		"temperature": temperature,
 		"stream":      true,
+		"stream_options": map[string]any{
+			"include_usage": true,
+		},
 	}
 	if len(opts.Tools) > 0 {
 		body["tools"] = opts.Tools
@@ -135,6 +148,7 @@ func (p *OpenAILLMProvider) StreamWithTools(ctx context.Context, opts GenerateOp
 		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		finishReason := "stop"
 		hasToolCalls := false
+		var streamUsage *Usage
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -164,11 +178,26 @@ func (p *OpenAILLMProvider) StreamWithTools(ctx context.Context, opts GenerateOp
 					} `json:"delta"`
 					FinishReason string `json:"finish_reason"`
 				} `json:"choices"`
+				Usage *struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				} `json:"usage"`
 			}
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				out <- LLMStreamEvent{Type: EventError, Err: fmt.Errorf("failed to parse LLM stream chunk: %w", err)}
 				return
 			}
+
+			// Capture usage from the chunk (typically in the final chunk).
+			if chunk.Usage != nil {
+				streamUsage = &Usage{
+					PromptTokens:     chunk.Usage.PromptTokens,
+					CompletionTokens: chunk.Usage.CompletionTokens,
+					TotalTokens:      chunk.Usage.TotalTokens,
+				}
+			}
+
 			if len(chunk.Choices) == 0 {
 				continue
 			}
@@ -230,7 +259,7 @@ func (p *OpenAILLMProvider) StreamWithTools(ctx context.Context, opts GenerateOp
 		if finishReason == "" {
 			finishReason = "stop"
 		}
-		out <- LLMStreamEvent{Type: EventDone, FinishReason: finishReason}
+		out <- LLMStreamEvent{Type: EventDone, FinishReason: finishReason, Usage: streamUsage}
 	}()
 
 	return out, nil

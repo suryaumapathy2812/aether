@@ -74,6 +74,8 @@ func New(opts Options) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/models", h.handleModels)
 	mux.HandleFunc("/v1/chat/completions", h.handleChatCompletions)
+	mux.HandleFunc("/v1/responses", h.handleResponses)
+	mux.HandleFunc("/v1/completions", h.handleCompletions)
 	mux.HandleFunc("/v1/media/upload/init", h.handleMediaUploadInit)
 	mux.HandleFunc("/v1/media/upload/complete", h.handleMediaUploadComplete)
 }
@@ -188,6 +190,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 	finish := "stop"
 	parts := []string{}
 	toolArgs := map[string]map[string]any{}
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStatus:
@@ -243,17 +246,20 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 			if fr != "" {
 				finish = fr
 			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 			log.Printf("llm stream_end: id=%s reason=%s", completionID, finish)
 		}
 	}
 
-	writeSSE(w, map[string]any{
+	finalChunk := map[string]any{
 		"id":      completionID,
 		"object":  "chat.completion.chunk",
 		"created": created,
 		"model":   model,
 		"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finish}},
-	})
+		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
+	}
+	writeSSE(w, finalChunk)
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
 	if h.memory != nil {
@@ -268,6 +274,7 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 	parts := []string{}
 	finish := "stop"
 	toolArgs := map[string]map[string]any{}
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStatus:
@@ -298,6 +305,7 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
 				finish = v
 			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 			log.Printf("llm stream_end: id=%s reason=%s", completionID, finish)
 		case llm.EventError:
 			msg, _ := ev.Payload["message"].(string)
@@ -316,8 +324,488 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 		"created": created,
 		"model":   model,
 		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": finish}},
-		"usage":   map[string]int{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
 	})
+}
+
+func (h *Handler) handleResponses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.core == nil {
+		writeError(w, http.StatusInternalServerError, "llm runtime unavailable")
+		return
+	}
+
+	var req struct {
+		Model              string           `json:"model"`
+		Input              []map[string]any `json:"input"`
+		Instructions       string           `json:"instructions"`
+		Tools              []map[string]any `json:"tools"`
+		Stream             bool             `json:"stream"`
+		Store              bool             `json:"store"`
+		PreviousResponseID string           `json:"previous_response_id"`
+		Temperature        *float64         `json:"temperature"`
+		MaxTokens          *int             `json:"max_tokens"`
+		User               string           `json:"user"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	if len(req.Input) == 0 {
+		writeError(w, http.StatusBadRequest, "input is required")
+		return
+	}
+
+	userID := firstNonEmpty(strings.TrimSpace(req.User), "default")
+	sessionID := firstNonEmpty(strings.TrimSpace(req.User), "http-responses")
+	policy := map[string]any{}
+	if req.MaxTokens != nil {
+		policy["max_tokens"] = *req.MaxTokens
+	}
+	if req.Temperature != nil {
+		policy["temperature"] = *req.Temperature
+	}
+	if model := strings.TrimSpace(req.Model); model != "" && !strings.EqualFold(model, "aether") {
+		policy["model"] = model
+	}
+
+	messages := normalizeResponsesInput(req.Input)
+	env := h.builder.Build(messages, policy, userID, sessionID)
+	log.Printf("responses request: user=%s session=%s input_items=%d stream=%t", userID, sessionID, len(req.Input), req.Stream)
+
+	completionID := "resp-" + uuid.NewString()[:12]
+	created := time.Now().Unix()
+	model := firstNonEmpty(policyString(policy, "model"), h.model)
+
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	r = r.WithContext(rCtx)
+
+	if req.Stream {
+		h.streamResponses(w, r, env, req.Input, completionID, created, model)
+		return
+	}
+	h.syncResponses(w, r, env, req.Input, completionID, created, model)
+}
+
+func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestInput []map[string]any, completionID string, created int64, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	writeSSE(w, map[string]any{
+		"type":     "response.created",
+		"response": map[string]any{"id": completionID, "created": created, "model": model},
+	})
+	flusher.Flush()
+
+	finish := "stop"
+	parts := []string{}
+	toolCalls := []map[string]any{}
+	toolArgs := map[string]map[string]any{}
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	for ev := range h.core.GenerateWithTools(r.Context(), env) {
+		switch ev.EventType {
+		case llm.EventStatus:
+			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+				log.Printf("responses status: id=%s %s", completionID, msg)
+			}
+		case llm.EventToolCall:
+			name, _ := ev.Payload["tool_name"].(string)
+			callID, _ := ev.Payload["call_id"].(string)
+			args, _ := ev.Payload["arguments"].(map[string]any)
+			argsJSON, _ := json.Marshal(args)
+			if strings.TrimSpace(callID) != "" {
+				toolArgs[callID] = args
+			}
+			toolCalls = append(toolCalls, map[string]any{
+				"type":      "function_call",
+				"id":        callID,
+				"name":      name,
+				"arguments": string(argsJSON),
+			})
+			writeSSE(w, map[string]any{
+				"type": "response.function_call.begin",
+				"id":   callID,
+				"name": name,
+			})
+			flusher.Flush()
+		case llm.EventToolResult:
+			callID, _ := ev.Payload["call_id"].(string)
+			name, _ := ev.Payload["tool_name"].(string)
+			output, _ := ev.Payload["output"].(string)
+			errFlag, _ := ev.Payload["error"].(bool)
+			// Record tool action in memory
+			if h.memory != nil {
+				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
+			}
+			if errFlag {
+				output = "[error] " + output
+			}
+			writeSSE(w, map[string]any{
+				"type":    "response.function_call_output",
+				"call_id": callID,
+				"output":  output,
+			})
+			flusher.Flush()
+		case llm.EventTextChunk:
+			chunk, _ := ev.Payload["text"].(string)
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			parts = append(parts, chunk)
+			writeSSE(w, map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": chunk,
+			})
+			flusher.Flush()
+		case llm.EventError:
+			msg, _ := ev.Payload["message"].(string)
+			if msg == "" {
+				msg = "unknown error"
+			}
+			writeSSE(w, map[string]any{
+				"type":    "error",
+				"message": msg,
+			})
+			flusher.Flush()
+		case llm.EventStreamEnd:
+			fr, _ := ev.Payload["finish_reason"].(string)
+			if fr != "" {
+				finish = fr
+			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
+			log.Printf("responses stream_end: id=%s reason=%s", completionID, finish)
+		}
+	}
+
+	for _, tc := range toolCalls {
+		writeSSE(w, map[string]any{
+			"type":      "response.function_call.done",
+			"id":        tc["id"],
+			"name":      tc["name"],
+			"arguments": tc["arguments"],
+		})
+		flusher.Flush()
+	}
+
+	writeSSE(w, map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id":            completionID,
+			"created":       created,
+			"model":         model,
+			"finish_reason": finish,
+			"usage":         map[string]int{"input_tokens": promptTokens, "output_tokens": completionTokens, "total_tokens": totalTokens},
+		},
+	})
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
+
+	// Record conversation in memory (convert Responses API input to chat format for summary)
+	if h.memory != nil {
+		content := strings.TrimSpace(strings.Join(parts, ""))
+		if content != "" {
+			chatMessages := normalizeResponsesInput(requestInput)
+			h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
+		}
+	}
+}
+
+func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestInput []map[string]any, completionID string, created int64, model string) {
+	parts := []string{}
+	finish := "stop"
+	toolCalls := []map[string]any{}
+	toolResults := []map[string]any{}
+	toolArgs := map[string]map[string]any{}
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	for ev := range h.core.GenerateWithTools(r.Context(), env) {
+		switch ev.EventType {
+		case llm.EventStatus:
+			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+				log.Printf("responses status: id=%s %s", completionID, msg)
+			}
+		case llm.EventToolCall:
+			name, _ := ev.Payload["tool_name"].(string)
+			callID, _ := ev.Payload["call_id"].(string)
+			args, _ := ev.Payload["arguments"].(map[string]any)
+			argsJSON, _ := json.Marshal(args)
+			if strings.TrimSpace(callID) != "" {
+				toolArgs[callID] = args
+			}
+			// Collect tool calls — do NOT write JSON mid-response
+			toolCalls = append(toolCalls, map[string]any{
+				"type":      "function_call",
+				"id":        callID,
+				"name":      name,
+				"arguments": string(argsJSON),
+			})
+			log.Printf("responses tool_call: id=%s tool=%s", completionID, name)
+		case llm.EventToolResult:
+			callID, _ := ev.Payload["call_id"].(string)
+			name, _ := ev.Payload["tool_name"].(string)
+			output, _ := ev.Payload["output"].(string)
+			errFlag, _ := ev.Payload["error"].(bool)
+			// Record tool action in memory
+			if h.memory != nil {
+				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
+			}
+			if errFlag {
+				output = "[error] " + output
+			}
+			toolResults = append(toolResults, map[string]any{
+				"type":    "function_call_output",
+				"call_id": callID,
+				"output":  output,
+			})
+			log.Printf("responses tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
+		case llm.EventTextChunk:
+			chunk, _ := ev.Payload["text"].(string)
+			parts = append(parts, chunk)
+		case llm.EventStreamEnd:
+			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
+				finish = v
+			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
+			log.Printf("responses stream_end: id=%s reason=%s", completionID, finish)
+		case llm.EventError:
+			msg, _ := ev.Payload["message"].(string)
+			log.Printf("responses error: id=%s message=%s", completionID, msg)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
+			return
+		}
+	}
+
+	// Build output items: function_calls, function_call_outputs, then text
+	outputItems := []map[string]any{}
+	outputItems = append(outputItems, toolCalls...)
+	outputItems = append(outputItems, toolResults...)
+	content := strings.Join(parts, "")
+	if strings.TrimSpace(content) != "" {
+		outputItems = append(outputItems, map[string]any{
+			"type":    "output_text",
+			"content": content,
+		})
+	}
+
+	// Record conversation in memory
+	if h.memory != nil && strings.TrimSpace(content) != "" {
+		chatMessages := normalizeResponsesInput(requestInput)
+		h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":            completionID,
+		"object":        "response",
+		"created":       created,
+		"model":         model,
+		"output":        outputItems,
+		"finish_reason": finish,
+		"usage":         map[string]int{"input_tokens": promptTokens, "output_tokens": completionTokens, "total_tokens": totalTokens},
+	})
+}
+
+func (h *Handler) handleCompletions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.core == nil {
+		writeError(w, http.StatusInternalServerError, "llm runtime unavailable")
+		return
+	}
+
+	var req struct {
+		Model       string   `json:"model"`
+		Prompt      string   `json:"prompt"`
+		Stream      bool     `json:"stream"`
+		Temperature *float64 `json:"temperature"`
+		MaxTokens   *int     `json:"max_tokens"`
+		User        string   `json:"user"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+
+	userID := firstNonEmpty(strings.TrimSpace(req.User), "default")
+	policy := map[string]any{}
+	if req.MaxTokens != nil {
+		policy["max_tokens"] = *req.MaxTokens
+	}
+	if req.Temperature != nil {
+		policy["temperature"] = *req.Temperature
+	}
+	if model := strings.TrimSpace(req.Model); model != "" && !strings.EqualFold(model, "aether") {
+		policy["model"] = model
+	}
+
+	messages := []map[string]any{
+		{"role": "user", "content": req.Prompt},
+	}
+	env := h.builder.Build(messages, policy, userID, "completions")
+
+	completionID := "cmpl-" + uuid.NewString()[:12]
+	created := time.Now().Unix()
+	model := firstNonEmpty(policyString(policy, "model"), h.model)
+
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	r = r.WithContext(rCtx)
+
+	if req.Stream {
+		h.streamCompletions(w, r, env, completionID, created, model)
+		return
+	}
+	h.syncCompletions(w, r, env, completionID, created, model)
+}
+
+func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, completionID string, created int64, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	finish := "stop"
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	for ev := range h.core.GenerateWithTools(r.Context(), env) {
+		switch ev.EventType {
+		case llm.EventTextChunk:
+			chunk, _ := ev.Payload["text"].(string)
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			writeSSE(w, map[string]any{
+				"id":      completionID,
+				"object":  "completion",
+				"created": created,
+				"model":   model,
+				"choices": []map[string]any{{"text": chunk, "index": 0}},
+			})
+			flusher.Flush()
+		case llm.EventStreamEnd:
+			fr, _ := ev.Payload["finish_reason"].(string)
+			if fr != "" {
+				finish = fr
+			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
+		case llm.EventError:
+			msg, _ := ev.Payload["message"].(string)
+			if msg == "" {
+				msg = "unknown error"
+			}
+			writeSSE(w, map[string]any{
+				"id":      completionID,
+				"object":  "completion",
+				"created": created,
+				"model":   model,
+				"choices": []map[string]any{{"text": "\n[error] " + msg, "index": 0}},
+			})
+			flusher.Flush()
+		}
+	}
+
+	writeSSE(w, map[string]any{
+		"id":      completionID,
+		"object":  "completion",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{{"text": "", "index": 0, "finish_reason": finish}},
+		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
+	})
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
+}
+
+func (h *Handler) syncCompletions(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, completionID string, created int64, model string) {
+	parts := []string{}
+	finish := "stop"
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	for ev := range h.core.GenerateWithTools(r.Context(), env) {
+		switch ev.EventType {
+		case llm.EventTextChunk:
+			chunk, _ := ev.Payload["text"].(string)
+			parts = append(parts, chunk)
+		case llm.EventStreamEnd:
+			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
+				finish = v
+			}
+			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
+		case llm.EventError:
+			msg, _ := ev.Payload["message"].(string)
+			log.Printf("completions error: id=%s message=%s", completionID, msg)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      completionID,
+		"object":  "completion",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{{"text": strings.Join(parts, ""), "index": 0, "finish_reason": finish}},
+		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
+	})
+}
+
+func normalizeResponsesInput(input []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(input))
+	for _, item := range input {
+		typ, _ := item["type"].(string)
+		switch typ {
+		case "message":
+			role, _ := item["role"].(string)
+			content := item["content"]
+			out = append(out, map[string]any{"role": role, "content": content})
+		case "function_call":
+			callID, _ := item["id"].(string)
+			name, _ := item["name"].(string)
+			args, _ := item["arguments"].(string)
+			out = append(out, map[string]any{
+				"role": "assistant",
+				"tool_calls": []map[string]any{{
+					"id":   callID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      name,
+						"arguments": args,
+					},
+				}},
+			})
+		case "function_call_output":
+			callID, _ := item["call_id"].(string)
+			output, _ := item["output"].(string)
+			out = append(out, map[string]any{
+				"role":         "tool",
+				"tool_call_id": callID,
+				"content":      output,
+			})
+		default:
+			if content, ok := item["content"].(string); ok {
+				out = append(out, map[string]any{"role": "user", "content": content})
+			}
+		}
+	}
+	return out
 }
 
 func (h *Handler) handleMediaUploadInit(w http.ResponseWriter, r *http.Request) {
@@ -537,6 +1025,34 @@ func (h *Handler) resolveMediaRefs(ctx context.Context, userID string, messages 
 		out = append(out, copied)
 	}
 	return out, nil
+}
+
+// extractUsage extracts token usage from an EventStreamEnd payload.
+// Returns (prompt_tokens, completion_tokens, total_tokens).
+// Falls back to zeros if usage is not present.
+func extractUsage(payload map[string]any) (int, int, int) {
+	usageRaw, ok := payload["usage"].(map[string]any)
+	if !ok {
+		return 0, 0, 0
+	}
+	prompt := toInt(usageRaw["prompt_tokens"])
+	completion := toInt(usageRaw["completion_tokens"])
+	total := toInt(usageRaw["total_tokens"])
+	return prompt, completion, total
+}
+
+// toInt converts a numeric value (int, float64, etc.) to int.
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func writeSSE(w http.ResponseWriter, payload map[string]any) {

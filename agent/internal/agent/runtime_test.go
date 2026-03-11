@@ -18,6 +18,10 @@ type staticProvider struct {
 
 func (p *staticProvider) Name() string { return "static" }
 
+func (p *staticProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.DefaultCapabilities
+}
+
 func (p *staticProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
 	p.callCount++

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
@@ -25,6 +26,7 @@ type Handler struct {
 	builder *llm.ContextBuilder
 	memory  *memory.Service
 	media   *media.Service
+	store   *db.Store
 	limits  agentcfg.MediaLimitsConfig
 }
 
@@ -33,11 +35,12 @@ type Options struct {
 	Builder *llm.ContextBuilder
 	Memory  *memory.Service
 	Media   *media.Service
+	Store   *db.Store
 	Limits  agentcfg.MediaLimitsConfig
 }
 
 func New(opts Options) *Handler {
-	return &Handler{runtime: opts.Runtime, builder: opts.Builder, memory: opts.Memory, media: opts.Media, limits: opts.Limits}
+	return &Handler{runtime: opts.Runtime, builder: opts.Builder, memory: opts.Memory, media: opts.Media, store: opts.Store, limits: opts.Limits}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -73,10 +76,27 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	userID := firstNonEmpty(strings.TrimSpace(req.User), strings.TrimSpace(req.UserID), "default")
 	sessionID := firstNonEmpty(strings.TrimSpace(req.Session), userID)
 
-	resolvedMessages, err := h.resolveMediaRefs(r.Context(), userID, req.Messages)
+	latestUser, err := latestUserTurnMessage(req.Messages)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	resolvedTurn, err := h.resolveMediaRefs(r.Context(), userID, []map[string]any{latestUser})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(resolvedTurn) == 0 {
+		writeError(w, http.StatusBadRequest, "latest user message is required")
+		return
+	}
+	latestUser = resolvedTurn[0]
+
+	history := h.loadConversationHistory(r.Context(), userID, sessionID)
+	messages := append(history, latestUser)
+	if h.store != nil {
+		_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, latestUser)
 	}
 
 	policy := map[string]any{}
@@ -87,7 +107,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		policy["temperature"] = *req.Temperature
 	}
 
-	env := h.builder.Build(resolvedMessages, policy, userID, sessionID)
+	env := h.builder.Build(messages, policy, userID, sessionID)
 	ack := conversation.BuildAckFallback(req.Messages)
 
 	completionID := "convturn-" + uuid.NewString()[:12]
@@ -117,6 +137,9 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	ackText := ""
 	answerParts := []string{}
+	pendingToolCalls := []map[string]any{}
+	pendingToolCallIDs := map[string]struct{}{}
+	assistantFlushedForToolBatch := false
 	for ev := range h.runtime.Run(r.Context(), env, conversation.RunOptions{AckFallback: ack}) {
 		switch ev.EventType {
 		case conversation.EventAck:
@@ -144,6 +167,56 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 			})
 			flusher.Flush()
 		case conversation.EventToolCall, conversation.EventToolResult, conversation.EventStatus:
+			if ev.EventType == conversation.EventToolCall {
+				name, _ := ev.Payload["tool_name"].(string)
+				callID, _ := ev.Payload["call_id"].(string)
+				args := ev.Payload["arguments"]
+				argsJSON, _ := json.Marshal(args)
+				pendingToolCalls = append(pendingToolCalls, map[string]any{
+					"id":   callID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      name,
+						"arguments": string(argsJSON),
+					},
+				})
+				if strings.TrimSpace(callID) != "" {
+					pendingToolCallIDs[callID] = struct{}{}
+				}
+				assistantFlushedForToolBatch = false
+			}
+			if ev.EventType == conversation.EventToolResult {
+				if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
+					_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
+						"role":       "assistant",
+						"tool_calls": pendingToolCalls,
+					})
+					assistantFlushedForToolBatch = true
+				}
+				if h.store != nil {
+					callID, _ := ev.Payload["call_id"].(string)
+					output, _ := ev.Payload["output"].(string)
+					isErr, _ := ev.Payload["error"].(bool)
+					if strings.TrimSpace(output) != "" {
+						content := output
+						if isErr {
+							content = "[tool_error] " + content
+						}
+						_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
+							"role":         "tool",
+							"tool_call_id": callID,
+							"content":      content,
+						})
+					}
+					if strings.TrimSpace(callID) != "" {
+						delete(pendingToolCallIDs, callID)
+					}
+					if len(pendingToolCallIDs) == 0 {
+						pendingToolCalls = nil
+						assistantFlushedForToolBatch = false
+					}
+				}
+			}
 			writeSSE(w, map[string]any{
 				"id":      completionID,
 				"object":  "conversation.turn",
@@ -186,10 +259,116 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 			h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(req.Messages), llm.LatestUserMessageContent(req.Messages), answer)
 		}
 	}
+	answer := strings.TrimSpace(strings.Join(answerParts, ""))
+	if answer != "" && h.store != nil {
+		_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{"role": "assistant", "content": answer})
+	}
 
 	log.Printf("conversation turn: user=%s session=%s", env.UserID, env.SessionID)
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
+}
+
+func latestUserTurnMessage(messages []map[string]any) (map[string]any, error) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		role, _ := messages[i]["role"].(string)
+		if strings.TrimSpace(role) != "user" {
+			continue
+		}
+		copied := map[string]any{}
+		for k, v := range messages[i] {
+			copied[k] = v
+		}
+		if _, ok := copied["content"]; !ok {
+			return nil, fmt.Errorf("latest user message content is required")
+		}
+		return copied, nil
+	}
+	return nil, fmt.Errorf("latest user message is required")
+}
+
+func (h *Handler) loadConversationHistory(ctx context.Context, userID, sessionID string) []map[string]any {
+	if h == nil || h.store == nil {
+		return []map[string]any{}
+	}
+	recs, err := h.store.ListChatMessages(ctx, userID, sessionID, 500)
+	if err != nil || len(recs) == 0 {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(recs))
+	for _, rec := range recs {
+		if len(rec.Content) == 0 {
+			continue
+		}
+		out = append(out, rec.Content)
+	}
+	return sanitizeToolMessageHistory(out)
+}
+
+func sanitizeToolMessageHistory(messages []map[string]any) []map[string]any {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]map[string]any, 0, len(messages))
+	pendingToolIDs := map[string]struct{}{}
+	for _, msg := range messages {
+		role, _ := msg["role"].(string)
+		role = strings.TrimSpace(strings.ToLower(role))
+		switch role {
+		case "assistant":
+			for _, id := range extractToolCallIDs(msg) {
+				pendingToolIDs[id] = struct{}{}
+			}
+			out = append(out, msg)
+		case "tool":
+			callID, _ := msg["tool_call_id"].(string)
+			callID = strings.TrimSpace(callID)
+			if callID == "" {
+				continue
+			}
+			if _, ok := pendingToolIDs[callID]; !ok {
+				continue
+			}
+			out = append(out, msg)
+			delete(pendingToolIDs, callID)
+		default:
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+func extractToolCallIDs(msg map[string]any) []string {
+	ids := []string{}
+	raw, ok := msg["tool_calls"]
+	if !ok {
+		return ids
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		if maps, okMap := raw.([]map[string]any); okMap {
+			for _, item := range maps {
+				id, _ := item["id"].(string)
+				id = strings.TrimSpace(id)
+				if id != "" {
+					ids = append(ids, id)
+				}
+			}
+		}
+		return ids
+	}
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := item["id"].(string)
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func writeSSE(w http.ResponseWriter, payload map[string]any) {

@@ -909,12 +909,24 @@ func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit in
 	entities, err := s.ListEntities(ctx, userID, "", 100)
 	if err == nil {
 		for _, ent := range entities {
+			// Search name + summary + aliases
 			text := ent.Name + " " + ent.Summary + " " + strings.Join(ent.Aliases, " ")
 			appendIfMatch("entity", text, 0.12, ent.LastSeenAt, func(r *MemorySearchResult) {
 				r.EntityName = ent.Name
 				r.EntityType = ent.EntityType
 				r.EntitySummary = ent.Summary
 			})
+
+			// ALSO search entity observations (the detailed traits/facts)
+			obs, _ := s.ListEntityObservations(ctx, ent.ID, 20)
+			for _, o := range obs {
+				obsText := o.Observation
+				appendIfMatch("entity_observation", obsText, 0.10, o.CreatedAt, func(r *MemorySearchResult) {
+					r.EntityName = ent.Name
+					r.EntityType = ent.EntityType
+					r.EntitySummary = obsText
+				})
+			}
 		}
 	}
 
@@ -938,6 +950,33 @@ func normalizeMemoryKey(v string) string {
 	return strings.Join(parts, " ")
 }
 
+// Stopwords to filter out (common English words that add noise)
+var stopwords = map[string]struct{}{
+	"the": {}, "a": {}, "an": {}, "is": {}, "are": {}, "was": {}, "were": {},
+	"be": {}, "been": {}, "being": {}, "have": {}, "has": {}, "had": {},
+	"do": {}, "does": {}, "did": {}, "will": {}, "would": {}, "could": {},
+	"should": {}, "may": {}, "might": {}, "must": {}, "shall": {},
+	"can": {}, "need": {}, "dare": {}, "ought": {}, "used": {},
+	"to": {}, "of": {}, "in": {}, "for": {}, "on": {}, "with": {}, "at": {},
+	"by": {}, "from": {}, "as": {}, "into": {}, "through": {}, "during": {},
+	"before": {}, "after": {}, "above": {}, "below": {}, "between": {},
+	"under": {}, "again": {}, "further": {}, "then": {}, "once": {},
+	"here": {}, "there": {}, "when": {}, "where": {}, "why": {}, "how": {},
+	"all": {}, "each": {}, "few": {}, "more": {}, "most": {}, "other": {},
+	"some": {}, "such": {}, "no": {}, "nor": {}, "not": {}, "only": {},
+	"own": {}, "same": {}, "so": {}, "than": {}, "too": {}, "very": {},
+	"just": {}, "also": {}, "now": {}, "i": {}, "me": {}, "my": {},
+	"myself": {}, "we": {}, "our": {}, "ours": {}, "ourselves": {},
+	"you": {}, "your": {}, "yours": {}, "yourself": {}, "yourselves": {},
+	"he": {}, "him": {}, "his": {}, "himself": {}, "she": {}, "her": {},
+	"hers": {}, "herself": {}, "it": {}, "its": {}, "itself": {},
+	"they": {}, "them": {}, "their": {}, "theirs": {}, "themselves": {},
+	"what": {}, "which": {}, "who": {}, "whom": {}, "this": {},
+	"that": {}, "these": {}, "those": {}, "am": {}, "and": {}, "but": {},
+	"if": {}, "or": {}, "because": {}, "until": {}, "while": {},
+	"about": {}, "against": {}, "out": {}, "up": {}, "down": {},
+}
+
 func tokenizeQuery(v string) map[string]struct{} {
 	v = strings.TrimSpace(strings.ToLower(v))
 	re := regexp.MustCompile(`[a-z0-9]+`)
@@ -947,9 +986,45 @@ func tokenizeQuery(v string) map[string]struct{} {
 		if p == "" {
 			continue
 		}
+		// Filter stopwords
+		if _, isStop := stopwords[p]; isStop {
+			continue
+		}
+		// Apply simple stemming
+		p = simpleStem(p)
+		if p == "" {
+			continue
+		}
 		out[p] = struct{}{}
 	}
 	return out
+}
+
+// simpleStem applies basic suffix stripping for common English endings
+func simpleStem(word string) string {
+	// Handle common suffixes
+	if len(word) > 4 && strings.HasSuffix(word, "ing") {
+		return word[:len(word)-3]
+	}
+	if len(word) > 3 && strings.HasSuffix(word, "ed") {
+		return word[:len(word)-2]
+	}
+	if len(word) > 3 && strings.HasSuffix(word, "es") {
+		return word[:len(word)-2]
+	}
+	if len(word) > 3 && strings.HasSuffix(word, "s") && !strings.HasSuffix(word, "ss") {
+		return word[:len(word)-1]
+	}
+	if len(word) > 4 && strings.HasSuffix(word, "ly") {
+		return word[:len(word)-2]
+	}
+	if len(word) > 4 && strings.HasSuffix(word, "er") {
+		return word[:len(word)-2]
+	}
+	if len(word) > 5 && strings.HasSuffix(word, "ness") {
+		return word[:len(word)-4]
+	}
+	return word
 }
 
 func overlapScore(a, b map[string]struct{}) float64 {
