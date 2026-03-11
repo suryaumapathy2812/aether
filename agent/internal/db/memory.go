@@ -172,7 +172,11 @@ func (s *Store) StoreMemoryFact(ctx context.Context, userID, fact string, source
 			source_conversation_id = excluded.source_conversation_id,
 			updated_at = excluded.updated_at
 	`, userID, fact, key, sourceConversationID, now, now)
-	return err
+	if err != nil {
+		return err
+	}
+	_ = s.upsertMemoryFTS(ctx, userID, "fact", key, fact)
+	return nil
 }
 
 func (s *Store) StoreMemory(ctx context.Context, userID, memory, category string, sourceConversationID int64, expiresAt *time.Time) error {
@@ -200,7 +204,11 @@ func (s *Store) StoreMemory(ctx context.Context, userID, memory, category string
 			source_conversation_id = excluded.source_conversation_id,
 			confidence = 1.0
 	`, userID, memory, key, category, sourceConversationID, now, expires)
-	return err
+	if err != nil {
+		return err
+	}
+	_ = s.upsertMemoryFTS(ctx, userID, "memory", key, memory)
+	return nil
 }
 
 func (s *Store) StoreMemoryDecision(ctx context.Context, userID, decision, category, source string, sourceConversationID int64) error {
@@ -230,6 +238,32 @@ func (s *Store) StoreMemoryDecision(ctx context.Context, userID, decision, categ
 			updated_at = excluded.updated_at,
 			confidence = 1.0
 	`, userID, decision, key, category, source, sourceConversationID, now, now)
+	if err != nil {
+		return err
+	}
+	_ = s.upsertMemoryFTS(ctx, userID, "decision", key, decision)
+	return nil
+}
+
+func (s *Store) upsertMemoryFTS(ctx context.Context, userID, sourceType, sourceKey, content string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	if strings.TrimSpace(sourceType) == "" || strings.TrimSpace(sourceKey) == "" || strings.TrimSpace(content) == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM memory_fts WHERE user_id = ? AND source_type = ? AND source_key = ?
+	`, userID, sourceType, sourceKey); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO memory_fts(user_id, source_type, source_key, content)
+		VALUES(?, ?, ?, ?)
+	`, userID, sourceType, sourceKey, content)
 	return err
 }
 
@@ -796,6 +830,9 @@ func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit in
 	}
 	results := []MemorySearchResult{}
 
+	ftsResults, _ := s.searchMemoryFTS(ctx, userID, qTokens, limit)
+	results = append(results, ftsResults...)
+
 	appendIfMatch := func(kind, text string, boost float64, ts time.Time, enrich func(*MemorySearchResult)) {
 		score := overlapScore(qTokens, tokenizeQuery(text))
 		if score <= 0 {
@@ -930,6 +967,7 @@ func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit in
 		}
 	}
 
+	results = dedupeMemoryResults(results)
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Similarity == results[j].Similarity {
 			return results[i].Timestamp.After(results[j].Timestamp)
@@ -940,6 +978,81 @@ func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit in
 		results = results[:limit]
 	}
 	return results, nil
+}
+
+func dedupeMemoryResults(in []MemorySearchResult) []MemorySearchResult {
+	if len(in) == 0 {
+		return in
+	}
+	best := make(map[string]MemorySearchResult, len(in))
+	for _, item := range in {
+		key := memoryResultKey(item)
+		if prev, ok := best[key]; !ok || item.Similarity > prev.Similarity {
+			best[key] = item
+		}
+	}
+	out := make([]MemorySearchResult, 0, len(best))
+	for _, v := range best {
+		out = append(out, v)
+	}
+	return out
+}
+
+func memoryResultKey(item MemorySearchResult) string {
+	base := strings.TrimSpace(strings.ToLower(item.Fact + "|" + item.Memory + "|" + item.Decision + "|" + item.UserMessage + "|" + item.EntityName + "|" + item.EntitySummary))
+	if base == "" {
+		base = strings.TrimSpace(strings.ToLower(item.Type))
+	}
+	return item.Type + "|" + base
+}
+
+func (s *Store) searchMemoryFTS(ctx context.Context, userID string, qTokens map[string]struct{}, limit int) ([]MemorySearchResult, error) {
+	if len(qTokens) == 0 {
+		return nil, nil
+	}
+	tokens := make([]string, 0, len(qTokens))
+	for t := range qTokens {
+		tokens = append(tokens, t)
+	}
+	sort.Strings(tokens)
+	ftsQuery := strings.Join(tokens, " OR ")
+	if strings.TrimSpace(ftsQuery) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT source_type, content
+		FROM memory_fts
+		WHERE user_id = ? AND memory_fts MATCH ?
+		LIMIT ?
+	`, userID, ftsQuery, limit*2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	res := make([]MemorySearchResult, 0)
+	for rows.Next() {
+		var sourceType, content string
+		if scanErr := rows.Scan(&sourceType, &content); scanErr != nil {
+			return nil, scanErr
+		}
+		item := MemorySearchResult{Type: sourceType, Similarity: 0.25, Timestamp: time.Now().UTC()}
+		switch sourceType {
+		case "fact":
+			item.Fact = content
+		case "memory":
+			item.Memory = content
+		case "decision":
+			item.Decision = content
+		default:
+			item.Type = "memory"
+			item.Memory = content
+		}
+		res = append(res, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func normalizeMemoryKey(v string) string {

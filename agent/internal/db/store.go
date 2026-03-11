@@ -576,6 +576,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, timestamp DESC);`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+			user_id UNINDEXED,
+			source_type UNINDEXED,
+			source_key UNINDEXED,
+			content,
+			tokenize='porter unicode61'
+		);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -583,6 +590,37 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	if err := s.ensureColumn(ctx, "conversations", "user_content_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.rebuildMemoryFTS(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) rebuildMemoryFTS(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM memory_fts`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO memory_fts(user_id, source_type, source_key, content)
+		SELECT user_id, 'fact', fact_key, fact FROM facts
+	`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO memory_fts(user_id, source_type, source_key, content)
+		SELECT user_id, 'memory', memory_key, memory FROM memories
+	`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO memory_fts(user_id, source_type, source_key, content)
+		SELECT user_id, 'decision', decision_key, decision FROM decisions
+	`); err != nil {
 		return err
 	}
 	return nil
