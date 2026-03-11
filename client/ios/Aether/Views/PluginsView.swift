@@ -56,6 +56,8 @@ final class PluginsViewModel: ObservableObject {
 struct PluginsView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = PluginsViewModel()
+    var embedded = false
+    @State private var lastLoadedToken = ""
 
     var body: some View {
         NavigationStack {
@@ -90,19 +92,24 @@ struct PluginsView: View {
                     }
                     .listStyle(.insetGrouped)
                     .scrollContentBackground(.hidden)
-                    .background(Color(hex: "111111"))
+                    .background(Color.black.opacity(0.15))
                     .refreshable {
                         await model.reload()
                     }
                 }
             }
             .navigationTitle("Plugins")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
-        .task {
+        .task(id: pairing.getDeviceToken() ?? "") {
             let token = pairing.getDeviceToken() ?? ""
             model.configure(baseURL: pairing.orchestratorURL, token: token)
-            await model.reload()
+            if token != lastLoadedToken {
+                lastLoadedToken = token
+                await model.reload()
+            }
         }
     }
 

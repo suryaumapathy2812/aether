@@ -79,51 +79,24 @@ final class MemoryViewModel: ObservableObject {
 struct MemoryView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = MemoryViewModel()
+    var embedded = false
+    @State private var lastLoadedToken = ""
 
     var body: some View {
         NavigationStack {
-            Group {
-                if model.loading {
-                    ProgressView("Loading memory...")
-                        .tint(.white)
-                } else if !model.error.isEmpty {
-                    ContentUnavailableView("Could not load memory", systemImage: "exclamationmark.triangle", description: Text(model.error))
-                } else {
-                    List {
-                        ForEach(MemorySection.allCases) { section in
-                            NavigationLink {
-                                destinationView(for: section)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: section.icon)
-                                        .foregroundStyle(.white.opacity(0.78))
-                                    Text(section.rawValue)
-                                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.9))
-                                    Spacer()
-                                    Text("\(model.count(for: section))")
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.46))
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(hex: "111111"))
-                    .refreshable {
-                        await model.load()
-                    }
-                }
-            }
-            .navigationTitle("Memory")
+            content
+                .navigationTitle("Memory")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(embedded ? .hidden : .visible, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
-        .task {
+        .task(id: pairing.getDeviceToken() ?? "") {
             let token = pairing.getDeviceToken() ?? ""
             model.configure(baseURL: pairing.orchestratorURL, token: token)
-            await model.load()
+            if token != lastLoadedToken {
+                lastLoadedToken = token
+                await model.load()
+            }
         }
         .sheet(isPresented: Binding(
             get: { model.selectedEntity != nil },
@@ -131,6 +104,44 @@ struct MemoryView: View {
         )) {
             if let details = model.selectedEntity {
                 EntityDetailSheet(details: details)
+            }
+        }
+    }
+
+    private var content: some View {
+        Group {
+            if model.loading {
+                ProgressView("Loading memory...")
+                    .tint(.white)
+            } else if !model.error.isEmpty {
+                ContentUnavailableView("Could not load memory", systemImage: "exclamationmark.triangle", description: Text(model.error))
+            } else {
+                List {
+                    ForEach(MemorySection.allCases) { section in
+                        NavigationLink {
+                            destinationView(for: section)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: section.icon)
+                                    .foregroundStyle(.white.opacity(0.78))
+                                Text(section.rawValue)
+                                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.9))
+                                Spacer()
+                                Text("\(model.count(for: section))")
+                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.46))
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(Color.black.opacity(0.15))
+                .refreshable {
+                    await model.load()
+                }
             }
         }
     }

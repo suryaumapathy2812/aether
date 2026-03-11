@@ -32,62 +32,78 @@ final class HistoryViewModel: ObservableObject {
 struct HistoryView: View {
     @EnvironmentObject var pairing: PairingService
     @StateObject private var model = HistoryViewModel()
+    var embedded = false
+    @State private var lastLoadedToken = ""
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if model.loading {
-                    ProgressView("Loading history...")
-                        .tint(.white)
-                } else if !model.error.isEmpty {
-                    ContentUnavailableView("Could not load history", systemImage: "exclamationmark.triangle", description: Text(model.error))
-                } else if model.conversations.isEmpty {
-                    ContentUnavailableView("No messages yet", systemImage: "text.bubble")
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 14) {
-                            ForEach(model.conversations.reversed()) { item in
-                                VStack(spacing: 8) {
-                                    HStack {
-                                        Spacer(minLength: 48)
-                                        Text(item.userMessage)
-                                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 10)
-                                            .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                    }
-                                    HStack {
-                                        Text(item.assistantMessage)
-                                            .font(.system(size: 14, weight: .regular, design: .rounded))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 10)
-                                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                        Spacer(minLength: 48)
-                                    }
-                                    if item.timestamp > 0 {
-                                        Text(relativeTime(fromEpoch: item.timestamp))
-                                            .font(.system(size: 11, weight: .regular, design: .monospaced))
-                                            .foregroundStyle(.white.opacity(0.4))
-                                    }
-                                }
-                                .padding(.horizontal, 12)
-                            }
-                        }
-                        .padding(.vertical, 10)
-                    }
-                    .refreshable {
-                        await model.load()
-                    }
-                    .background(Color(hex: "111111"))
+        Group {
+            if embedded {
+                content
+            } else {
+                NavigationStack {
+                    content
+                        .navigationTitle("History")
                 }
             }
-            .navigationTitle("History")
         }
         .preferredColorScheme(.dark)
-        .task {
+        .task(id: pairing.getDeviceToken() ?? "") {
             let token = pairing.getDeviceToken() ?? ""
             model.configure(baseURL: pairing.orchestratorURL, token: token)
-            await model.load()
+            if token != lastLoadedToken {
+                lastLoadedToken = token
+                await model.load()
+            }
+        }
+    }
+
+    private var content: some View {
+        Group {
+            if model.loading {
+                ProgressView("Loading history...")
+                    .tint(.white)
+            } else if !model.error.isEmpty {
+                ContentUnavailableView("Could not load history", systemImage: "exclamationmark.triangle", description: Text(model.error))
+            } else if model.conversations.isEmpty {
+                ContentUnavailableView("No messages yet", systemImage: "text.bubble")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 14) {
+                        ForEach(model.conversations.reversed()) { item in
+                            VStack(spacing: 8) {
+                                HStack {
+                                    Spacer(minLength: 48)
+                                    Text(item.userMessage)
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+                                HStack {
+                                    Text(item.assistantMessage)
+                                        .font(.system(size: 14, weight: .regular, design: .rounded))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    Spacer(minLength: 48)
+                                }
+                                if item.timestamp > 0 {
+                                    Text(relativeTime(fromEpoch: item.timestamp))
+                                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                        }
+                    }
+                    .padding(.top, embedded ? 12 : 10)
+                    .padding(.bottom, 18)
+                }
+                .refreshable {
+                    await model.load()
+                }
+                .background(Color.black.opacity(0.18))
+            }
         }
     }
 }

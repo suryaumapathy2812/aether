@@ -1,19 +1,11 @@
 import SwiftUI
 
 struct VoiceOrbView: View {
-    @EnvironmentObject var pairing: PairingService
-    @Environment(\.openURL) private var openURL
-    @StateObject private var audio = AudioService()
-
+    @EnvironmentObject var audio: AudioService
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Binding var showHistorySheet: Bool
     @State private var breathe = false
-    @State private var isPressingOrb = false
-    @State private var dragOffsetX: CGFloat = 0
-    @State private var cancelArmed = false
-    @State private var didRunIntro = false
-    @State private var textInput = ""
-    @FocusState private var isTextFieldFocused: Bool
-
-    private let cancelThreshold: CGFloat = -90
+    @State private var reveal = false
 
     private var orbBaseSize: CGFloat {
         switch audio.state {
@@ -79,35 +71,62 @@ struct VoiceOrbView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color(hex: "111111").ignoresSafeArea()
+        GeometryReader { geo in
+            let compact = geo.size.height < 760
+            ZStack(alignment: .bottom) {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.04, green: 0.06, blue: 0.09),
+                        Color(red: 0.08, green: 0.13, blue: 0.19),
+                        Color(red: 0.05, green: 0.07, blue: 0.10)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
-            GeometryReader { geo in
-                VStack(spacing: 0) {
-                    Spacer(minLength: 34)
+                Circle()
+                    .fill(Color.blue.opacity(0.24))
+                    .blur(radius: compact ? 70 : 90)
+                    .frame(width: compact ? 240 : 300, height: compact ? 240 : 300)
+                    .offset(y: compact ? -190 : -220)
+
+                VStack(spacing: compact ? 10 : 14) {
+                    Spacer(minLength: compact ? 8 : 20)
 
                     orbSection
-                        .padding(.top, 6)
+                        .scaleEffect(compact ? 0.92 : 1.0)
 
-                    statusSection
-                        .padding(.top, 16)
+                    statusSection(compact: compact)
+                        .padding(.top, compact ? 10 : 18)
 
-                    Spacer(minLength: 24)
+                    Spacer(minLength: compact ? 12 : 20)
 
-                    bottomControls
-                        .padding(.bottom, 10)
+                    Button {
+                        AetherHaptics.tap()
+                        showHistorySheet = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.up")
+                            Text("Pull up for full history")
+                        }
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.07), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open full history")
+                    .padding(.bottom, compact ? 4 : 6)
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
+                .padding(.horizontal, compact ? 14 : 22)
             }
         }
         .preferredColorScheme(.dark)
         .onAppear {
-            let token = pairing.getDeviceToken() ?? ""
-            audio.configure(token: token, orchestratorURL: pairing.orchestratorURL)
             startBreathing(speed: pulseSpeed)
-            if !didRunIntro {
-                didRunIntro = true
-            }
+            reveal = true
         }
         .onChange(of: audio.state) {
             breathe = false
@@ -115,15 +134,19 @@ struct VoiceOrbView: View {
                 startBreathing(speed: pulseSpeed)
             }
         }
-        .alert("Microphone Access Required", isPresented: $audio.micPermissionDenied) {
-            Button("Open Settings") {
-                if let url = URL(string: "app-settings:") {
-                    openURL(url)
+        .gesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.height < -70 {
+                        AetherHaptics.tap()
+                        showHistorySheet = true
+                    }
                 }
-            }
-            Button("Cancel", role: .cancel) { }
+        )
+        .alert("Microphone Access Required", isPresented: $audio.micPermissionDenied) {
+            Button("OK", role: .cancel) { }
         } message: {
-            Text("Aether needs microphone access to capture your voice.")
+            Text("Aether needs microphone access to capture your voice from the global button.")
         }
     }
 
@@ -150,137 +173,44 @@ struct VoiceOrbView: View {
         }
         .animation(.easeInOut(duration: pulseSpeed), value: breathe)
         .animation(.easeInOut(duration: 0.45), value: audio.state)
-        .offset(x: audio.state == .recording ? max(-60, min(0, dragOffsetX * 0.35)) : 0)
-        .scaleEffect(didRunIntro ? 1.0 : 0.72, anchor: .center)
-        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: didRunIntro)
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    guard !isPressingOrb else { return }
-                    isPressingOrb = true
-                    dragOffsetX = 0
-                    cancelArmed = false
-                    audio.beginRecording()
-                }
-                .onChanged { value in
-                    guard isPressingOrb else { return }
-                    dragOffsetX = value.translation.width
-                    cancelArmed = value.translation.width <= cancelThreshold
-                }
-                .onEnded { _ in
-                    guard isPressingOrb else { return }
-                    isPressingOrb = false
-                    let shouldCancel = cancelArmed
-                    dragOffsetX = 0
-                    cancelArmed = false
-                    if shouldCancel {
-                        audio.cancelRecording()
-                    } else {
-                        audio.endRecordingAndSend()
-                    }
-                }
-        )
-        .accessibilityLabel("Hold to record voice")
+        .scaleEffect(reveal ? 1.0 : 0.72, anchor: .center)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: reveal)
     }
 
-    private var statusSection: some View {
-        VStack(spacing: 10) {
+    private func statusSection(compact: Bool) -> some View {
+        VStack(spacing: 12) {
             Text(audio.statusText)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: compact ? 11 : 12, weight: .medium, design: .rounded))
                 .tracking(1.4)
                 .foregroundStyle(.white.opacity(0.58))
-                .padding(.top, 24)
+                .padding(.top, compact ? 6 : 12)
 
             if !audio.lastResponse.isEmpty {
-                Text(audio.lastResponse)
-                    .font(.system(size: 24, weight: .regular, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: 58, alignment: .topLeading)
-                    .padding(.horizontal, 14)
-                    .padding(.horizontal, 22)
-                    .padding(.top, 2)
-                    .transition(.opacity)
-            }
-
-            if audio.state == .recording {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(cancelArmed ? Color.red.opacity(0.9) : Color.white.opacity(0.8))
-                        .frame(width: 6, height: 6)
-                    Text(formatDuration(audio.recordingDuration))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.84))
-                    Text(cancelArmed ? "release to cancel" : "slide left to cancel")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(cancelArmed ? Color.red.opacity(0.9) : Color.white.opacity(0.6))
+                AetherGlassCard(cornerRadius: compact ? 22 : 26) {
+                    Text(audio.lastResponse)
+                        .font(.system(size: compact ? 22 : 26, weight: .regular, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(compact ? 5 : 6)
+                        .minimumScaleFactor(0.84)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minHeight: compact ? 52 : 68, alignment: .topLeading)
+                        .padding(.horizontal, compact ? 16 : 22)
+                        .padding(.vertical, compact ? 16 : 22)
+                        .transition(.opacity)
                 }
-                .padding(.top, 8)
-                .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.3), value: audio.lastResponse)
-        .animation(.easeInOut(duration: 0.2), value: cancelArmed)
-    }
-
-    private var bottomControls: some View {
-        VStack(spacing: 0) {
-            textInputRow
-                .padding(.bottom, 28)
-        }
-    }
-
-    private var textInputRow: some View {
-        HStack(spacing: 8) {
-            TextField("type a message...", text: $textInput)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.86))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.05))
-                .clipShape(.rect(cornerRadius: 20))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.11), lineWidth: 0.8)
-                )
-                .focused($isTextFieldFocused)
-                .onSubmit { sendTextMessage() }
-
-            if !textInput.isEmpty {
-                Button(action: { sendTextMessage() }) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 25))
-                        .foregroundStyle(.white.opacity(0.62))
-                }
-                .buttonStyle(.plain)
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-            }
-        }
-        .padding(.horizontal, 20)
-        .animation(.easeInOut(duration: 0.2), value: textInput.isEmpty)
-    }
-
-    private func sendTextMessage() {
-        let text = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        textInput = ""
-        isTextFieldFocused = false
-        audio.sendText(text)
     }
 
     private func startBreathing(speed: Double) {
+        guard !reduceMotion else {
+            breathe = true
+            return
+        }
         withAnimation(.easeInOut(duration: speed).repeatForever(autoreverses: true)) {
             breathe = true
         }
-    }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let total = max(0, Int(duration.rounded(.down)))
-        let minutes = total / 60
-        let seconds = total % 60
-        return String(format: "%02d:%02d", minutes, seconds)
     }
 }
