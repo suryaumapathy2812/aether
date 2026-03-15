@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Edge runtime streams ReadableStream bodies properly.
+// Node.js runtime buffers the entire response before sending.
+export const runtime = "edge";
+
 /**
  * Proxy route: forwards /api/go/* to the orchestrator upstream.
  *
