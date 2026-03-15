@@ -21,7 +21,7 @@ export function createAetherTransport(opts: {
   sessionId?: string;
 }) {
   return new DefaultChatTransport({
-    api: "/v1/conversations/turn",
+    api: "/api/go/v1/conversations/turn",
     credentials: "include",
     headers: () => {
       const token = getSessionToken();
