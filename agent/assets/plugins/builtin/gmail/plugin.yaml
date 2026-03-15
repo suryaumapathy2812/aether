@@ -1,13 +1,14 @@
 name: gmail
 display_name: Gmail
-description: Monitor and respond to Gmail emails
-version: 0.3.0
+description: Monitor, search, and send Gmail emails
+version: 1.0.0
 
 auth:
   type: oauth2
   provider: google
-  token_refresh_interval: 3000
-  refresh_tool: refresh_gmail_token
+  token_url: https://oauth2.googleapis.com/token
+  auto_refresh: true
+  refresh_interval: 3000
   scopes:
     - https://www.googleapis.com/auth/gmail.readonly
     - https://www.googleapis.com/auth/gmail.send
@@ -26,21 +27,247 @@ webhook:
   handle_tool: handle_gmail_event
   renew_interval: 518400
 
+api:
+  base_url: https://gmail.googleapis.com/gmail/v1/users/me
+
 tools:
-  - class: ListUnreadTool
-  - class: ReadEmailTool
-  - class: SendEmailTool
-  - class: SendReplyTool
-  - class: CreateDraftTool
-  - class: ArchiveEmailTool
-  - class: SearchEmailTool
-  - class: ReplyAllTool
-  - class: GetThreadTool
-  - class: TrashEmailTool
-  - class: MarkReadTool
-  - class: MarkUnreadTool
-  - class: ListLabelsTool
-  - class: AddLabelTool
-  - class: RemoveLabelTool
-  - class: RefreshGmailTokenTool
-  - class: SetupGmailWatchTool
+  - name: list_unread
+    description: List unread Gmail messages.
+    status_text: Loading unread emails...
+    http:
+      method: GET
+      path: /messages
+      query:
+        q: "is:unread"
+    parameters:
+      - name: max_results
+        type: integer
+        required: false
+        default: 10
+        map_to: query.maxResults
+    response:
+      extract: messages
+
+  - name: read_gmail
+    description: Read a Gmail message by message id.
+    status_text: Reading email...
+    http:
+      method: GET
+      path: /messages/{{message_id}}
+      query:
+        format: full
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+
+  - name: search_email
+    description: Search Gmail messages by query.
+    status_text: Searching email...
+    http:
+      method: GET
+      path: /messages
+    parameters:
+      - name: query
+        type: string
+        required: true
+        map_to: query.q
+      - name: max_results
+        type: integer
+        required: false
+        default: 10
+        map_to: query.maxResults
+    response:
+      extract: messages
+
+  - name: get_thread
+    description: Get all messages in a Gmail thread.
+    status_text: Loading thread...
+    http:
+      method: GET
+      path: /threads/{{thread_id}}
+      query:
+        format: full
+    parameters:
+      - name: thread_id
+        type: string
+        required: true
+    response:
+      extract: messages
+
+  - name: send_email
+    description: Compose and send a new email.
+    status_text: Sending email...
+    http:
+      method: POST
+      path: /messages/send
+    parameters:
+      - name: to
+        type: string
+        required: true
+        description: Recipient email address
+      - name: subject
+        type: string
+        required: true
+      - name: body
+        type: string
+        required: true
+        description: Email body text
+      - name: cc
+        type: string
+        required: false
+      - name: bcc
+        type: string
+        required: false
+    transform: mime_message
+    response:
+      success_msg: Email sent.
+
+  - name: send_reply
+    description: Send a reply in an existing Gmail thread.
+    status_text: Sending reply...
+    http:
+      method: POST
+      path: /messages/send
+    parameters:
+      - name: thread_id
+        type: string
+        required: true
+      - name: to
+        type: string
+        required: true
+      - name: body
+        type: string
+        required: true
+      - name: subject
+        type: string
+        required: false
+    transform: mime_reply
+    response:
+      success_msg: Reply sent.
+
+  - name: create_draft
+    description: Create a Gmail draft.
+    status_text: Creating draft...
+    http:
+      method: POST
+      path: /drafts
+    parameters:
+      - name: to
+        type: string
+        required: true
+      - name: subject
+        type: string
+        required: true
+      - name: body
+        type: string
+        required: true
+      - name: cc
+        type: string
+        required: false
+      - name: bcc
+        type: string
+        required: false
+    transform: mime_draft
+    response:
+      success_msg: Draft created.
+
+  - name: archive_email
+    description: Archive a Gmail message (remove from inbox).
+    status_text: Archiving email...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/modify
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+    transform: label_modify
+    response:
+      success_msg: Email archived.
+
+  - name: trash_email
+    description: Move a Gmail message to trash.
+    status_text: Moving email to trash...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/trash
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+    response:
+      success_msg: Email moved to trash.
+
+  - name: mark_read
+    description: Mark a Gmail message as read.
+    status_text: Marking as read...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/modify
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+    transform: label_modify
+    response:
+      success_msg: Email marked as read.
+
+  - name: mark_unread
+    description: Mark a Gmail message as unread.
+    status_text: Marking as unread...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/modify
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+    transform: label_modify
+    response:
+      success_msg: Email marked as unread.
+
+  - name: list_labels
+    description: List all Gmail labels.
+    status_text: Fetching labels...
+    http:
+      method: GET
+      path: /labels
+    response:
+      extract: labels
+
+  - name: add_label
+    description: Add a label to a Gmail message.
+    status_text: Adding label...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/modify
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+      - name: label_id
+        type: string
+        required: true
+        description: Label ID to add
+    transform: label_modify
+    response:
+      success_msg: Label added.
+
+  - name: remove_label
+    description: Remove a label from a Gmail message.
+    status_text: Removing label...
+    http:
+      method: POST
+      path: /messages/{{message_id}}/modify
+    parameters:
+      - name: message_id
+        type: string
+        required: true
+      - name: label_id
+        type: string
+        required: true
+        description: Label ID to remove
+    transform: label_modify
+    response:
+      success_msg: Label removed.

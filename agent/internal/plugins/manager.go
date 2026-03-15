@@ -183,33 +183,10 @@ func (m *Manager) RequiredConfigKeys(name string) ([]string, error) {
 		return nil, ErrNotFound
 	}
 
-	rawFields, ok := p.Auth["config_fields"]
-	if !ok {
-		return []string{}, nil
-	}
-	fields, ok := rawFields.([]any)
-	if !ok {
-		return []string{}, nil
-	}
-	required := make([]string, 0, len(fields))
-	for _, f := range fields {
-		entry, ok := f.(map[string]any)
-		if !ok {
-			continue
-		}
-		key, _ := entry["key"].(string)
-		if strings.TrimSpace(key) == "" {
-			continue
-		}
-		isRequired := false
-		switch v := entry["required"].(type) {
-		case bool:
-			isRequired = v
-		case string:
-			isRequired = strings.EqualFold(strings.TrimSpace(v), "true")
-		}
-		if isRequired {
-			required = append(required, key)
+	required := make([]string, 0, len(p.Auth.ConfigFields))
+	for _, f := range p.Auth.ConfigFields {
+		if f.Required && strings.TrimSpace(f.Key) != "" {
+			required = append(required, f.Key)
 		}
 	}
 	return required, nil

@@ -1,10 +1,11 @@
 name: local-search
 display_name: Local Search
 description: Search nearby places, businesses, and services using Google Places API.
-version: 0.1.0
+version: 1.0.0
 
 auth:
   type: api_key
+  config_key: google_api_key
   config_fields:
     - key: google_api_key
       label: Google Places API Key
@@ -13,4 +14,21 @@ auth:
       description: API key for Google Places Text Search endpoint.
 
 tools:
-  - class: LocalSearchTool
+  - name: local_search
+    description: Search nearby places, businesses, restaurants, and services.
+    status_text: Searching nearby places...
+    class: LocalSearchTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query (e.g. "coffee shops near me", "pharmacy in downtown")
+        required: true
+      - name: location
+        type: string
+        description: Location to search around (e.g. "San Francisco" or "37.7749,-122.4194")
+        required: false
+      - name: radius
+        type: integer
+        description: Search radius in meters (default 5000)
+        required: false
+        default: 5000

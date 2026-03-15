@@ -853,19 +853,7 @@ func filterEnvBackedOAuthFields(fields []map[string]any, provider string) []map[
 }
 
 func oauthScopes(manifest plugins.PluginManifest) []string {
-	raw, ok := manifest.Auth["scopes"].([]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		s, _ := v.(string)
-		s = strings.TrimSpace(s)
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	return manifest.Auth.Scopes
 }
 
 func oauthRedirectURI(r *http.Request, pluginName string) string {
@@ -1022,7 +1010,7 @@ func (h *Handler) ensurePluginCronJobs(ctx context.Context, manifest plugins.Plu
 		return err
 	}
 
-	rotateInterval := int64FromAny(manifest.Auth["token_refresh_interval"])
+	rotateInterval := int64(manifest.Auth.RefreshInterval)
 	if rotateInterval > 0 {
 		runAt := time.Now().UTC().Add(time.Duration(rotateInterval) * time.Second)
 		if next := strings.TrimSpace(cfg["next_refresh_at"]); next != "" {
@@ -1100,21 +1088,9 @@ func cloneConfig(src map[string]string) map[string]string {
 
 func secretConfigKeys(manifest plugins.PluginManifest) map[string]bool {
 	keys := map[string]bool{}
-	if raw, ok := manifest.Auth["config_fields"].([]any); ok {
-		for _, entry := range raw {
-			m, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			key, _ := m["key"].(string)
-			key = strings.TrimSpace(key)
-			if key == "" {
-				continue
-			}
-			fieldType, _ := m["type"].(string)
-			if strings.EqualFold(strings.TrimSpace(fieldType), "password") {
-				keys[key] = true
-			}
+	for _, f := range manifest.Auth.ConfigFields {
+		if strings.EqualFold(strings.TrimSpace(f.Type), "password") && strings.TrimSpace(f.Key) != "" {
+			keys[f.Key] = true
 		}
 	}
 	for _, key := range []string{"access_token", "refresh_token", "oauth_refresh_token", "client_secret", "google_client_secret", "spotify_client_secret", "auth_token", "bot_token", "secret_token", "api_key", "wolfram_app_id", "exchangerate_api_key", "google_api_key", "google_places_api_key"} {
@@ -1190,38 +1166,21 @@ func firstNonEmpty(values ...string) string {
 }
 
 func pluginAuthDetails(manifest plugins.PluginManifest) (string, string, []map[string]any) {
-	authType, _ := manifest.Auth["type"].(string)
-	authProvider, _ := manifest.Auth["provider"].(string)
+	authType := manifest.Auth.Type
 	if strings.TrimSpace(authType) == "" {
 		authType = "none"
 	}
-	rawFields, _ := manifest.Auth["config_fields"].([]any)
-	fields := make([]map[string]any, 0, len(rawFields))
-	for _, raw := range rawFields {
-		entry, ok := raw.(map[string]any)
-		if !ok {
-			continue
+	authProvider := manifest.Auth.Provider
+	fields := make([]map[string]any, 0, len(manifest.Auth.ConfigFields))
+	for _, f := range manifest.Auth.ConfigFields {
+		field := map[string]any{
+			"key":      f.Key,
+			"label":    f.Label,
+			"type":     f.Type,
+			"required": f.Required,
 		}
-		field := map[string]any{}
-		if v, ok := entry["key"].(string); ok {
-			field["key"] = v
-		}
-		if v, ok := entry["label"].(string); ok {
-			field["label"] = v
-		}
-		if v, ok := entry["type"].(string); ok {
-			field["type"] = v
-		}
-		required := false
-		switch v := entry["required"].(type) {
-		case bool:
-			required = v
-		case string:
-			required = strings.EqualFold(strings.TrimSpace(v), "true")
-		}
-		field["required"] = required
-		if v, ok := entry["description"].(string); ok {
-			field["description"] = v
+		if f.Description != "" {
+			field["description"] = f.Description
 		}
 		fields = append(fields, field)
 	}

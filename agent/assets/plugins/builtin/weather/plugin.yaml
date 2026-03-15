@@ -1,11 +1,36 @@
 name: weather
 display_name: Weather
 description: Current weather and forecasts for any location
-version: 0.1.0
+version: 1.0.0
 
 auth:
   type: none
 
+api:
+  base_url: https://api.open-meteo.com/v1
+
 tools:
-  - class: CurrentWeatherTool
-  - class: ForecastTool
+  - name: current_weather
+    description: Get current weather for a location.
+    status_text: Checking weather...
+    class: CurrentWeatherTool
+    parameters:
+      - name: location
+        type: string
+        description: Location name (city, region, or country)
+        required: true
+
+  - name: weather_forecast
+    description: Get weather forecast for a location for up to 7 days.
+    status_text: Checking forecast...
+    class: ForecastTool
+    parameters:
+      - name: location
+        type: string
+        description: Location name
+        required: true
+      - name: days
+        type: integer
+        description: Forecast days (1-7)
+        required: false
+        default: 3

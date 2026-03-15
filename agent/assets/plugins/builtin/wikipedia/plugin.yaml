@@ -1,11 +1,31 @@
 name: wikipedia
 display_name: Wikipedia
-description: Search Wikipedia and read articles. Instant access to encyclopaedic knowledge on any topic — people, places, events, science, history, and more.
-version: 0.2.0
+description: Search Wikipedia and read articles. Instant access to encyclopaedic knowledge on any topic.
+version: 1.0.0
 
 auth:
   type: none
 
+api:
+  base_url: https://en.wikipedia.org/api/rest_v1
+
 tools:
-  - class: WikipediaSearchTool
-  - class: WikipediaGetArticleTool
+  - name: wikipedia_search
+    description: Search Wikipedia for a topic and get a summary.
+    status_text: Searching Wikipedia...
+    class: WikipediaSearchTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query or topic name
+        required: true
+
+  - name: wikipedia_get_article
+    description: Get a full Wikipedia article by title.
+    status_text: Loading article...
+    class: WikipediaGetArticleTool
+    parameters:
+      - name: title
+        type: string
+        description: Exact Wikipedia article title
+        required: true

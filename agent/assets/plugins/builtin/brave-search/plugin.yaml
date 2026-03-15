@@ -1,10 +1,12 @@
 name: brave-search
 display_name: Brave Search
 description: Real-time web search powered by Brave Search API. Search the live web, news, and context snippets.
-version: 0.1.0
+version: 1.0.0
 
 auth:
   type: api_key
+  config_key: api_key
+  header_name: X-Subscription-Token
   config_fields:
     - key: api_key
       label: Brave Search API Key
@@ -12,7 +14,61 @@ auth:
       required: true
       description: Your Brave Search API key from api-dashboard.search.brave.com
 
+api:
+  base_url: https://api.search.brave.com/res/v1
+
 tools:
-  - class: WebSearchTool
-  - class: NewsSearchTool
-  - class: LLMContextSearchTool
+  - name: brave_web_search
+    description: Search the live web via Brave Search. Requires API key.
+    status_text: Searching web (Brave)...
+    class: WebSearchTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query
+        required: true
+      - name: count
+        type: integer
+        description: Number of results
+        required: false
+        default: 10
+      - name: country
+        type: string
+        description: Country code (e.g. US, IN, GB)
+        required: false
+        default: IN
+
+  - name: news_search
+    description: Search news via Brave Search.
+    status_text: Searching news...
+    class: NewsSearchTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query
+        required: true
+      - name: count
+        type: integer
+        description: Number of results
+        required: false
+        default: 10
+      - name: country
+        type: string
+        description: Country code
+        required: false
+        default: IN
+
+  - name: llm_context_search
+    description: Search for LLM-optimized context snippets via Brave Search.
+    status_text: Searching context...
+    class: LLMContextSearchTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query
+        required: true
+      - name: count
+        type: integer
+        description: Number of results
+        required: false
+        default: 5

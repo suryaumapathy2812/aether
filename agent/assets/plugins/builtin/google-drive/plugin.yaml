@@ -1,41 +1,124 @@
 name: google-drive
 display_name: Google Drive
-description: Search, browse, read, and create files in Google Drive
-version: 0.3.0
+description: Search, read, create, and manage files in Google Drive
+version: 1.0.0
 
 auth:
   type: oauth2
   provider: google
-  token_refresh_interval: 3000
-  refresh_tool: refresh_google_drive_token
+  token_url: https://oauth2.googleapis.com/token
+  auto_refresh: true
+  refresh_interval: 3000
   scopes:
     - https://www.googleapis.com/auth/drive
-    - https://www.googleapis.com/auth/documents
-    - https://www.googleapis.com/auth/spreadsheets
-    - https://www.googleapis.com/auth/presentations
   config_fields:
     - key: account_email
       label: Google Account
       type: text
       required: false
 
+api:
+  base_url: https://www.googleapis.com/drive/v3
+
 tools:
-  - class: SearchDriveTool
-  - class: ListDriveFilesTool
-  - class: GetFileInfoTool
-  - class: ReadFileContentTool
-  - class: ListSharedDrivesTool
-  - class: CreateDocumentTool
-  - class: CreateSpreadsheetTool
-  - class: CreatePresentationTool
-  - class: ShareFileTool
-  - class: ListPermissionsTool
-  - class: UpdatePermissionTool
-  - class: RemoveSharingTool
-  - class: MakePublicTool
-  - class: MoveFileTool
-  - class: RenameFileTool
-  - class: CopyFileTool
-  - class: CreateFolderTool
-  - class: UpdateDocumentTool
-  - class: RefreshGoogleDriveTokenTool
+  - name: search_drive
+    description: Search files in Google Drive.
+    status_text: Searching Drive...
+    http:
+      method: GET
+      path: /files
+      query:
+        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,size,parents,webViewLink,owners)"
+        orderBy: modifiedTime desc
+        supportsAllDrives: "true"
+        includeItemsFromAllDrives: "true"
+    parameters:
+      - name: query
+        type: string
+        required: true
+        description: Search query text
+        map_to: query.q
+      - name: max_results
+        type: integer
+        required: false
+        default: 10
+        map_to: query.pageSize
+    response:
+      extract: files
+
+  - name: list_drive_files
+    description: List files in a Google Drive folder.
+    status_text: Listing files...
+    http:
+      method: GET
+      path: /files
+      query:
+        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,size,parents,webViewLink,owners)"
+        supportsAllDrives: "true"
+        includeItemsFromAllDrives: "true"
+    parameters:
+      - name: folder_id
+        type: string
+        required: false
+        default: root
+        description: Folder ID (default is root)
+      - name: max_results
+        type: integer
+        required: false
+        default: 20
+        map_to: query.pageSize
+      - name: page_token
+        type: string
+        required: false
+        map_to: query.pageToken
+    response:
+      extract: files
+
+  - name: get_file_info
+    description: Get metadata for a Google Drive file.
+    status_text: Loading file info...
+    http:
+      method: GET
+      path: /files/{{file_id}}
+      query:
+        fields: "id,name,mimeType,modifiedTime,size,parents,webViewLink,owners,description,shared,trashed"
+        supportsAllDrives: "true"
+    parameters:
+      - name: file_id
+        type: string
+        required: true
+
+  - name: create_folder
+    description: Create a new folder in Google Drive.
+    status_text: Creating folder...
+    http:
+      method: POST
+      path: /files
+      query:
+        supportsAllDrives: "true"
+    parameters:
+      - name: name
+        type: string
+        required: true
+        map_to: body.name
+      - name: parent_id
+        type: string
+        required: false
+        default: root
+    response:
+      success_msg: Folder created.
+
+  - name: list_shared_drives
+    description: List shared drives accessible to the user.
+    status_text: Listing shared drives...
+    http:
+      method: GET
+      path: /drives
+    parameters:
+      - name: max_results
+        type: integer
+        required: false
+        default: 20
+        map_to: query.pageSize
+    response:
+      extract: drives

@@ -1,13 +1,14 @@
 name: google-calendar
 display_name: Google Calendar
-description: View and create calendar events
-version: 0.2.0
+description: View, search, and create calendar events
+version: 1.0.0
 
 auth:
   type: oauth2
   provider: google
-  token_refresh_interval: 3000
-  refresh_tool: refresh_google_calendar_token
+  token_url: https://oauth2.googleapis.com/token
+  auto_refresh: true
+  refresh_interval: 3000
   scopes:
     - https://www.googleapis.com/auth/calendar.readonly
     - https://www.googleapis.com/auth/calendar.events
@@ -24,10 +25,91 @@ webhook:
   handle_tool: handle_calendar_event
   renew_interval: 518400
 
+api:
+  base_url: https://www.googleapis.com/calendar/v3
+
 tools:
-  - class: UpcomingEventsTool
-  - class: SearchEventsTool
-  - class: CreateEventTool
-  - class: GetEventTool
-  - class: RefreshGoogleCalendarTokenTool
-  - class: SetupCalendarWatchTool
+  - name: upcoming_events
+    description: Get upcoming Google Calendar events.
+    status_text: Loading calendar events...
+    http:
+      method: GET
+      path: /calendars/primary/events
+      query:
+        singleEvents: "true"
+        orderBy: startTime
+    parameters:
+      - name: days
+        type: integer
+        required: false
+        default: 7
+        description: Number of days ahead to look
+      - name: max_results
+        type: integer
+        required: false
+        default: 10
+        map_to: query.maxResults
+    response:
+      extract: items
+
+  - name: search_events
+    description: Search Google Calendar events by keyword.
+    status_text: Searching calendar...
+    http:
+      method: GET
+      path: /calendars/primary/events
+      query:
+        singleEvents: "true"
+        orderBy: startTime
+    parameters:
+      - name: query
+        type: string
+        required: true
+        map_to: query.q
+      - name: max_results
+        type: integer
+        required: false
+        default: 10
+        map_to: query.maxResults
+    response:
+      extract: items
+
+  - name: get_event
+    description: Get a Google Calendar event by id.
+    status_text: Loading event...
+    http:
+      method: GET
+      path: /calendars/primary/events/{{event_id}}
+    parameters:
+      - name: event_id
+        type: string
+        required: true
+
+  - name: create_event
+    description: Create a Google Calendar event.
+    status_text: Creating event...
+    http:
+      method: POST
+      path: /calendars/primary/events
+    parameters:
+      - name: summary
+        type: string
+        required: true
+        description: Event title
+      - name: start_time
+        type: string
+        required: true
+        description: Start time in RFC3339 format
+      - name: end_time
+        type: string
+        required: true
+        description: End time in RFC3339 format
+      - name: description
+        type: string
+        required: false
+      - name: location
+        type: string
+        required: false
+    transform: calendar_event
+    response:
+      success_msg: Event created.

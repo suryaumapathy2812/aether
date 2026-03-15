@@ -1,31 +1,102 @@
 name: spotify
 display_name: Spotify
-description: Control playback and browse your music
-version: 0.1.0
+description: Control playback, search music, and view listening history
+version: 1.0.0
 
 auth:
   type: oauth2
   provider: spotify
-  token_refresh_interval: 3000
-  refresh_tool: refresh_spotify_token
+  token_url: https://accounts.spotify.com/api/token
+  use_basic_auth: true
+  auto_refresh: true
+  refresh_interval: 3000
   scopes:
     - user-read-playback-state
     - user-modify-playback-state
-    - user-read-currently-playing
     - user-read-recently-played
-    - playlist-read-private
-    - user-read-email
-  config_fields:
-    - key: account_email
-      label: Spotify Account
-      type: text
-      required: false
+  config_fields: []
+
+api:
+  base_url: https://api.spotify.com/v1
 
 tools:
-  - class: NowPlayingTool
-  - class: PlayPauseTool
-  - class: SkipTrackTool
-  - class: SearchSpotifyTool
-  - class: QueueTrackTool
-  - class: RecentTracksTool
-  - class: RefreshSpotifyTokenTool
+  - name: now_playing
+    description: Get the currently playing track on Spotify.
+    status_text: Checking now playing...
+    http:
+      method: GET
+      path: /me/player/currently-playing
+
+  - name: play_pause
+    description: Toggle play/pause on Spotify.
+    status_text: Toggling playback...
+    http:
+      method: PUT
+      path: /me/player/play
+    parameters:
+      - name: action
+        type: string
+        required: false
+        default: toggle
+        description: "play, pause, or toggle"
+
+  - name: skip_track
+    description: Skip to next track on Spotify.
+    status_text: Skipping track...
+    http:
+      method: POST
+      path: /me/player/next
+    response:
+      success_msg: Skipped to next track.
+
+  - name: search_spotify
+    description: Search for tracks, artists, or albums on Spotify.
+    status_text: Searching Spotify...
+    http:
+      method: GET
+      path: /search
+    parameters:
+      - name: query
+        type: string
+        required: true
+        map_to: query.q
+      - name: type
+        type: string
+        required: false
+        default: track
+        map_to: query.type
+      - name: limit
+        type: integer
+        required: false
+        default: 10
+        map_to: query.limit
+
+  - name: recent_tracks
+    description: Get recently played tracks on Spotify.
+    status_text: Loading recent tracks...
+    http:
+      method: GET
+      path: /me/player/recently-played
+    parameters:
+      - name: limit
+        type: integer
+        required: false
+        default: 10
+        map_to: query.limit
+    response:
+      extract: items
+
+  - name: queue_track
+    description: Add a track to the Spotify play queue.
+    status_text: Adding to queue...
+    http:
+      method: POST
+      path: /me/player/queue
+    parameters:
+      - name: uri
+        type: string
+        required: true
+        description: "Spotify track URI (e.g. spotify:track:...)"
+        map_to: query.uri
+    response:
+      success_msg: Track added to queue.

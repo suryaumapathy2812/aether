@@ -68,9 +68,6 @@ func TestRegisterAvailable(t *testing.T) {
 	if _, ok := r.Get("now_playing"); !ok {
 		t.Fatalf("expected spotify tool registered")
 	}
-	if _, ok := r.Get("telegram_send_message"); !ok {
-		t.Fatalf("expected telegram tool registered")
-	}
 }
 
 func openStore(t *testing.T) *db.Store {

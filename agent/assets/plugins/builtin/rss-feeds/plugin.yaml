@@ -1,15 +1,78 @@
 name: rss-feeds
 display_name: RSS Feeds & Hacker News
-description: Subscribe to and read any RSS/Atom feed. Includes dedicated Hacker News tools for top stories, new posts, and full-text search.
-version: 0.1.0
+description: Subscribe to and read any RSS/Atom feed. Includes Hacker News tools for top stories and search.
+version: 1.0.0
 
 auth:
   type: none
 
 tools:
-  - class: FetchFeedTool
-  - class: GetItemContentTool
-  - class: ListSubscribedFeedsTool
-  - class: AddFeedTool
-  - class: GetHackerNewsTopTool
-  - class: SearchHackerNewsTool
+  - name: fetch_feed
+    description: Fetch and parse an RSS or Atom feed URL.
+    status_text: Fetching feed...
+    class: FetchFeedTool
+    parameters:
+      - name: url
+        type: string
+        description: RSS or Atom feed URL
+        required: true
+      - name: max_items
+        type: integer
+        description: Maximum items to return
+        required: false
+        default: 10
+
+  - name: get_item_content
+    description: Get the full content of an RSS feed item by URL.
+    status_text: Loading article...
+    class: GetItemContentTool
+    parameters:
+      - name: url
+        type: string
+        description: Article URL from a feed item
+        required: true
+
+  - name: list_subscribed_feeds
+    description: List RSS feeds you have subscribed to.
+    status_text: Loading subscriptions...
+    class: ListSubscribedFeedsTool
+
+  - name: add_feed
+    description: Subscribe to an RSS feed for future monitoring.
+    status_text: Adding feed...
+    class: AddFeedTool
+    parameters:
+      - name: url
+        type: string
+        description: RSS or Atom feed URL
+        required: true
+      - name: name
+        type: string
+        description: Display name for the feed
+        required: false
+
+  - name: hacker_news_top
+    description: Get top stories from Hacker News.
+    status_text: Loading Hacker News...
+    class: GetHackerNewsTopTool
+    parameters:
+      - name: count
+        type: integer
+        description: Number of stories
+        required: false
+        default: 10
+
+  - name: search_hacker_news
+    description: Search Hacker News stories and comments.
+    status_text: Searching Hacker News...
+    class: SearchHackerNewsTool
+    parameters:
+      - name: query
+        type: string
+        description: Search query
+        required: true
+      - name: count
+        type: integer
+        description: Number of results
+        required: false
+        default: 10
