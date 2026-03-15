@@ -11,7 +11,9 @@ type EventType string
 const (
 	EventStart               EventType = "start"
 	EventStartStep           EventType = "start-step"
+	EventTextStart           EventType = "text-start"
 	EventTextDelta           EventType = "text-delta"
+	EventTextEnd             EventType = "text-end"
 	EventToolInputAvailable  EventType = "tool-input-available"
 	EventToolOutputAvailable EventType = "tool-output-available"
 	EventFinishStep          EventType = "finish-step"

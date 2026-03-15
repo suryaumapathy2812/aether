@@ -71,15 +71,21 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 			hadOutput := false
 			streamErr := error(nil)
 			finishReason := "stop"
+			textPartID := ""
 			for ev := range stream {
 				switch ev.Type {
 				case providers.EventToken:
-					if strings.TrimSpace(ev.Content) == "" {
+					if ev.Content == "" {
 						continue
 					}
 					hadOutput = true
+					if textPartID == "" {
+						textPartID = randomPartID()
+						seq++
+						out <- NewEvent(env.RequestID, env.JobID, EventTextStart, seq, map[string]any{"id": textPartID})
+					}
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": ev.Content})
+					out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": textPartID, "delta": ev.Content})
 				case providers.EventToolCalls:
 					hadOutput = true
 					for _, tc := range ev.ToolCalls {
@@ -95,6 +101,10 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 				case providers.EventDone:
 					finishReason = firstNonEmpty(ev.FinishReason, "stop")
 				}
+			}
+			if textPartID != "" {
+				seq++
+				out <- NewEvent(env.RequestID, env.JobID, EventTextEnd, seq, map[string]any{"id": textPartID})
 			}
 			if streamErr != nil && !hadOutput && attempt < defaultStreamRetryAttempts && isRetryableProviderError(streamErr) {
 				if !sleepWithContext(ctx, retryDelay(attempt)) {
@@ -154,6 +164,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			finishReason := "stop"
 			streamErr := error(nil)
 			hadOutput := false
+			textPartID := ""
 			attempt := 0
 			for {
 				attempt++
@@ -178,8 +189,13 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 						}
 						hadOutput = true
 						assistantText.WriteString(ev.Content)
+						if textPartID == "" {
+							textPartID = randomPartID()
+							seq++
+							out <- NewEvent(env.RequestID, env.JobID, EventTextStart, seq, map[string]any{"id": textPartID})
+						}
 						seq++
-						out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": ev.Content})
+						out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": textPartID, "delta": ev.Content})
 					case providers.EventToolCalls:
 						hadOutput = true
 						pendingToolCalls = append(pendingToolCalls, ev.ToolCalls...)
@@ -192,6 +208,11 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 							streamErr = fmt.Errorf("stream error")
 						}
 					}
+				}
+				if textPartID != "" {
+					seq++
+					out <- NewEvent(env.RequestID, env.JobID, EventTextEnd, seq, map[string]any{"id": textPartID})
+					textPartID = ""
 				}
 				if streamErr != nil && !hadOutput && attempt < defaultStreamRetryAttempts && isRetryableProviderError(streamErr) {
 					if !sleepWithContext(ctx, retryDelay(attempt)) {
@@ -286,8 +307,13 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 		}
 
 		// Max iterations reached.
+		maxTextID := randomPartID()
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": "I've done many tool steps and will stop here."})
+		out <- NewEvent(env.RequestID, env.JobID, EventTextStart, seq, map[string]any{"id": maxTextID})
+		seq++
+		out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": maxTextID, "delta": "I've done many tool steps and will stop here."})
+		seq++
+		out <- NewEvent(env.RequestID, env.JobID, EventTextEnd, seq, map[string]any{"id": maxTextID})
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
 	}()

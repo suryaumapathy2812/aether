@@ -45,6 +45,10 @@ func (r *Runtime) Run(ctx context.Context, env llm.LLMRequestEnvelope, opts RunO
 				out <- NewEvent(env.RequestID, seq, EventStart, ev.Payload)
 			case llm.EventStartStep:
 				out <- NewEvent(env.RequestID, seq, EventStartStep, ev.Payload)
+			case llm.EventTextStart:
+				out <- NewEvent(env.RequestID, seq, EventType("text-start"), ev.Payload)
+			case llm.EventTextEnd:
+				out <- NewEvent(env.RequestID, seq, EventType("text-end"), ev.Payload)
 			case llm.EventTextDelta:
 				delta, _ := ev.Payload["delta"].(string)
 				if strings.TrimSpace(delta) == "" {
