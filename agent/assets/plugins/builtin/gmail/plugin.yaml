@@ -32,7 +32,7 @@ api:
 
 tools:
   - name: list_unread
-    description: List unread Gmail messages.
+    description: List unread Gmail messages. Set max_results to control how many are returned.
     status_text: Loading unread emails...
     http:
       method: GET
@@ -43,7 +43,7 @@ tools:
       - name: max_results
         type: integer
         required: false
-        default: 10
+        description: Maximum number of messages to return (no default — set explicitly)
         map_to: query.maxResults
     response:
       extract: messages
@@ -62,7 +62,7 @@ tools:
         required: true
 
   - name: search_email
-    description: Search Gmail messages by query.
+    description: Search Gmail messages by query. Set max_results to control how many are returned.
     status_text: Searching email...
     http:
       method: GET
@@ -75,7 +75,7 @@ tools:
       - name: max_results
         type: integer
         required: false
-        default: 10
+        description: Maximum number of messages to return (no default — set explicitly)
         map_to: query.maxResults
     response:
       extract: messages
