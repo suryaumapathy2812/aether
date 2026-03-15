@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
-import { listAgentTasks, orchestratorWs, type AgentTask } from "@/lib/api";
+import { orchestratorWs } from "@/lib/api";
 
 // ── Types ──
 
@@ -28,7 +28,7 @@ interface NotificationContextValue {
   notifications: AgentNotification[];
   unreadCount: number;
   connected: boolean;
-  pendingApprovals: AgentTask[];
+  pendingApprovals: never[];
   loadingApprovals: boolean;
   markRead: (id: string) => void;
   markAllRead: () => void;
@@ -39,7 +39,7 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 
 const MAX_NOTIFICATIONS = 100;
 const PING_INTERVAL = 25_000;
-const APPROVALS_POLL_INTERVAL = 10_000;
+
 const NOTIFICATIONS_STORAGE_PREFIX = "aether.notifications";
 
 type NotificationToastOptions = {
@@ -74,8 +74,8 @@ export default function NotificationProvider({
 
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
   const [connected, setConnected] = useState(false);
-  const [pendingApprovals, setPendingApprovals] = useState<AgentTask[]>([]);
-  const [loadingApprovals, setLoadingApprovals] = useState(false);
+  const pendingApprovals: never[] = [];
+  const loadingApprovals = false;
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -310,32 +310,7 @@ export default function NotificationProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, token]);
 
-  // ── Approvals polling ──
 
-  useEffect(() => {
-    if (!userId) return;
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        setLoadingApprovals(true);
-        const data = await listAgentTasks(userId, "waiting_input", 10);
-        if (!cancelled) setPendingApprovals(data.tasks || []);
-      } catch {
-        if (!cancelled) setPendingApprovals([]);
-      } finally {
-        if (!cancelled) setLoadingApprovals(false);
-      }
-    }
-
-    void poll();
-    const timer = setInterval(() => void poll(), APPROVALS_POLL_INTERVAL);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [userId]);
 
   // ── Actions ──
 

@@ -291,7 +291,10 @@ func (h *Handler) loadConversationHistory(ctx context.Context, userID, sessionID
 	if h == nil || h.store == nil {
 		return []map[string]any{}
 	}
-	recs, err := h.store.ListChatMessages(ctx, userID, sessionID, 500)
+	// Load today's conversation only — history resets at midnight UTC.
+	now := time.Now().UTC()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	recs, err := h.store.ListChatMessagesSince(ctx, userID, sessionID, startOfDay, 500)
 	if err != nil || len(recs) == 0 {
 		return []map[string]any{}
 	}

@@ -51,7 +51,7 @@ export default function HomePage() {
       <MenuList
         items={[
           { label: "Chat", href: "/chat" },
-          { label: "Agent", href: "/agent" },
+          // { label: "Agent", href: "/agent" },
           // Notifications entry intentionally hidden; access via bell icon.
           { label: "Memory", href: "/memory" },
           { label: "Channels", href: "/channels" },
