@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,8 +135,9 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: webhook events will be routed to the new agent system when rebuilt.
-	// For now, just acknowledge receipt.
+	// Webhook events are acknowledged and logged. When the agent system
+	// is rebuilt, these will be routed to the LLM for processing.
+	log.Printf("webhook received: plugin=%s title=%s user=%s", pluginName, task.Title, userID)
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status": "acknowledged",
 		"plugin": pluginName,

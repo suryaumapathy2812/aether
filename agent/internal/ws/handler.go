@@ -33,15 +33,19 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
-	// Extract user identity from query param. In production this
-	// should validate the token against the session DB.
+	// The orchestrator proxy validates auth before forwarding to the agent.
+	// Here we just require a non-empty token as a guard against accidental
+	// direct connections bypassing the proxy.
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		http.Error(w, "missing token", http.StatusUnauthorized)
+		return
+	}
+
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 	if userID == "" {
 		userID = "default"
 	}
-
-	_ = token // TODO: validate session token against DB
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {

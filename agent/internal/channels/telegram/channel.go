@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels"
@@ -78,7 +79,9 @@ func (t *TelegramChannel) SendMessage(ctx context.Context, msg channels.Outbound
 	}
 
 	if msg.ReplyTo != "" {
-		opts = append(opts, ReplyToMessage(0)) // TODO: parse message ID
+		if msgID, err := strconv.ParseInt(strings.TrimSpace(msg.ReplyTo), 10, 64); err == nil && msgID > 0 {
+			opts = append(opts, ReplyToMessage(msgID))
+		}
 	}
 
 	return client.SendMessage(ctx, msg.ChannelID, msg.Text, opts...)

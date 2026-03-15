@@ -227,23 +227,14 @@ func (e *Engine) RunPlanningCycle(ctx context.Context, job cron.Job) error {
 		items = items[:5]
 	}
 
-	_ = "proactive-" + time.Now().Format("2006-01-02") // sessionID unused after agent runtime removal
-
 	for _, item := range items {
-		// Clamp priority 1-100
-		priority := item.Priority
-		if priority < 1 {
-			priority = 1
-		}
-		if priority > 100 {
-			priority = 100
-		}
-
-		// TODO: proactive items will be routed to the new agent system when rebuilt.
-		// For now, just record the event.
+		// Record proactive event for future processing.
+		// When the agent system is rebuilt, these events will be
+		// routed to the LLM for execution and notification delivery.
 		_, _ = e.store.RecordProactiveEvent(ctx, "default", "", "proactive", item.Title, "acknowledged", map[string]any{
-			"tags":   item.Tags,
-			"notify": item.Notify,
+			"tags":     item.Tags,
+			"notify":   item.Notify,
+			"priority": item.Priority,
 		})
 	}
 
