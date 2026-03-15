@@ -276,14 +276,14 @@ func main() {
 
 		// Run through the conversation runtime and collect the answer
 		var answerParts []string
-		for ev := range conversationRuntime.Run(runtimeCtx, env, conversation.RunOptions{AckFallback: "Working on that now."}) {
+		for ev := range conversationRuntime.Run(runtimeCtx, env, conversation.RunOptions{}) {
 			switch ev.EventType {
-			case conversation.EventAnswer:
-				if t, _ := ev.Payload["text"].(string); strings.TrimSpace(t) != "" {
+			case conversation.EventTextDelta:
+				if t, _ := ev.Payload["delta"].(string); strings.TrimSpace(t) != "" {
 					answerParts = append(answerParts, t)
 				}
 			case conversation.EventError:
-				errMsg, _ := ev.Payload["message"].(string)
+				errMsg, _ := ev.Payload["errorText"].(string)
 				log.Printf("channel LLM error: user=%s err=%s", userID, errMsg)
 			}
 		}

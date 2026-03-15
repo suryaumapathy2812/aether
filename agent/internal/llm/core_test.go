@@ -71,11 +71,11 @@ func TestGenerateWithToolsLoop(t *testing.T) {
 		switch ev.EventType {
 		case EventToolResult:
 			seenTool = true
-		case EventTextChunk:
-			if ev.Payload["text"] == "done" {
+		case EventTextDelta:
+			if ev.Payload["delta"] == "done" {
 				seenText = true
 			}
-		case EventStreamEnd:
+		case EventFinish:
 			seenEnd = true
 		}
 	}

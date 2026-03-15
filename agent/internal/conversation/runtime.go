@@ -3,7 +3,6 @@ package conversation
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
@@ -21,110 +20,51 @@ func NewRuntime(opts RuntimeOptions) *Runtime {
 	return &Runtime{core: opts.Core}
 }
 
-type RunOptions struct {
-	AckFallback string
-}
+type RunOptions struct{}
 
+// Run streams LLM events through as conversation events.
+// The LLM core handles start/step/text/tool/finish lifecycle;
+// the runtime maps them to conversation event types.
 func (r *Runtime) Run(ctx context.Context, env llm.LLMRequestEnvelope, opts RunOptions) <-chan Event {
 	out := make(chan Event, 256)
 	go func() {
 		defer close(out)
 		if r == nil || r.core == nil {
-			out <- NewEvent(env.RequestID, 1, EventError, map[string]any{"message": "conversation runtime unavailable"})
-			out <- NewEvent(env.RequestID, 2, EventDone, map[string]any{"finish_reason": "error"})
+			out <- NewEvent(env.RequestID, 1, EventError, map[string]any{"errorText": "conversation runtime unavailable"})
+			out <- NewEvent(env.RequestID, 2, EventFinish, map[string]any{"finishReason": "error"})
 			return
 		}
 
 		env = env.Normalize()
 		seq := 0
-		ackEmitted := false
-		answerParts := []string{}
-		finishReason := "stop"
-		toolArgs := map[string]map[string]any{}
-
-		fallback := strings.TrimSpace(opts.AckFallback)
-		if fallback == "" {
-			fallback = "Working on that now."
-		}
-
-		emitAck := func(text string) {
-			text = strings.TrimSpace(text)
-			if text == "" || ackEmitted {
-				return
-			}
-			ackEmitted = true
-			seq++
-			out <- NewEvent(env.RequestID, seq, EventAck, map[string]any{"text": text})
-		}
-
-		emitAnswer := func(text string) {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				return
-			}
-			seq++
-			out <- NewEvent(env.RequestID, seq, EventAnswer, map[string]any{"text": text})
-		}
-
-		emitAck(fallback)
 
 		for ev := range r.core.GenerateWithTools(ctx, env) {
+			seq++
 			switch ev.EventType {
-			case llm.EventTextChunk:
-				chunk, _ := ev.Payload["text"].(string)
-				if strings.TrimSpace(chunk) == "" {
+			case llm.EventStart:
+				out <- NewEvent(env.RequestID, seq, EventStart, ev.Payload)
+			case llm.EventStartStep:
+				out <- NewEvent(env.RequestID, seq, EventStartStep, ev.Payload)
+			case llm.EventTextDelta:
+				delta, _ := ev.Payload["delta"].(string)
+				if strings.TrimSpace(delta) == "" {
 					continue
 				}
-				answerParts = append(answerParts, chunk)
+				out <- NewEvent(env.RequestID, seq, EventTextDelta, map[string]any{"delta": delta})
 			case llm.EventToolCall:
-				name, _ := ev.Payload["tool_name"].(string)
-				callID, _ := ev.Payload["call_id"].(string)
-				args, _ := ev.Payload["arguments"].(map[string]any)
-				if strings.TrimSpace(callID) != "" {
-					toolArgs[callID] = args
-				}
-				seq++
-				out <- NewEvent(env.RequestID, seq, EventToolCall, map[string]any{"tool_name": name, "call_id": callID, "arguments": args})
+				out <- NewEvent(env.RequestID, seq, EventToolCall, ev.Payload)
 			case llm.EventToolResult:
-				name, _ := ev.Payload["tool_name"].(string)
-				errFlag, _ := ev.Payload["error"].(bool)
-				output, _ := ev.Payload["output"].(string)
-				callID, _ := ev.Payload["call_id"].(string)
-				seq++
-				out <- NewEvent(env.RequestID, seq, EventToolResult, map[string]any{"tool_name": name, "call_id": callID, "output": output, "error": errFlag, "arguments": toolArgs[callID]})
-			case llm.EventStatus:
-				seq++
-				out <- NewEvent(env.RequestID, seq, EventStatus, ev.Payload)
+				out <- NewEvent(env.RequestID, seq, EventToolResult, ev.Payload)
+			case llm.EventFinishStep:
+				out <- NewEvent(env.RequestID, seq, EventFinishStep, ev.Payload)
+			case llm.EventFinish:
+				out <- NewEvent(env.RequestID, seq, EventFinish, ev.Payload)
 			case llm.EventError:
-				msg, _ := ev.Payload["message"].(string)
-				if msg == "" {
-					msg = "unknown error"
-				}
-				seq++
-				out <- NewEvent(env.RequestID, seq, EventError, map[string]any{"message": msg})
-			case llm.EventStreamEnd:
-				if fr, ok := ev.Payload["finish_reason"].(string); ok && strings.TrimSpace(fr) != "" {
-					finishReason = fr
-				}
+				out <- NewEvent(env.RequestID, seq, EventError, ev.Payload)
 			}
 		}
-
-		if len(answerParts) > 0 {
-			emitAnswer(strings.Join(answerParts, ""))
-		}
-
-		seq++
-		out <- NewEvent(env.RequestID, seq, EventDone, map[string]any{"finish_reason": finishReason, "ts": time.Now().UTC().Format(time.RFC3339)})
 	}()
 	return out
-}
-
-func BuildAckFallback(messages []map[string]any) string {
-	text := strings.TrimSpace(llm.LatestUserMessageText(messages))
-	if text == "" {
-		return "Working on that now."
-	}
-	return "Working on that: " + text
 }
 
 func ProviderToolCalls(events []providers.LLMStreamEvent) bool {

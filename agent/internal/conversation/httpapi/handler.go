@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -108,10 +107,6 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	env := h.builder.Build(messages, policy, userID, sessionID)
-	ack := conversation.BuildAckFallback(req.Messages)
-
-	completionID := "convturn-" + uuid.NewString()[:12]
-	created := time.Now().Unix()
 
 	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
 	r = r.WithContext(rCtx)
@@ -127,129 +122,75 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeSSE(w, map[string]any{
-		"id":      completionID,
-		"object":  "conversation.turn",
-		"created": created,
-		"phase":   "start",
-	})
-	flusher.Flush()
-
-	ackText := ""
 	answerParts := []string{}
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
 	assistantFlushedForToolBatch := false
-	for ev := range h.runtime.Run(r.Context(), env, conversation.RunOptions{AckFallback: ack}) {
+
+	for ev := range h.runtime.Run(r.Context(), env, conversation.RunOptions{}) {
+		// Write every event as a typed SSE chunk.
+		chunk := map[string]any{"type": string(ev.EventType)}
+		for k, v := range ev.Payload {
+			chunk[k] = v
+		}
+		writeSSE(w, chunk)
+		flusher.Flush()
+
+		// Side effects: persist to DB and collect answer text.
 		switch ev.EventType {
-		case conversation.EventAck:
-			ackText, _ = ev.Payload["text"].(string)
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "conversation.turn",
-				"created": created,
-				"phase":   "ack",
-				"event":   ev.EventType,
-				"text":    ackText,
+		case conversation.EventTextDelta:
+			delta, _ := ev.Payload["delta"].(string)
+			answerParts = append(answerParts, delta)
+
+		case conversation.EventToolCall:
+			name, _ := ev.Payload["toolName"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			input := ev.Payload["input"]
+			argsJSON, _ := json.Marshal(input)
+			pendingToolCalls = append(pendingToolCalls, map[string]any{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      name,
+					"arguments": string(argsJSON),
+				},
 			})
-			flusher.Flush()
-			time.Sleep(25 * time.Millisecond)
-		case conversation.EventAnswer:
-			text, _ := ev.Payload["text"].(string)
-			answerParts = append(answerParts, text)
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "conversation.turn",
-				"created": created,
-				"phase":   "answer",
-				"event":   ev.EventType,
-				"text":    text,
-			})
-			flusher.Flush()
-		case conversation.EventToolCall, conversation.EventToolResult, conversation.EventStatus:
-			if ev.EventType == conversation.EventToolCall {
-				name, _ := ev.Payload["tool_name"].(string)
-				callID, _ := ev.Payload["call_id"].(string)
-				args := ev.Payload["arguments"]
-				argsJSON, _ := json.Marshal(args)
-				pendingToolCalls = append(pendingToolCalls, map[string]any{
-					"id":   callID,
-					"type": "function",
-					"function": map[string]any{
-						"name":      name,
-						"arguments": string(argsJSON),
-					},
+			if strings.TrimSpace(callID) != "" {
+				pendingToolCallIDs[callID] = struct{}{}
+			}
+			assistantFlushedForToolBatch = false
+
+		case conversation.EventToolResult:
+			if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
+				_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
+					"role":       "assistant",
+					"tool_calls": pendingToolCalls,
 				})
-				if strings.TrimSpace(callID) != "" {
-					pendingToolCallIDs[callID] = struct{}{}
-				}
-				assistantFlushedForToolBatch = false
+				assistantFlushedForToolBatch = true
 			}
-			if ev.EventType == conversation.EventToolResult {
-				if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
+			if h.store != nil {
+				callID, _ := ev.Payload["toolCallId"].(string)
+				output, _ := ev.Payload["output"].(string)
+				isErr, _ := ev.Payload["error"].(bool)
+				if strings.TrimSpace(output) != "" {
+					content := output
+					if isErr {
+						content = "[tool_error] " + content
+					}
 					_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
-						"role":       "assistant",
-						"tool_calls": pendingToolCalls,
+						"role":         "tool",
+						"tool_call_id": callID,
+						"content":      content,
 					})
-					assistantFlushedForToolBatch = true
 				}
-				if h.store != nil {
-					callID, _ := ev.Payload["call_id"].(string)
-					output, _ := ev.Payload["output"].(string)
-					isErr, _ := ev.Payload["error"].(bool)
-					if strings.TrimSpace(output) != "" {
-						content := output
-						if isErr {
-							content = "[tool_error] " + content
-						}
-						_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
-							"role":         "tool",
-							"tool_call_id": callID,
-							"content":      content,
-						})
-					}
-					if strings.TrimSpace(callID) != "" {
-						delete(pendingToolCallIDs, callID)
-					}
-					if len(pendingToolCallIDs) == 0 {
-						pendingToolCalls = nil
-						assistantFlushedForToolBatch = false
-					}
+				if strings.TrimSpace(callID) != "" {
+					delete(pendingToolCallIDs, callID)
+				}
+				if len(pendingToolCallIDs) == 0 {
+					pendingToolCalls = nil
+					assistantFlushedForToolBatch = false
 				}
 			}
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "conversation.turn",
-				"created": created,
-				"phase":   "act",
-				"event":   ev.EventType,
-				"payload": ev.Payload,
-			})
-			flusher.Flush()
-		case conversation.EventError:
-			msg, _ := ev.Payload["message"].(string)
-			if msg == "" {
-				msg = "unknown error"
-			}
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "conversation.turn",
-				"created": created,
-				"phase":   "error",
-				"event":   ev.EventType,
-				"error":   msg,
-			})
-			flusher.Flush()
-		case conversation.EventDone:
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "conversation.turn",
-				"created": created,
-				"phase":   "done",
-				"event":   ev.EventType,
-				"payload": ev.Payload,
-			})
-			flusher.Flush()
 		}
 	}
 

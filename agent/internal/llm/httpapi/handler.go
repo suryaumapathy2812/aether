@@ -193,29 +193,29 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventStatus:
+		case llm.EventStartStep:
 			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
 				log.Printf("llm status: id=%s %s", completionID, msg)
 			}
 		case llm.EventToolCall:
-			name, _ := ev.Payload["tool_name"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
-			args, _ := ev.Payload["arguments"].(map[string]any)
+			name, _ := ev.Payload["toolName"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			args, _ := ev.Payload["input"].(map[string]any)
 			if strings.TrimSpace(callID) != "" {
 				toolArgs[callID] = args
 			}
 			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
 		case llm.EventToolResult:
-			name, _ := ev.Payload["tool_name"].(string)
+			name, _ := ev.Payload["toolName"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			output, _ := ev.Payload["output"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
 			if h.memory != nil {
 				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
 			}
 			log.Printf("llm tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			if strings.TrimSpace(chunk) == "" {
 				continue
 			}
@@ -241,8 +241,8 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": "\n[error] " + msg}, "finish_reason": nil}},
 			})
 			flusher.Flush()
-		case llm.EventStreamEnd:
-			fr, _ := ev.Payload["finish_reason"].(string)
+		case llm.EventFinish:
+			fr, _ := ev.Payload["finishReason"].(string)
 			if fr != "" {
 				finish = fr
 			}
@@ -277,32 +277,32 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventStatus:
+		case llm.EventStartStep:
 			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
 				log.Printf("llm status: id=%s %s", completionID, msg)
 			}
 		case llm.EventToolCall:
-			name, _ := ev.Payload["tool_name"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
-			args, _ := ev.Payload["arguments"].(map[string]any)
+			name, _ := ev.Payload["toolName"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			args, _ := ev.Payload["input"].(map[string]any)
 			if strings.TrimSpace(callID) != "" {
 				toolArgs[callID] = args
 			}
 			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
 		case llm.EventToolResult:
-			name, _ := ev.Payload["tool_name"].(string)
+			name, _ := ev.Payload["toolName"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			output, _ := ev.Payload["output"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
 			if h.memory != nil {
 				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
 			}
 			log.Printf("llm tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			parts = append(parts, chunk)
-		case llm.EventStreamEnd:
-			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
+		case llm.EventFinish:
+			if v, ok := ev.Payload["finishReason"].(string); ok && v != "" {
 				finish = v
 			}
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
@@ -415,14 +415,14 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventStatus:
+		case llm.EventStartStep:
 			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
 				log.Printf("responses status: id=%s %s", completionID, msg)
 			}
 		case llm.EventToolCall:
-			name, _ := ev.Payload["tool_name"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
-			args, _ := ev.Payload["arguments"].(map[string]any)
+			name, _ := ev.Payload["toolName"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			args, _ := ev.Payload["input"].(map[string]any)
 			argsJSON, _ := json.Marshal(args)
 			if strings.TrimSpace(callID) != "" {
 				toolArgs[callID] = args
@@ -440,8 +440,8 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 			})
 			flusher.Flush()
 		case llm.EventToolResult:
-			callID, _ := ev.Payload["call_id"].(string)
-			name, _ := ev.Payload["tool_name"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			name, _ := ev.Payload["toolName"].(string)
 			output, _ := ev.Payload["output"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			// Record tool action in memory
@@ -457,8 +457,8 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 				"output":  output,
 			})
 			flusher.Flush()
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			if strings.TrimSpace(chunk) == "" {
 				continue
 			}
@@ -478,8 +478,8 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 				"message": msg,
 			})
 			flusher.Flush()
-		case llm.EventStreamEnd:
-			fr, _ := ev.Payload["finish_reason"].(string)
+		case llm.EventFinish:
+			fr, _ := ev.Payload["finishReason"].(string)
 			if fr != "" {
 				finish = fr
 			}
@@ -530,14 +530,14 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventStatus:
+		case llm.EventStartStep:
 			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
 				log.Printf("responses status: id=%s %s", completionID, msg)
 			}
 		case llm.EventToolCall:
-			name, _ := ev.Payload["tool_name"].(string)
-			callID, _ := ev.Payload["call_id"].(string)
-			args, _ := ev.Payload["arguments"].(map[string]any)
+			name, _ := ev.Payload["toolName"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			args, _ := ev.Payload["input"].(map[string]any)
 			argsJSON, _ := json.Marshal(args)
 			if strings.TrimSpace(callID) != "" {
 				toolArgs[callID] = args
@@ -551,8 +551,8 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 			})
 			log.Printf("responses tool_call: id=%s tool=%s", completionID, name)
 		case llm.EventToolResult:
-			callID, _ := ev.Payload["call_id"].(string)
-			name, _ := ev.Payload["tool_name"].(string)
+			callID, _ := ev.Payload["toolCallId"].(string)
+			name, _ := ev.Payload["toolName"].(string)
 			output, _ := ev.Payload["output"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			// Record tool action in memory
@@ -568,11 +568,11 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 				"output":  output,
 			})
 			log.Printf("responses tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			parts = append(parts, chunk)
-		case llm.EventStreamEnd:
-			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
+		case llm.EventFinish:
+			if v, ok := ev.Payload["finishReason"].(string); ok && v != "" {
 				finish = v
 			}
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
@@ -688,8 +688,8 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			if strings.TrimSpace(chunk) == "" {
 				continue
 			}
@@ -701,8 +701,8 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 				"choices": []map[string]any{{"text": chunk, "index": 0}},
 			})
 			flusher.Flush()
-		case llm.EventStreamEnd:
-			fr, _ := ev.Payload["finish_reason"].(string)
+		case llm.EventFinish:
+			fr, _ := ev.Payload["finishReason"].(string)
 			if fr != "" {
 				finish = fr
 			}
@@ -741,11 +741,11 @@ func (h *Handler) syncCompletions(w http.ResponseWriter, r *http.Request, env ll
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
-		case llm.EventTextChunk:
-			chunk, _ := ev.Payload["text"].(string)
+		case llm.EventTextDelta:
+			chunk, _ := ev.Payload["delta"].(string)
 			parts = append(parts, chunk)
-		case llm.EventStreamEnd:
-			if v, ok := ev.Payload["finish_reason"].(string); ok && v != "" {
+		case llm.EventFinish:
+			if v, ok := ev.Payload["finishReason"].(string); ok && v != "" {
 				finish = v
 			}
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
@@ -1027,7 +1027,7 @@ func (h *Handler) resolveMediaRefs(ctx context.Context, userID string, messages 
 	return out, nil
 }
 
-// extractUsage extracts token usage from an EventStreamEnd payload.
+// extractUsage extracts token usage from an EventFinish or EventFinishStep payload.
 // Returns (prompt_tokens, completion_tokens, total_tokens).
 // Falls back to zeros if usage is not present.
 func extractUsage(payload map[string]any) (int, int, int) {

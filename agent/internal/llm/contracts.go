@@ -9,11 +9,13 @@ import (
 type EventType string
 
 const (
-	EventTextChunk  EventType = "text_chunk"
-	EventToolCall   EventType = "tool_call"
-	EventToolResult EventType = "tool_result"
-	EventStatus     EventType = "status"
-	EventStreamEnd  EventType = "stream_end"
+	EventStart      EventType = "start"
+	EventStartStep  EventType = "start-step"
+	EventTextDelta  EventType = "text-delta"
+	EventToolCall   EventType = "tool-call"
+	EventToolResult EventType = "tool-result"
+	EventFinishStep EventType = "finish-step"
+	EventFinish     EventType = "finish"
 	EventError      EventType = "error"
 )
 

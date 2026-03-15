@@ -5,13 +5,14 @@ import "fmt"
 type EventType string
 
 const (
-	EventAck        EventType = "ack"
-	EventAnswer     EventType = "answer"
-	EventToolCall   EventType = "tool_call"
-	EventToolResult EventType = "tool_result"
-	EventStatus     EventType = "status"
+	EventStart      EventType = "start"
+	EventStartStep  EventType = "start-step"
+	EventTextDelta  EventType = "text-delta"
+	EventToolCall   EventType = "tool-call"
+	EventToolResult EventType = "tool-result"
+	EventFinishStep EventType = "finish-step"
+	EventFinish     EventType = "finish"
 	EventError      EventType = "error"
-	EventDone       EventType = "done"
 )
 
 type Event struct {

@@ -47,7 +47,7 @@ func (t *echoTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	return tools.Success("tool:"+v, nil)
 }
 
-func TestConversationAckAndAnswer(t *testing.T) {
+func TestConversationTextFlow(t *testing.T) {
 	p := &scriptedProvider{steps: [][]providers.LLMStreamEvent{
 		{{Type: providers.EventToken, Content: "here you go"}, {Type: providers.EventDone, FinishReason: "stop"}},
 	}}
@@ -57,23 +57,29 @@ func TestConversationAckAndAnswer(t *testing.T) {
 	rt := NewRuntime(RuntimeOptions{Core: core})
 
 	env := llm.NewBasicEnvelope([]map[string]any{{"role": "user", "content": "hello"}}, r.OpenAISchemas()).Normalize()
-	ackSeen := false
-	answerSeen := false
-	for ev := range rt.Run(context.Background(), env, RunOptions{AckFallback: "Working..."}) {
+	startSeen := false
+	textSeen := false
+	finishSeen := false
+	for ev := range rt.Run(context.Background(), env, RunOptions{}) {
 		switch ev.EventType {
-		case EventAck:
-			ackSeen = true
-		case EventAnswer:
-			if ev.Payload["text"] == "here you go" {
-				answerSeen = true
+		case EventStart:
+			startSeen = true
+		case EventTextDelta:
+			if ev.Payload["delta"] == "here you go" {
+				textSeen = true
 			}
+		case EventFinish:
+			finishSeen = true
 		}
 	}
-	if !ackSeen {
-		t.Fatalf("expected ack event")
+	if !startSeen {
+		t.Fatalf("expected start event")
 	}
-	if !answerSeen {
-		t.Fatalf("expected answer event")
+	if !textSeen {
+		t.Fatalf("expected text-delta event")
+	}
+	if !finishSeen {
+		t.Fatalf("expected finish event")
 	}
 }
 
@@ -91,28 +97,28 @@ func TestConversationToolFlow(t *testing.T) {
 	rt := NewRuntime(RuntimeOptions{Core: core})
 
 	env := llm.NewBasicEnvelope([]map[string]any{{"role": "user", "content": "hello"}}, r.OpenAISchemas()).Normalize()
-	ackSeen := false
 	toolSeen := false
-	answerSeen := false
-	for ev := range rt.Run(context.Background(), env, RunOptions{AckFallback: "Checking"}) {
+	textSeen := false
+	stepsSeen := 0
+	for ev := range rt.Run(context.Background(), env, RunOptions{}) {
 		switch ev.EventType {
-		case EventAck:
-			ackSeen = true
 		case EventToolResult:
 			toolSeen = true
-		case EventAnswer:
-			if ev.Payload["text"] == "done" {
-				answerSeen = true
+		case EventTextDelta:
+			if ev.Payload["delta"] == "done" {
+				textSeen = true
 			}
+		case EventFinishStep:
+			stepsSeen++
 		}
 	}
-	if !ackSeen {
-		t.Fatalf("expected ack event")
-	}
 	if !toolSeen {
-		t.Fatalf("expected tool result event")
+		t.Fatalf("expected tool-result event")
 	}
-	if !answerSeen {
-		t.Fatalf("expected answer event")
+	if !textSeen {
+		t.Fatalf("expected text-delta event with 'done'")
+	}
+	if stepsSeen < 2 {
+		t.Fatalf("expected at least 2 finish-step events (tool step + final step), got %d", stepsSeen)
 	}
 }

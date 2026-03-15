@@ -207,8 +207,8 @@ func (e *Engine) RunPlanningCycle(ctx context.Context, job cron.Job) error {
 	runCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	for ev := range e.core.GenerateWithTools(runCtx, env) {
-		if ev.EventType == llm.EventTextChunk {
-			if t, ok := ev.Payload["text"].(string); ok {
+		if ev.EventType == llm.EventTextDelta {
+			if t, ok := ev.Payload["delta"].(string); ok {
 				parts = append(parts, t)
 			}
 		}
