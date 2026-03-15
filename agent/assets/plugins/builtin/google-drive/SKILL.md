@@ -245,6 +245,34 @@ Append or replace content in an existing Google Doc.
 
 ---
 
+## Pagination & Limits
+
+**Drive API default page size:** 100 files per request (max 1000).
+
+**For large folders or broad searches:**
+1. Set `max_results` based on the request
+2. The response includes a `nextPageToken` if more files exist
+3. Make parallel follow-up calls with `page_token` to fetch all pages
+4. For `list_drive_files`, always pass `page_token` from the previous response
+
+**File content limits:** `read_file_content` exports Google Docs as plain text. For very large documents (>1MB), the export may be truncated.
+
+---
+
+## Rate Limits
+
+| Quota | Limit |
+|---|---|
+| Queries per day per user | 1,000,000,000 (effectively unlimited) |
+| Queries per minute per user | 600 |
+| Queries per minute per project | 12,000 |
+| File uploads per day | 750 GB |
+| Concurrent requests | 25 per user |
+
+**In practice:** Safe to make 20+ parallel file info/content reads. For file creation, keep to reasonable batches.
+
+---
+
 ## Decision Rules
 
 **Finding files:**

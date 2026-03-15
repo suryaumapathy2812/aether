@@ -30,6 +30,29 @@ Get full details of a specific contact by their resource name.
 
 ---
 
+## Pagination & Limits
+
+**Contacts API default page size:** 10 results per search (max 30).
+
+**For broad searches (common names like "John"):**
+1. Set `page_size` higher (up to 30) to get more results in one call
+2. The response includes a `nextPageToken` if more contacts match
+3. If the user needs a comprehensive list, make follow-up calls with `pageToken`
+
+---
+
+## Rate Limits
+
+| Quota | Limit |
+|---|---|
+| Read requests per minute per user | 90 |
+| Read requests per day per user | 20,000 |
+| Concurrent requests | 10 per user |
+
+**In practice:** Contact search rate limits are tighter than other Google APIs. Avoid making more than 5-10 parallel requests. For a single lookup, one call is usually enough.
+
+---
+
 ## Decision Rules
 
 **Looking up contacts:**

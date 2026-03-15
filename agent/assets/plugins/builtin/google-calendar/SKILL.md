@@ -59,6 +59,30 @@ Get full details of a specific event by its ID.
 
 ---
 
+## Pagination & Limits
+
+**Calendar API default page size:** 250 events per request (max 2500).
+
+**For busy calendars or long date ranges:**
+1. Set `max_results` based on the request — for "what's today?" use 20, for "all events this month" use 100+
+2. The response includes a `nextPageToken` if more events exist
+3. Make parallel follow-up calls with `pageToken` to fetch all pages
+
+---
+
+## Rate Limits
+
+| Quota | Limit |
+|---|---|
+| Queries per day per user | 1,000,000 |
+| Queries per minute per user | 600 |
+| Event creation per day | 10,000 |
+| Concurrent requests | 25 per user |
+
+**In practice:** Rate limits are generous. Safe to make parallel calls for multiple calendars or date ranges.
+
+---
+
 ## Decision Rules
 
 **Checking the schedule:**

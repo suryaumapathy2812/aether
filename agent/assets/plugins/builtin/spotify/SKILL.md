@@ -73,6 +73,18 @@ Get the user's recently played tracks.
 
 ---
 
+## Rate Limits
+
+| Quota | Limit |
+|---|---|
+| Requests per 30 seconds | ~180 (rolling window) |
+| Requests per day | No hard daily limit |
+| Rate limit response | HTTP 429 with `Retry-After` header |
+
+**In practice:** Spotify is lenient. Playback control (play/pause/skip) has no practical limit. Search calls are safe to make in parallel (e.g., searching for track + artist simultaneously). If you get a 429, wait the number of seconds in the `Retry-After` header before retrying.
+
+---
+
 ## Decision Rules
 
 **Playing music:**

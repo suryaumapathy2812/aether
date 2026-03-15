@@ -73,6 +73,23 @@ Search for local places, businesses, and services near a location.
 
 ---
 
+## Rate Limits
+
+| Plan | Limit |
+|---|---|
+| Free tier | 2,000 queries/month (1 query/second) |
+| Basic | 20,000 queries/month |
+| Pro | 100,000+ queries/month |
+
+**In practice:** On the free tier, be conservative — avoid making parallel search calls. One search per user request is usually enough. On paid tiers, parallel calls (e.g., web search + news search simultaneously) are fine.
+
+**Pagination:** Brave Search supports `offset` parameter for pagination. To get more results than the default:
+1. First call: `count=20`
+2. If the user needs more: make a follow-up call with `offset=20`
+3. For comprehensive research, make 2-3 parallel calls with different offsets
+
+---
+
 ## Decision Rules
 
 **Which tool to use:**

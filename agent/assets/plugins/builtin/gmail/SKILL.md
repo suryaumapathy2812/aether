@@ -9,7 +9,8 @@ You have access to Gmail tools for reading, sending, drafting, and managing emai
 ### `list_unread`
 Fetch unread emails from the inbox. Returns subject, sender, date, snippet, message ID, and thread ID for each message.
 
-**Parameters:** None
+**Parameters:**
+- `max_results` (optional) — Number of messages to return. **No default — always set this explicitly based on what the user needs.**
 
 **Use when:** The user asks about new emails, wants to check their inbox, or you need message IDs before reading or replying.
 
@@ -83,7 +84,7 @@ Search Gmail using Gmail query syntax.
 
 **Parameters:**
 - `query` (required) — Gmail search query (e.g. `from:boss@company.com`, `subject:invoice`, `has:attachment`, `is:unread after:2024/01/01`)
-- `max_results` (optional, default 10) — Max emails to return
+- `max_results` (optional) — Max emails to return. **No default — set explicitly based on user intent.**
 
 **Returns:** Numbered list with subject, sender, date, and message ID for each result.
 
@@ -183,6 +184,38 @@ Remove a label from an email.
 - `label_name` (required) — The label name to remove
 
 **Use when:** The user wants to remove a category/tag from an email. **Always call `list_labels` first** to confirm the exact label name.
+
+---
+
+## Pagination & Limits
+
+**There is no hardcoded limit on `list_unread` or `search_email`.** Set `max_results` based on what the user actually needs:
+- "How many unread emails?" → omit `max_results` (API returns all, up to 500)
+- "Show me my unread emails" → set `max_results` to 20-30 for a reasonable list
+- "Check if I got an email from Priya" → set `max_results` to 50 for a broader search
+
+**Gmail API default page size:** 100 messages per request (max 500).
+
+**For large result sets (e.g. "show me all emails from last month"):**
+1. Make a first call with `max_results` appropriate to the request
+2. The response includes a `nextPageToken` — if present, more results exist
+3. Make parallel follow-up calls with `pageToken` to fetch remaining pages
+4. Combine results before presenting to the user
+
+**Message detail:** `list_unread` and `search_email` return only message IDs and thread IDs. To get subject/sender/body, you need `read_gmail` for each message. For bulk summaries, make parallel `read_gmail` calls for all returned message IDs.
+
+---
+
+## Rate Limits
+
+| Quota | Limit |
+|---|---|
+| Queries per day | 1,000,000,000 (effectively unlimited) |
+| Queries per minute per user | 250 |
+| Send rate per user | 100 messages/day (2,000 for Workspace) |
+| Concurrent requests | 25 per user |
+
+**In practice:** You can safely make 20-30 parallel `read_gmail` calls without hitting limits. For bulk operations (marking 50 emails as read), batch them in groups of 25.
 
 ---
 
