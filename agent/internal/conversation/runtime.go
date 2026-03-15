@@ -51,10 +51,12 @@ func (r *Runtime) Run(ctx context.Context, env llm.LLMRequestEnvelope, opts RunO
 					continue
 				}
 				out <- NewEvent(env.RequestID, seq, EventTextDelta, map[string]any{"delta": delta})
-			case llm.EventToolCall:
-				out <- NewEvent(env.RequestID, seq, EventToolCall, ev.Payload)
-			case llm.EventToolResult:
-				out <- NewEvent(env.RequestID, seq, EventToolResult, ev.Payload)
+			case llm.EventToolInputAvailable:
+				out <- NewEvent(env.RequestID, seq, EventToolInputAvailable, ev.Payload)
+			case llm.EventToolOutputAvailable:
+				out <- NewEvent(env.RequestID, seq, EventToolOutputAvailable, ev.Payload)
+			case llm.EventType("tool-output-error"):
+				out <- NewEvent(env.RequestID, seq, EventType("tool-output-error"), ev.Payload)
 			case llm.EventFinishStep:
 				out <- NewEvent(env.RequestID, seq, EventFinishStep, ev.Payload)
 			case llm.EventFinish:

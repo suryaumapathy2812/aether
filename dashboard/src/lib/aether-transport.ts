@@ -7,8 +7,8 @@ import { getSessionToken } from "./api";
  * Our backend emits AI SDK-compatible typed chunks (UIMessageChunk format):
  *   data: {"type":"start"}\n\n
  *   data: {"type":"text-delta","delta":"Got it..."}\n\n
- *   data: {"type":"tool-call","toolName":"search","toolCallId":"c1","input":{...}}\n\n
- *   data: {"type":"tool-result","toolCallId":"c1","output":"..."}\n\n
+ *   data: {"type":"tool-input-available","toolName":"search","toolCallId":"c1","input":{...}}\n\n
+ *   data: {"type":"tool-output-available","toolCallId":"c1","output":"..."}\n\n
  *   data: {"type":"finish","finishReason":"stop"}\n\n
  *   data: [DONE]\n\n
  *

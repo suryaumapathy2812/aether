@@ -69,7 +69,7 @@ func TestGenerateWithToolsLoop(t *testing.T) {
 	seenEnd := false
 	for _, ev := range events {
 		switch ev.EventType {
-		case EventToolResult:
+		case EventToolOutputAvailable:
 			seenTool = true
 		case EventTextDelta:
 			if ev.Payload["delta"] == "done" {

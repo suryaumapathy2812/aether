@@ -194,10 +194,10 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStartStep:
-			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
 				log.Printf("llm status: id=%s %s", completionID, msg)
 			}
-		case llm.EventToolCall:
+		case llm.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			args, _ := ev.Payload["input"].(map[string]any)
@@ -205,7 +205,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 				toolArgs[callID] = args
 			}
 			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
-		case llm.EventToolResult:
+		case llm.EventToolOutputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			output, _ := ev.Payload["output"].(string)
@@ -229,7 +229,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 			})
 			flusher.Flush()
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			if msg == "" {
 				msg = "unknown error"
 			}
@@ -278,10 +278,10 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStartStep:
-			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
 				log.Printf("llm status: id=%s %s", completionID, msg)
 			}
-		case llm.EventToolCall:
+		case llm.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			args, _ := ev.Payload["input"].(map[string]any)
@@ -289,7 +289,7 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 				toolArgs[callID] = args
 			}
 			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
-		case llm.EventToolResult:
+		case llm.EventToolOutputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			output, _ := ev.Payload["output"].(string)
@@ -308,7 +308,7 @@ func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.L
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 			log.Printf("llm stream_end: id=%s reason=%s", completionID, finish)
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			log.Printf("llm error: id=%s message=%s", completionID, msg)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error", "code": "internal_error"}})
 			return
@@ -416,10 +416,10 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStartStep:
-			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
 				log.Printf("responses status: id=%s %s", completionID, msg)
 			}
-		case llm.EventToolCall:
+		case llm.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			args, _ := ev.Payload["input"].(map[string]any)
@@ -439,7 +439,7 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 				"name": name,
 			})
 			flusher.Flush()
-		case llm.EventToolResult:
+		case llm.EventToolOutputAvailable:
 			callID, _ := ev.Payload["toolCallId"].(string)
 			name, _ := ev.Payload["toolName"].(string)
 			output, _ := ev.Payload["output"].(string)
@@ -469,7 +469,7 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 			})
 			flusher.Flush()
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			if msg == "" {
 				msg = "unknown error"
 			}
@@ -531,10 +531,10 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStartStep:
-			if msg, ok := ev.Payload["message"].(string); ok && msg != "" {
+			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
 				log.Printf("responses status: id=%s %s", completionID, msg)
 			}
-		case llm.EventToolCall:
+		case llm.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			args, _ := ev.Payload["input"].(map[string]any)
@@ -550,7 +550,7 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 				"arguments": string(argsJSON),
 			})
 			log.Printf("responses tool_call: id=%s tool=%s", completionID, name)
-		case llm.EventToolResult:
+		case llm.EventToolOutputAvailable:
 			callID, _ := ev.Payload["toolCallId"].(string)
 			name, _ := ev.Payload["toolName"].(string)
 			output, _ := ev.Payload["output"].(string)
@@ -578,7 +578,7 @@ func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 			log.Printf("responses stream_end: id=%s reason=%s", completionID, finish)
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			log.Printf("responses error: id=%s message=%s", completionID, msg)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
 			return
@@ -708,7 +708,7 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 			}
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			if msg == "" {
 				msg = "unknown error"
 			}
@@ -750,7 +750,7 @@ func (h *Handler) syncCompletions(w http.ResponseWriter, r *http.Request, env ll
 			}
 			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
 		case llm.EventError:
-			msg, _ := ev.Payload["message"].(string)
+			msg, _ := ev.Payload["errorText"].(string)
 			log.Printf("completions error: id=%s message=%s", completionID, msg)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
 			return

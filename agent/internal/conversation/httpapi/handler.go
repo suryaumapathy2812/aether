@@ -142,7 +142,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 			delta, _ := ev.Payload["delta"].(string)
 			answerParts = append(answerParts, delta)
 
-		case conversation.EventToolCall:
+		case conversation.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			input := ev.Payload["input"]
@@ -160,7 +160,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 			}
 			assistantFlushedForToolBatch = false
 
-		case conversation.EventToolResult:
+		case conversation.EventToolOutputAvailable, conversation.EventType("tool-output-error"):
 			if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
 				_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
 					"role":       "assistant",
@@ -171,12 +171,12 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 			if h.store != nil {
 				callID, _ := ev.Payload["toolCallId"].(string)
 				output, _ := ev.Payload["output"].(string)
-				isErr, _ := ev.Payload["error"].(bool)
-				if strings.TrimSpace(output) != "" {
-					content := output
-					if isErr {
-						content = "[tool_error] " + content
-					}
+				errorText, _ := ev.Payload["errorText"].(string)
+				content := output
+				if ev.EventType == conversation.EventType("tool-output-error") {
+					content = "[tool_error] " + errorText
+				}
+				if strings.TrimSpace(content) != "" {
 					_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
 						"role":         "tool",
 						"tool_call_id": callID,

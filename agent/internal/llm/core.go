@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,6 +15,13 @@ import (
 )
 
 const DefaultMaxToolIterations = 50
+
+func randomPartID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 const defaultStreamRetryAttempts = 3
 
 type Core struct {
@@ -55,14 +64,13 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 					continue
 				}
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "provider_error", "message": err.Error(), "recoverable": false})
+				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": err.Error()})
 				return
 			}
 
 			hadOutput := false
 			streamErr := error(nil)
 			finishReason := "stop"
-			var usage map[string]any
 			for ev := range stream {
 				switch ev.Type {
 				case providers.EventToken:
@@ -71,12 +79,12 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 					}
 					hadOutput = true
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"delta": ev.Content})
+					out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": ev.Content})
 				case providers.EventToolCalls:
 					hadOutput = true
 					for _, tc := range ev.ToolCalls {
 						seq++
-						out <- NewEvent(env.RequestID, env.JobID, EventToolCall, seq, map[string]any{"toolName": tc.Name, "input": tc.Arguments, "toolCallId": tc.ID})
+						out <- NewEvent(env.RequestID, env.JobID, EventToolInputAvailable, seq, map[string]any{"toolName": tc.Name, "input": tc.Arguments, "toolCallId": tc.ID})
 					}
 				case providers.EventError:
 					if ev.Err != nil {
@@ -86,13 +94,6 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 					}
 				case providers.EventDone:
 					finishReason = firstNonEmpty(ev.FinishReason, "stop")
-					if ev.Usage != nil {
-						usage = map[string]any{
-							"prompt_tokens":     ev.Usage.PromptTokens,
-							"completion_tokens": ev.Usage.CompletionTokens,
-							"total_tokens":      ev.Usage.TotalTokens,
-						}
-					}
 				}
 			}
 			if streamErr != nil && !hadOutput && attempt < defaultStreamRetryAttempts && isRetryableProviderError(streamErr) {
@@ -103,21 +104,13 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 			}
 			if streamErr != nil {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "stream_error", "message": streamErr.Error(), "recoverable": false})
+				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": streamErr.Error()})
 				return
 			}
 			seq++
-			stepPayload := map[string]any{"finishReason": finishReason}
-			if usage != nil {
-				stepPayload["usage"] = usage
-			}
-			out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, stepPayload)
+			out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 			seq++
-			finishPayload := map[string]any{"finishReason": finishReason}
-			if usage != nil {
-				finishPayload["usage"] = usage
-			}
-			out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, finishPayload)
+			out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": finishReason})
 			return
 		}
 	}()
@@ -132,7 +125,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 		seq := 0
 		if c.provider == nil {
 			seq++
-			out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "provider_missing", "message": "LLM provider is not configured"})
+			out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "LLM provider is not configured"})
 			return
 		}
 
@@ -144,10 +137,6 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			maxIter = DefaultMaxToolIterations
 		}
 		recentSignatures := []string{}
-
-		totalPromptTokens := 0
-		totalCompletionTokens := 0
-		totalTokens := 0
 
 		for iteration := 0; iteration < maxIter; iteration++ {
 			seq++
@@ -165,7 +154,6 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			finishReason := "stop"
 			streamErr := error(nil)
 			hadOutput := false
-			hasUsage := false
 			attempt := 0
 			for {
 				attempt++
@@ -178,7 +166,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 						continue
 					}
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "provider_error", "message": err.Error(), "recoverable": false})
+					out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": err.Error()})
 					return
 				}
 
@@ -191,18 +179,12 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 						hadOutput = true
 						assistantText.WriteString(ev.Content)
 						seq++
-						out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"delta": ev.Content})
+						out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": ev.Content})
 					case providers.EventToolCalls:
 						hadOutput = true
 						pendingToolCalls = append(pendingToolCalls, ev.ToolCalls...)
 					case providers.EventDone:
 						finishReason = firstNonEmpty(ev.FinishReason, "stop")
-						if ev.Usage != nil {
-							hasUsage = true
-							totalPromptTokens += ev.Usage.PromptTokens
-							totalCompletionTokens += ev.Usage.CompletionTokens
-							totalTokens += ev.Usage.TotalTokens
-						}
 					case providers.EventError:
 						if ev.Err != nil {
 							streamErr = ev.Err
@@ -222,32 +204,15 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			}
 			if streamErr != nil {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "stream_error", "message": streamErr.Error(), "recoverable": false})
+				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": streamErr.Error()})
 				return
 			}
 
 			if len(pendingToolCalls) == 0 {
-				// No tool calls — this step is done, session is complete.
 				seq++
-				stepPayload := map[string]any{"finishReason": finishReason}
-				if hasUsage || totalTokens > 0 {
-					stepPayload["usage"] = map[string]any{
-						"prompt_tokens":     totalPromptTokens,
-						"completion_tokens": totalCompletionTokens,
-						"total_tokens":      totalTokens,
-					}
-				}
-				out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, stepPayload)
+				out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 				seq++
-				finishPayload := map[string]any{"finishReason": finishReason}
-				if hasUsage || totalTokens > 0 {
-					finishPayload["usage"] = map[string]any{
-						"prompt_tokens":     totalPromptTokens,
-						"completion_tokens": totalCompletionTokens,
-						"total_tokens":      totalTokens,
-					}
-				}
-				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, finishPayload)
+				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": finishReason})
 				return
 			}
 
@@ -260,22 +225,22 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			}
 			if len(recentSignatures) == 3 && recentSignatures[0] == recentSignatures[1] && recentSignatures[1] == recentSignatures[2] {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "doom_loop", "message": "Detected repeated identical tool calls", "recoverable": false})
+				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "Detected repeated identical tool calls (doom loop)"})
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "doom_loop"})
+				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "error"})
 				return
 			}
 
 			if c.orchestrator == nil {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"code": "orchestrator_missing", "message": "Tool execution is not configured"})
+				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "Tool execution is not configured"})
 				return
 			}
 
 			// Emit tool calls.
 			for _, tc := range pendingToolCalls {
 				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventToolCall, seq, map[string]any{"toolName": tc.Name, "input": tc.Arguments, "toolCallId": tc.ID})
+				out <- NewEvent(env.RequestID, env.JobID, EventToolInputAvailable, seq, map[string]any{"toolName": tc.Name, "input": tc.Arguments, "toolCallId": tc.ID})
 			}
 
 			// Execute all tool calls concurrently.
@@ -300,12 +265,13 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				if len(toolText) > 12000 {
 					toolText = toolText[:12000] + "\n...truncated"
 				}
-				toolPayload := map[string]any{"toolName": tr.tc.Name, "output": toolText, "toolCallId": tr.tc.ID, "error": tr.result.Error}
-				if len(tr.result.Metadata) > 0 {
-					toolPayload["metadata"] = tr.result.Metadata
+				if tr.result.Error {
+					seq++
+					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "errorText": toolText})
+				} else {
+					seq++
+					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "output": toolText})
 				}
-				seq++
-				out <- NewEvent(env.RequestID, env.JobID, EventToolResult, seq, toolPayload)
 
 				env.Messages = append(env.Messages, map[string]any{
 					"role":         "tool",
@@ -316,22 +282,14 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 
 			// Emit finish-step for this iteration (tools were called, looping back).
 			seq++
-			stepPayload := map[string]any{"finishReason": "tool-calls"}
-			if hasUsage || totalTokens > 0 {
-				stepPayload["usage"] = map[string]any{
-					"prompt_tokens":     totalPromptTokens,
-					"completion_tokens": totalCompletionTokens,
-					"total_tokens":      totalTokens,
-				}
-			}
-			out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, stepPayload)
+			out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 		}
 
 		// Max iterations reached.
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"delta": "I've done many tool steps and will stop here."})
+		out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": randomPartID(), "delta": "I've done many tool steps and will stop here."})
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "max_iterations"})
+		out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
 	}()
 
 	return out

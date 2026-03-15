@@ -102,7 +102,7 @@ func TestConversationToolFlow(t *testing.T) {
 	stepsSeen := 0
 	for ev := range rt.Run(context.Background(), env, RunOptions{}) {
 		switch ev.EventType {
-		case EventToolResult:
+		case EventToolOutputAvailable:
 			toolSeen = true
 		case EventTextDelta:
 			if ev.Payload["delta"] == "done" {
