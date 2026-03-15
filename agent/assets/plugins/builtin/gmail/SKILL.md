@@ -189,20 +189,28 @@ Remove a label from an email.
 
 ## Pagination & Limits
 
-**There is no hardcoded limit on `list_unread` or `search_email`.** Set `max_results` based on what the user actually needs:
-- "How many unread emails?" → omit `max_results` (API returns all, up to 500)
-- "Show me my unread emails" → set `max_results` to 20-30 for a reasonable list
-- "Check if I got an email from Priya" → set `max_results` to 50 for a broader search
+**Response format for `list_unread` and `search_email`:**
+```json
+{
+  "messages": [{"id": "...", "threadId": "..."}, ...],
+  "resultSizeEstimate": 87,
+  "nextPageToken": "..." // only if more pages exist
+}
+```
+- `resultSizeEstimate` = total count (use this for "how many?")
+- `messages` = IDs on this page (use these with `read_gmail`)
+- `nextPageToken` = pass as `page_token` to get the next page
 
-**Gmail API default page size:** 100 messages per request (max 500).
+**Set `max_results` based on what the user needs:**
+- "How many unread?" → set `max_results=1` (you only need `resultSizeEstimate`)
+- "Show me my unread" → set `max_results=10` then `read_gmail` each
+- "Find email from Priya" → `search_email` with `max_results=5` then `read_gmail` each
 
-**For large result sets (e.g. "show me all emails from last month"):**
-1. Make a first call with `max_results` appropriate to the request
-2. The response includes a `nextPageToken` — if present, more results exist
-3. Make parallel follow-up calls with `pageToken` to fetch remaining pages
-4. Combine results before presenting to the user
-
-**Message detail:** `list_unread` and `search_email` return only message IDs and thread IDs. To get subject/sender/body, you need `read_gmail` for each message. For bulk summaries, make parallel `read_gmail` calls for all returned message IDs.
+**For large result sets:**
+1. First call with `max_results` appropriate to the request
+2. If `nextPageToken` exists → more pages available
+3. Make follow-up calls with `page_token` to fetch remaining pages
+4. Call `read_gmail` in parallel for all IDs before presenting to user
 
 ---
 
@@ -221,9 +229,17 @@ Remove a label from an email.
 
 ## Decision Rules
 
+**Critical: `list_unread` and `search_email` return ONLY message IDs — not email content.**
+- These tools return `{messages: [{id, threadId}, ...], resultSizeEstimate, nextPageToken}`
+- To get the actual email (subject, sender, body), you MUST call `read_gmail` for each message ID
+- For "how many unread?" → use `resultSizeEstimate` from the response
+- For "show me my unread" → call `list_unread`, then `read_gmail` in parallel for the returned IDs
+- For "what is my latest email?" → call `list_unread` with `max_results=1`, then `read_gmail` for that ID
+- NEVER present raw message IDs to the user. Always read and summarize.
+
 **Reading emails:**
-- Always call `list_unread` first to get message IDs before reading specific emails
-- Call `read_gmail` when you need the full body — the snippet from `list_unread` is often enough for summaries
+- Always call `list_unread` or `search_email` first to get message IDs, then `read_gmail` to get content
+- Make parallel `read_gmail` calls when reading multiple messages (up to 25 concurrent)
 - Reference the sender by name if available from the headers
 
 **Sending emails:**

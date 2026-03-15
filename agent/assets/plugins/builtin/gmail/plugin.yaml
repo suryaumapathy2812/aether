@@ -32,7 +32,7 @@ api:
 
 tools:
   - name: list_unread
-    description: List unread Gmail messages. Set max_results to control how many are returned.
+    description: "List unread Gmail messages. Returns message IDs, resultSizeEstimate (total count), and nextPageToken. To get email content (subject, sender, body), call read_gmail for each message ID."
     status_text: Loading unread emails...
     http:
       method: GET
@@ -43,10 +43,13 @@ tools:
       - name: max_results
         type: integer
         required: false
-        description: Maximum number of messages to return (no default — set explicitly)
+        description: Maximum number of message IDs to return per page
         map_to: query.maxResults
-    response:
-      extract: messages
+      - name: page_token
+        type: string
+        required: false
+        description: Token from a previous response's nextPageToken for pagination
+        map_to: query.pageToken
 
   - name: read_gmail
     description: Read a Gmail message by message id.
@@ -62,7 +65,7 @@ tools:
         required: true
 
   - name: search_email
-    description: Search Gmail messages by query. Set max_results to control how many are returned.
+    description: "Search Gmail messages by query. Returns message IDs, resultSizeEstimate, and nextPageToken. To get email content, call read_gmail for each message ID."
     status_text: Searching email...
     http:
       method: GET
@@ -75,10 +78,13 @@ tools:
       - name: max_results
         type: integer
         required: false
-        description: Maximum number of messages to return (no default — set explicitly)
+        description: Maximum number of message IDs to return per page
         map_to: query.maxResults
-    response:
-      extract: messages
+      - name: page_token
+        type: string
+        required: false
+        description: Token from a previous response's nextPageToken for pagination
+        map_to: query.pageToken
 
   - name: get_thread
     description: Get all messages in a Gmail thread.
