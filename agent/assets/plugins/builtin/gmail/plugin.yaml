@@ -31,8 +31,15 @@ api:
   base_url: https://gmail.googleapis.com/gmail/v1/users/me
 
 tools:
+  - name: inbox_count
+    description: "Get exact unread and total message counts for the inbox. Returns messagesTotal, messagesUnread, threadsTotal, threadsUnread. Use this for 'how many unread emails?' questions — it's fast and exact."
+    status_text: Checking inbox...
+    http:
+      method: GET
+      path: /labels/INBOX
+
   - name: list_unread
-    description: "List unread Gmail messages. Returns message IDs (not content). NOTE: resultSizeEstimate is an approximation, NOT exact. For exact counts, paginate through all pages using nextPageToken and count actual IDs. To get email content (subject, sender, body), call read_gmail for each message ID."
+    description: "List unread Gmail message IDs (not content). Use inbox_count for exact counts. To get email content (subject, sender, body), call read_gmail for each message ID."
     status_text: Loading unread emails...
     http:
       method: GET

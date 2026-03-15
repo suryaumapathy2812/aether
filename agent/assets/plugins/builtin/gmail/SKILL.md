@@ -201,23 +201,14 @@ Remove a label from an email.
 - `resultSizeEstimate` = **approximate** count (NOT exact — can be off by 30-50%)
 - `nextPageToken` = pass as `page_token` to get the next page
 
-**IMPORTANT: `resultSizeEstimate` is unreliable.** Gmail API explicitly says it's an estimate.
-For exact counts, paginate through all pages and count the actual message IDs.
-
-**How to get exact unread count:**
-1. Call `list_unread` with `max_results=500` (max per page)
-2. Count the `messages` array length
-3. If `nextPageToken` exists, call again with `page_token` and keep counting
-4. Repeat until no `nextPageToken` — sum all pages for exact count
-
 **Set `max_results` based on what the user needs:**
-- "How many unread?" → `max_results=500`, paginate for exact count
-- "Show me my unread" → `max_results=10` then `read_gmail` each
+- "How many unread?" → use `inbox_count` (NOT `list_unread`)
+- "Show me my unread" → `list_unread` with `max_results=10` then `read_gmail` each
 - "Find email from Priya" → `search_email` with `max_results=5` then `read_gmail` each
 
 **For large result sets:**
-1. First call with `max_results=500`
-2. If `nextPageToken` exists → make parallel follow-up calls with `page_token`
+1. First call with appropriate `max_results`
+2. If `nextPageToken` exists → make follow-up calls with `page_token`
 3. Call `read_gmail` in parallel for IDs before presenting to user
 
 ---
@@ -237,10 +228,14 @@ For exact counts, paginate through all pages and count the actual message IDs.
 
 ## Decision Rules
 
-**Critical: `list_unread` and `search_email` return ONLY message IDs — not email content.**
+**For "how many unread?" → use `inbox_count` (exact, one API call).**
+- Returns `{messagesUnread: 143, messagesTotal: 1234, threadsUnread: 89, threadsTotal: 567}`
+- This is the exact count, not an estimate.
+
+**`list_unread` and `search_email` return ONLY message IDs — not email content.**
 - These tools return `{messages: [{id, threadId}, ...], resultSizeEstimate, nextPageToken}`
+- `resultSizeEstimate` is an approximation — do NOT use it for exact counts
 - To get the actual email (subject, sender, body), you MUST call `read_gmail` for each message ID
-- For "how many unread?" → paginate with `max_results=500` + `page_token` to count exact IDs (do NOT trust `resultSizeEstimate` — it's an approximation)
 - For "show me my unread" → call `list_unread` with `max_results=10`, then `read_gmail` in parallel for the returned IDs
 - For "what is my latest email?" → call `list_unread` with `max_results=1`, then `read_gmail` for that ID
 - NEVER present raw message IDs to the user. Always read and summarize.
