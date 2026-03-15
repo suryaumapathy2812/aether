@@ -14,7 +14,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-const DefaultMaxToolIterations = 50
+const DefaultMaxToolIterations = 500
 
 func randomPartID() string {
 	b := make([]byte, 6)
@@ -306,14 +306,50 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 		}
 
-		// Max iterations reached.
-		maxTextID := randomPartID()
+		// Max iterations reached — inject a summarize-and-stop instruction
+		// as the last assistant message (like OpenCode's max-steps pattern).
+		env.Messages = append(env.Messages, map[string]any{
+			"role":    "assistant",
+			"content": "MAXIMUM STEPS REACHED. Tools are now disabled. I must provide a text-only summary of what was accomplished, what remains, and recommendations for next steps.",
+		})
+
+		// Run one final LLM call with no tools to generate the summary.
+		summaryOpts := providers.GenerateOptions{
+			Messages:    env.Messages,
+			Tools:       []map[string]any{}, // no tools available
+			Model:       policyString(env.Policy, "model"),
+			MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
+			Temperature: policyFloat(env.Policy, "temperature", 0.2),
+		}
+		summaryStream, summaryErr := c.provider.StreamWithTools(ctx, summaryOpts)
+		if summaryErr != nil {
+			seq++
+			out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "Max steps reached and summary generation failed: " + summaryErr.Error()})
+			seq++
+			out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
+			return
+		}
+		summaryTextID := randomPartID()
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventTextStart, seq, map[string]any{"id": maxTextID})
+		out <- NewEvent(env.RequestID, env.JobID, EventStartStep, seq, nil)
+		emittedTextStart := false
+		for ev := range summaryStream {
+			if ev.Type == providers.EventToken && ev.Content != "" {
+				if !emittedTextStart {
+					seq++
+					out <- NewEvent(env.RequestID, env.JobID, EventTextStart, seq, map[string]any{"id": summaryTextID})
+					emittedTextStart = true
+				}
+				seq++
+				out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": summaryTextID, "delta": ev.Content})
+			}
+		}
+		if emittedTextStart {
+			seq++
+			out <- NewEvent(env.RequestID, env.JobID, EventTextEnd, seq, map[string]any{"id": summaryTextID})
+		}
 		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventTextDelta, seq, map[string]any{"id": maxTextID, "delta": "I've done many tool steps and will stop here."})
-		seq++
-		out <- NewEvent(env.RequestID, env.JobID, EventTextEnd, seq, map[string]any{"id": maxTextID})
+		out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
 	}()
