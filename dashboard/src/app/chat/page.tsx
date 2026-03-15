@@ -45,39 +45,44 @@ import type { UIMessage } from "ai";
 export default function ChatPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const [input, setInput] = useState("");
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const historyLoadedRef = useRef(false);
-
-  const userId = session?.user?.id || "";
-
-  const transport = useMemo(
-    () =>
-      userId
-        ? createAetherTransport({ userId, sessionId: userId })
-        : null,
-    [userId]
-  );
-
-  const { messages, setMessages, sendMessage, status, error } = useChat({
-    transport: transport ?? undefined,
-    messages: initialMessages.length > 0 ? initialMessages : undefined,
-  });
 
   useEffect(() => {
     if (!isPending && !session) router.push("/");
   }, [isPending, router, session]);
 
+  if (isPending || !session) return null;
+
+  return <ChatView session={session} />;
+}
+
+function ChatView({ session }: { session: { user: { id: string; name?: string | null } } }) {
+  const router = useRouter();
+  const [input, setInput] = useState("");
+  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const historyLoadedRef = useRef(false);
+
+  const userId = session.user.id;
+
+  const transport = useMemo(
+    () => createAetherTransport({ userId, sessionId: userId }),
+    [userId]
+  );
+
+  const { messages, setMessages, sendMessage, status, error } = useChat({
+    transport,
+    messages: initialMessages.length > 0 ? initialMessages : undefined,
+  });
+
   // Load today's conversation history.
   useEffect(() => {
-    if (!session || historyLoadedRef.current) return;
+    if (historyLoadedRef.current) return;
     historyLoadedRef.current = true;
 
     async function loadTodayHistory(): Promise<void> {
       setLoadingHistory(true);
       try {
-        const uid = session!.user.id || "";
+        const uid = userId;
         if (!uid) return;
         const res = await getMemoryConversations(uid, 200);
         const startOfToday = new Date();
@@ -119,7 +124,7 @@ export default function ChatPage() {
     }
 
     void loadTodayHistory();
-  }, [session]);
+  }, [userId]);
 
   function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
@@ -127,8 +132,6 @@ export default function ChatPage() {
     sendMessage({ text });
     setInput("");
   }
-
-  if (isPending || !session) return null;
 
   const isStreaming = status === "streaming" || status === "submitted";
 
