@@ -15,8 +15,6 @@ import (
 	"time"
 
 	adminhttp "github.com/suryaumapathy2812/core-ai/agent/internal/admin/httpapi"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/agent"
-	agenthttp "github.com/suryaumapathy2812/core-ai/agent/internal/agent/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels"
 	channelshttp "github.com/suryaumapathy2812/core-ai/agent/internal/channels/httpapi"
@@ -25,6 +23,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/dataapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	llmhttp "github.com/suryaumapathy2812/core-ai/agent/internal/llm/httpapi"
@@ -188,10 +187,6 @@ func main() {
 		AssetsDir:    cfg.AssetsDir,
 	})
 
-	// ── Agent notifier ──────────────────────────────────────────────
-	wsTaskNotifier := ws.NewTaskNotifier(wsHub)
-	agentNotifier := agent.NewNotifier(cfg.TaskWebhookURL, wsTaskNotifier)
-
 	// ── Proactive engine ────────────────────────────────────────────
 	proactiveEngine := proactive.New(proactive.Options{
 		Store:               store,
@@ -211,7 +206,6 @@ func main() {
 	memory.RegisterDedupCronHandlers(scheduler, dedupEngine)
 
 	// ── HTTP handlers ───────────────────────────────────────────────
-	agentRuntime := agent.NewRuntime(agent.RuntimeOptions{Store: store, Core: llmCore, Builder: llmBuilder, AssetsDir: cfg.AssetsDir, Workers: 2, Notifier: agentNotifier, Memory: memoryService})
 	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
 	llmHandler := llmhttp.New(llmhttp.Options{
 		Core: llmCore, Builder: llmBuilder, Memory: memoryService, Media: mediaService,
@@ -220,8 +214,8 @@ func main() {
 	llmHandler.RegisterRoutes(mux)
 	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media})
 	convHandler.RegisterRoutes(mux)
-	agentHandler := agenthttp.New(store, mediaService)
-	agentHandler.RegisterRoutes(mux)
+	dataHandler := dataapi.New(store, mediaService)
+	dataHandler.RegisterRoutes(mux)
 
 	// WebSocket + Web Push endpoints
 	wsHandler := ws.NewHandler(wsHub)
@@ -370,9 +364,6 @@ func main() {
 	if err := scheduler.Start(ctx); err != nil {
 		log.Fatalf("failed to start scheduler: %v", err)
 	}
-	if err := agentRuntime.Start(ctx); err != nil {
-		log.Fatalf("failed to start agent runtime: %v", err)
-	}
 	log.Printf("server bootstrap started (assets=%s)", cfg.AssetsDir)
 
 	<-ctx.Done()
@@ -380,9 +371,6 @@ func main() {
 	defer shutdownCancel()
 	if err := scheduler.Stop(shutdownCtx); err != nil {
 		log.Printf("scheduler stop error: %v", err)
-	}
-	if err := agentRuntime.Stop(shutdownCtx); err != nil {
-		log.Printf("agent runtime stop error: %v", err)
 	}
 	if err := memoryService.Stop(shutdownCtx); err != nil {
 		log.Printf("memory service stop error: %v", err)

@@ -50,16 +50,6 @@ func RegisterManagement(reg *tools.Registry) error {
 		&CancelJobTool{},
 		&PauseJobTool{},
 		&ResumeJobTool{},
-		&DelegateTaskTool{},
-		&GetTaskStatusTool{},
-		&ListTasksTool{},
-		&CancelTaskTool{},
-		&GetTaskResultTool{},
-		&RequestHumanApprovalTool{},
-		&ResumeTaskTool{},
-		&ListPendingApprovalsTool{},
-		&ApproveTaskTool{},
-		&RejectTaskTool{},
 	}
 	for _, t := range mgmt {
 		if err := reg.Register(t, ""); err != nil {

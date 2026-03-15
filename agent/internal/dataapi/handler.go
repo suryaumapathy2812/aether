@@ -1,4 +1,4 @@
-package httpapi
+package dataapi
 
 import (
 	"context"
@@ -21,9 +21,6 @@ func New(store *db.Store, mediaSvc *media.Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/agent/tasks", h.handleTasks)
-	mux.HandleFunc("/v1/agent/tasks/", h.handleTaskByID)
-	mux.HandleFunc("/v1/agent/jobs", h.handleJobs)
 	mux.HandleFunc("/api/media/ensure-bucket", h.handleEnsureMediaBucket)
 	mux.HandleFunc("/api/memory/facts", h.handleMemoryFacts)
 	mux.HandleFunc("/api/memory/sessions", h.handleMemorySessions)
@@ -34,6 +31,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory/export", h.handleMemoryExport)
 	mux.HandleFunc("/api/memory/entities", h.handleEntities)
 	mux.HandleFunc("/api/memory/entities/", h.handleEntityByID)
+	mux.HandleFunc("/v1/agent/jobs", h.handleJobs)
 }
 
 func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +349,7 @@ func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "agent store unavailable")
+		writeError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -380,203 +378,6 @@ func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 		jobs = jobs[:limit]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "count": len(jobs)})
-}
-
-func (h *Handler) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "agent store unavailable")
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	q := r.URL.Query()
-	userID := strings.TrimSpace(q.Get("user_id"))
-	if userID == "" {
-		userID = "default"
-	}
-	limit := 50
-	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	status := strings.TrimSpace(q.Get("status"))
-	items, err := h.store.ListAgentTasksByUserWithStatus(r.Context(), userID, status, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": items, "count": len(items)})
-}
-
-func (h *Handler) handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "agent store unavailable")
-		return
-	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1/agent/tasks/")
-	path = strings.Trim(path, "/")
-	if path == "" {
-		writeError(w, http.StatusNotFound, "task id is required")
-		return
-	}
-	parts := strings.Split(path, "/")
-	id := parts[0]
-	action := ""
-	if len(parts) > 1 {
-		action = parts[1]
-	}
-
-	switch {
-	case action == "cancel" && r.Method == http.MethodPost:
-		if err := h.store.RequestCancelAgentTask(r.Context(), id); err != nil {
-			status := http.StatusInternalServerError
-			if err == db.ErrNotFound {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": "cancel_requested"})
-		return
-	case action == "resume" && r.Method == http.MethodPost:
-		var req struct {
-			UserID       string `json:"user_id"`
-			Message      string `json:"message"`
-			Decision     string `json:"decision"`
-			Reason       string `json:"reason"`
-			Instructions string `json:"instructions"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if strings.TrimSpace(req.UserID) == "" {
-			req.UserID = "default"
-		}
-		msg := strings.TrimSpace(req.Message)
-		if msg == "" {
-			decision := strings.TrimSpace(req.Decision)
-			if decision == "" {
-				decision = "approved"
-			}
-			msg = "Human decision: " + decision
-			if strings.TrimSpace(req.Reason) != "" {
-				msg += "\nReason: " + strings.TrimSpace(req.Reason)
-			}
-			if strings.TrimSpace(req.Instructions) != "" {
-				msg += "\nInstructions: " + strings.TrimSpace(req.Instructions)
-			}
-		}
-		task, err := h.store.ResumeAgentTask(r.Context(), id, req.UserID, msg)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if err == db.ErrNotFound {
-				status = http.StatusNotFound
-			} else if strings.Contains(strings.ToLower(err.Error()), "not waiting") {
-				status = http.StatusBadRequest
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": task.Status})
-		return
-	case action == "approve" && r.Method == http.MethodPost:
-		var req struct {
-			UserID       string `json:"user_id"`
-			Decision     string `json:"decision"`
-			Reason       string `json:"reason"`
-			Instructions string `json:"instructions"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if strings.TrimSpace(req.UserID) == "" {
-			req.UserID = "default"
-		}
-		decision := strings.TrimSpace(req.Decision)
-		if decision == "" {
-			decision = "approved"
-		}
-		msg := strings.TrimSpace(req.Instructions)
-		if msg == "" {
-			msg = strings.TrimSpace(req.Reason)
-		}
-		if msg == "" {
-			msg = "Approved. Continue with best effort."
-		}
-		task, err := h.store.ResumeAgentTask(r.Context(), id, req.UserID, msg)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if err == db.ErrNotFound {
-				status = http.StatusNotFound
-			} else if strings.Contains(strings.ToLower(err.Error()), "not waiting") {
-				status = http.StatusBadRequest
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		_ = h.store.AppendAgentTaskEvent(r.Context(), id, "decision", map[string]any{"decision": decision, "reason": req.Reason, "instructions": req.Instructions, "approved": true})
-		writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": task.Status, "decision": decision})
-		return
-	case action == "reject" && r.Method == http.MethodPost:
-		var req struct {
-			UserID     string `json:"user_id"`
-			Reason     string `json:"reason"`
-			NextAction string `json:"next_action"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if strings.TrimSpace(req.UserID) == "" {
-			req.UserID = "default"
-		}
-		reason := strings.TrimSpace(req.Reason)
-		if reason == "" {
-			reason = "Rejected"
-		}
-		nextAction := strings.TrimSpace(req.NextAction)
-		if nextAction == "" {
-			nextAction = "Stop and wait for new instructions."
-		}
-		msg := "Rejected by human. Reason: " + reason + ". Next action: " + nextAction
-		task, err := h.store.RejectAgentTask(r.Context(), id, req.UserID, msg)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if err == db.ErrNotFound {
-				status = http.StatusNotFound
-			} else if strings.Contains(strings.ToLower(err.Error()), "not waiting") {
-				status = http.StatusBadRequest
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": task.Status, "decision": "rejected"})
-		return
-	case action == "events" && r.Method == http.MethodGet:
-		limit := 200
-		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		events, err := h.store.ListAgentTaskEvents(r.Context(), id, limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "events": events, "count": len(events)})
-		return
-	case action == "" && r.Method == http.MethodGet:
-		task, err := h.store.GetAgentTask(r.Context(), id)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if err == db.ErrNotFound {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"task": task})
-		return
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "unsupported task endpoint")
-	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

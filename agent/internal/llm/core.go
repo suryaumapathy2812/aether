@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
@@ -34,7 +35,7 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 			Messages:    env.Messages,
 			Tools:       env.Tools,
 			Model:       policyString(env.Policy, "model"),
-			MaxTokens:   policyInt(env.Policy, "max_tokens", 1200),
+			MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
 			Temperature: policyFloat(env.Policy, "temperature", 0.2),
 		}
 		attempt := 0
@@ -137,7 +138,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				Messages:    env.Messages,
 				Tools:       env.Tools,
 				Model:       policyString(env.Policy, "model"),
-				MaxTokens:   policyInt(env.Policy, "max_tokens", 1200),
+				MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
 				Temperature: policyFloat(env.Policy, "temperature", 0.2),
 			}
 			assistantText := strings.Builder{}
@@ -249,44 +250,48 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				return
 			}
 
+			// Phase 1: Emit all tool call events so the UI shows what's about to happen.
 			for _, tc := range pendingToolCalls {
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventToolCall, seq, map[string]any{"tool_name": tc.Name, "arguments": tc.Arguments, "call_id": tc.ID})
-
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventStatus, seq, map[string]any{"message": "Using " + tc.Name + "...", "tool_name": tc.Name})
+			}
 
-				result := c.orchestrator.Execute(ctx, tc.Name, tc.Arguments, tc.ID)
-				toolText := result.Output
-				if len(toolText) > 4000 {
-					toolText = toolText[:4000] + "\n...truncated"
+			// Phase 2: Execute all tool calls concurrently.
+			type toolResult struct {
+				tc     providers.LLMToolCall
+				result tools.Result
+			}
+			results := make([]toolResult, len(pendingToolCalls))
+			var wg sync.WaitGroup
+			for i, tc := range pendingToolCalls {
+				wg.Add(1)
+				go func(idx int, call providers.LLMToolCall) {
+					defer wg.Done()
+					results[idx] = toolResult{tc: call, result: c.orchestrator.Execute(ctx, call.Name, call.Arguments, call.ID)}
+				}(i, tc)
+			}
+			wg.Wait()
+
+			// Phase 3: Emit results and append to messages (order preserved).
+			for _, tr := range results {
+				toolText := tr.result.Output
+				if len(toolText) > 12000 {
+					toolText = toolText[:12000] + "\n...truncated"
 				}
-				awaitHuman, _ := result.Metadata["await_human"].(bool)
-				toolPayload := map[string]any{"tool_name": tc.Name, "output": toolText, "call_id": tc.ID, "error": result.Error, "arguments": tc.Arguments}
-				if len(result.Metadata) > 0 {
-					toolPayload["metadata"] = result.Metadata
+				toolPayload := map[string]any{"tool_name": tr.tc.Name, "output": toolText, "call_id": tr.tc.ID, "error": tr.result.Error, "arguments": tr.tc.Arguments}
+				if len(tr.result.Metadata) > 0 {
+					toolPayload["metadata"] = tr.result.Metadata
 				}
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventToolResult, seq, toolPayload)
 
 				env.Messages = append(env.Messages, map[string]any{
 					"role":         "tool",
-					"tool_call_id": tc.ID,
-					"content":      result.Output,
+					"tool_call_id": tr.tc.ID,
+					"content":      tr.result.Output,
 				})
-				if awaitHuman {
-					seq++
-					awaitPayload := map[string]any{"finish_reason": "waiting_input"}
-					if totalTokens > 0 {
-						awaitPayload["usage"] = map[string]any{
-							"prompt_tokens":     totalPromptTokens,
-							"completion_tokens": totalCompletionTokens,
-							"total_tokens":      totalTokens,
-						}
-					}
-					out <- NewEvent(env.RequestID, env.JobID, EventStreamEnd, seq, awaitPayload)
-					return
-				}
 			}
 		}
 
@@ -427,7 +432,7 @@ func NewBasicEnvelope(messages []map[string]any, tools []map[string]any) LLMRequ
 		Tools:      tools,
 		ToolChoice: "auto",
 		Policy: map[string]any{
-			"max_tokens":  1200,
+			"max_tokens":  8192,
 			"temperature": 0.2,
 		},
 	}

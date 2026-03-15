@@ -3,9 +3,7 @@ package tools
 import "context"
 
 type TaskRuntimeContext struct {
-	TaskID    string
-	LockToken string
-	UserID    string
+	UserID string
 }
 
 type taskRuntimeContextKey struct{}

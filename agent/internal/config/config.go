@@ -29,12 +29,10 @@ type Config struct {
 	Channels ChannelsConfig
 
 	// Agent identity and security
-	StateKey       string
-	AdminToken     string
-	SystemPrompt   string
-	PromptFile     string
-	TaskWebhookURL string
-
+	StateKey     string
+	AdminToken   string
+	SystemPrompt string
+	PromptFile   string
 	// Self-update
 	UpdateRepo  string
 	UpdateToken string
@@ -183,14 +181,12 @@ func Load() Config {
 			AgentID:       envString("AETHER_AGENT_ID", ""),
 		},
 
-		StateKey:       envString("AGENT_STATE_KEY", ""),
-		AdminToken:     envString("AGENT_ADMIN_TOKEN", ""),
-		SystemPrompt:   envString("AGENT_SYSTEM_PROMPT", ""),
-		PromptFile:     envString("AGENT_PROMPT_FILE", ""),
-		TaskWebhookURL: envString("AGENT_TASK_WEBHOOK_URL", ""),
-
-		UpdateRepo:  envString("AGENT_UPDATE_REPO", ""),
-		UpdateToken: envString("AGENT_UPDATE_TOKEN", ""),
+		StateKey:     envString("AGENT_STATE_KEY", ""),
+		AdminToken:   envString("AGENT_ADMIN_TOKEN", ""),
+		SystemPrompt: envString("AGENT_SYSTEM_PROMPT", ""),
+		PromptFile:   envString("AGENT_PROMPT_FILE", ""),
+		UpdateRepo:   envString("AGENT_UPDATE_REPO", ""),
+		UpdateToken:  envString("AGENT_UPDATE_TOKEN", ""),
 
 		Media: MediaLimitsConfig{
 			MaxImageBytes:      envInt("AETHER_MAX_IMAGE_BYTES", 5*1024*1024),
