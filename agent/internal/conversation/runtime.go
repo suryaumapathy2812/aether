@@ -50,7 +50,7 @@ func (r *Runtime) Run(ctx context.Context, env llm.LLMRequestEnvelope, opts RunO
 				if strings.TrimSpace(delta) == "" {
 					continue
 				}
-				out <- NewEvent(env.RequestID, seq, EventTextDelta, map[string]any{"delta": delta})
+				out <- NewEvent(env.RequestID, seq, EventTextDelta, ev.Payload)
 			case llm.EventToolInputAvailable:
 				out <- NewEvent(env.RequestID, seq, EventToolInputAvailable, ev.Payload)
 			case llm.EventToolOutputAvailable:
