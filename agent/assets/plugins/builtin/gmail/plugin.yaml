@@ -32,7 +32,7 @@ api:
 
 tools:
   - name: list_unread
-    description: "List unread Gmail messages. IMPORTANT: The response contains resultSizeEstimate which is the TOTAL unread count — use this for counting, NOT the length of the messages array (which is capped per page). To get email content (subject, sender, body), call read_gmail for each message ID. Use nextPageToken with page_token for more pages."
+    description: "List unread Gmail messages. Returns message IDs (not content). NOTE: resultSizeEstimate is an approximation, NOT exact. For exact counts, paginate through all pages using nextPageToken and count actual IDs. To get email content (subject, sender, body), call read_gmail for each message ID."
     status_text: Loading unread emails...
     http:
       method: GET
@@ -65,7 +65,7 @@ tools:
         required: true
 
   - name: search_email
-    description: "Search Gmail messages by query. IMPORTANT: The response contains resultSizeEstimate which is the TOTAL match count — use this for counting, NOT the length of the messages array. To get email content, call read_gmail for each message ID. Use nextPageToken with page_token for more pages."
+    description: "Search Gmail messages by query. Returns message IDs (not content). NOTE: resultSizeEstimate is an approximation, NOT exact. For exact counts, paginate through all pages using nextPageToken. To get email content, call read_gmail for each message ID."
     status_text: Searching email...
     http:
       method: GET
