@@ -78,12 +78,17 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 
 		mapTo := strings.TrimSpace(paramDef.MapTo)
 		if mapTo == "" {
-			// Default: body for POST/PUT/PATCH, query for GET/DELETE.
-			method := strings.ToUpper(t.toolDef.HTTP.Method)
-			if method == "POST" || method == "PUT" || method == "PATCH" {
-				mapTo = "body." + paramDef.Name
+			// Auto-detect: if the param name appears in the path template, map to path.
+			if strings.Contains(path, "{{"+paramDef.Name+"}}") {
+				mapTo = "path." + paramDef.Name
 			} else {
-				mapTo = "query." + paramDef.Name
+				// Default: body for POST/PUT/PATCH, query for GET/DELETE.
+				method := strings.ToUpper(t.toolDef.HTTP.Method)
+				if method == "POST" || method == "PUT" || method == "PATCH" {
+					mapTo = "body." + paramDef.Name
+				} else {
+					mapTo = "query." + paramDef.Name
+				}
 			}
 		}
 

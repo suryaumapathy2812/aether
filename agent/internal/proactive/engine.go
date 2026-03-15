@@ -115,41 +115,6 @@ func (e *Engine) buildPlanningContext(ctx context.Context) string {
 	}
 	sb.WriteString("\n")
 
-	// 3. Recent proactive work (last 6 hours) — derived from agent tasks
-	sb.WriteString("### Recent Proactive Work (last 6 hours)\n")
-	if e.store != nil {
-		cutoff := now.Add(-6 * time.Hour).UTC()
-		tasks, err := e.store.ListAgentTasksByUser(ctx, "default", 30)
-		if err == nil {
-			found := false
-			for _, t := range tasks {
-				// Only include proactive tasks created in the last 6 hours
-				if t.CreatedAt.Before(cutoff) {
-					continue
-				}
-				if !strings.HasPrefix(t.SessionID, "proactive-") {
-					continue
-				}
-				sb.WriteString("- [")
-				sb.WriteString(string(t.Status))
-				sb.WriteString("] ")
-				sb.WriteString(t.Title)
-				sb.WriteString(" (")
-				sb.WriteString(t.CreatedAt.Format(time.RFC3339))
-				sb.WriteString(")\n")
-				found = true
-			}
-			if !found {
-				sb.WriteString("(none)\n")
-			}
-		} else {
-			sb.WriteString("(unavailable)\n")
-		}
-	} else {
-		sb.WriteString("(unavailable)\n")
-	}
-	sb.WriteString("\n")
-
 	// 4. Known entities (gracefully skip if table doesn't exist)
 	sb.WriteString("### Known Entities\n")
 	if e.store != nil {
@@ -262,7 +227,7 @@ func (e *Engine) RunPlanningCycle(ctx context.Context, job cron.Job) error {
 		items = items[:5]
 	}
 
-	sessionID := "proactive-" + time.Now().Format("2006-01-02")
+	_ = "proactive-" + time.Now().Format("2006-01-02") // sessionID unused after agent runtime removal
 
 	for _, item := range items {
 		// Clamp priority 1-100
@@ -274,29 +239,9 @@ func (e *Engine) RunPlanningCycle(ctx context.Context, job cron.Job) error {
 			priority = 100
 		}
 
-		// Build goal with notification instruction if needed
-		goal := item.Goal
-		if item.Notify {
-			goal += "\n\nIMPORTANT: When you have results, use the send_notification tool to deliver a summary to the user."
-		}
-
-		// Create agent task
-		taskRec, err := e.store.CreateAgentTask(ctx, db.AgentTaskCreate{
-			UserID:    "default",
-			SessionID: sessionID,
-			Title:     "Proactive: " + item.Title,
-			Goal:      goal,
-			Priority:  priority,
-			MaxSteps:  10,
-			Metadata:  map[string]any{"source": "proactive", "tags": item.Tags, "notify": item.Notify},
-		})
-		if err != nil {
-			log.Printf("proactive: failed to create task %q: %v", item.Title, err)
-			continue
-		}
-
-		// Record proactive event
-		_, _ = e.store.RecordProactiveEvent(ctx, "default", taskRec.ID, "proactive", item.Title, "queued", map[string]any{
+		// TODO: proactive items will be routed to the new agent system when rebuilt.
+		// For now, just record the event.
+		_, _ = e.store.RecordProactiveEvent(ctx, "default", "", "proactive", item.Title, "acknowledged", map[string]any{
 			"tags":   item.Tags,
 			"notify": item.Notify,
 		})

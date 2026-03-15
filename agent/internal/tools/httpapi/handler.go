@@ -134,32 +134,12 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	metadata := cloneAnyMap(task.Metadata)
-	metadata["source"] = firstNonEmptyString(metadata["source"], "plugin_webhook")
-	metadata["plugin"] = pluginName
-	metadata["device_id"] = webhookReq.DeviceID
-	metadata["headers"] = map[string]any{
-		"content_type": strings.TrimSpace(r.Header.Get("Content-Type")),
-	}
-
-	created, err := h.store.CreateAgentTask(r.Context(), db.AgentTaskCreate{
-		UserID:    userID,
-		SessionID: task.SessionID,
-		Title:     task.Title,
-		Goal:      task.Goal,
-		Priority:  80,
-		MaxSteps:  12,
-		Metadata:  metadata,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
+	// TODO: webhook events will be routed to the new agent system when rebuilt.
+	// For now, just acknowledge receipt.
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":  "queued",
-		"task_id": created.ID,
-		"plugin":  pluginName,
+		"status": "acknowledged",
+		"plugin": pluginName,
+		"title":  task.Title,
 	})
 }
 
