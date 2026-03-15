@@ -58,8 +58,7 @@ export default function ChatPage() {
 function ChatView({ session }: { session: { user: { id: string; name?: string | null } } }) {
   const router = useRouter();
   const [input, setInput] = useState("");
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const historyLoadedRef = useRef(false);
 
   const userId = session.user.id;
@@ -71,16 +70,14 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
 
   const { messages, setMessages, sendMessage, status, error } = useChat({
     transport,
-    messages: initialMessages.length > 0 ? initialMessages : undefined,
   });
 
-  // Load today's conversation history.
+  // Load today's conversation history into the Chat instance.
   useEffect(() => {
     if (historyLoadedRef.current) return;
     historyLoadedRef.current = true;
 
     async function loadTodayHistory(): Promise<void> {
-      setLoadingHistory(true);
       try {
         const uid = userId;
         if (!uid) return;
@@ -114,7 +111,7 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
         }
 
         if (restored.length > 0) {
-          setInitialMessages(restored);
+          setMessages(restored);
         }
       } catch {
         // Ignore history load errors; chat should remain usable.
@@ -124,7 +121,7 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
     }
 
     void loadTodayHistory();
-  }, [userId]);
+  }, [userId, setMessages]);
 
   function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
