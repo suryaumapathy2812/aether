@@ -434,29 +434,47 @@ func applyUpcomingEventsWindow(args map[string]any, queryParams url.Values) {
 	queryParams.Set("timeMax", end.Format(time.RFC3339))
 }
 
+type requestNormalizerContext struct {
+	args        map[string]any
+	queryParams url.Values
+	bodyFields  map[string]any
+	method      *string
+	path        *string
+}
+
+type requestNormalizer func(ctx requestNormalizerContext)
+
+func normalizerKey(pluginName, toolName string) string {
+	return strings.TrimSpace(strings.ToLower(pluginName)) + ":" + strings.TrimSpace(strings.ToLower(toolName))
+}
+
+var toolRequestNormalizers = map[string]requestNormalizer{
+	normalizerKey("google-calendar", "upcoming_events"): func(ctx requestNormalizerContext) {
+		applyUpcomingEventsWindow(ctx.args, ctx.queryParams)
+	},
+	normalizerKey("google-drive", "list_drive_files"): func(ctx requestNormalizerContext) {
+		applyDriveFolderFilter(ctx.args, ctx.queryParams)
+	},
+	normalizerKey("google-drive", "search_drive"): func(ctx requestNormalizerContext) {
+		normalizeDriveSearchQuery(ctx.args, ctx.queryParams)
+	},
+	normalizerKey("google-drive", "create_folder"): func(ctx requestNormalizerContext) {
+		normalizeDriveCreateFolder(ctx.args, ctx.bodyFields)
+	},
+	normalizerKey("spotify", "play_pause"): func(ctx requestNormalizerContext) {
+		normalizeSpotifyPlayPause(ctx.args, ctx.bodyFields, ctx.method, ctx.path)
+	},
+}
+
 func normalizeToolRequest(pluginName, toolName string, args map[string]any, queryParams url.Values, bodyFields map[string]any, method, path *string) {
-	if pluginName == "google-calendar" && toolName == "upcoming_events" {
-		applyUpcomingEventsWindow(args, queryParams)
-		return
-	}
-
-	if pluginName == "google-drive" && toolName == "list_drive_files" {
-		applyDriveFolderFilter(args, queryParams)
-		return
-	}
-
-	if pluginName == "google-drive" && toolName == "search_drive" {
-		normalizeDriveSearchQuery(args, queryParams)
-		return
-	}
-
-	if pluginName == "google-drive" && toolName == "create_folder" {
-		normalizeDriveCreateFolder(args, bodyFields)
-		return
-	}
-
-	if pluginName == "spotify" && toolName == "play_pause" {
-		normalizeSpotifyPlayPause(args, bodyFields, method, path)
+	if fn, ok := toolRequestNormalizers[normalizerKey(pluginName, toolName)]; ok {
+		fn(requestNormalizerContext{
+			args:        args,
+			queryParams: queryParams,
+			bodyFields:  bodyFields,
+			method:      method,
+			path:        path,
+		})
 	}
 }
 

@@ -12,12 +12,7 @@ type SessionState = {
   loading: boolean;
 };
 
-type SessionSnapshot = {
-  messages: UIMessage[];
-  status: SessionStatus;
-  error: string | null;
-  loading: boolean;
-};
+type SessionSnapshot = SessionState;
 
 type StreamEvent = Record<string, unknown> & { type?: string };
 
@@ -224,6 +219,8 @@ class ChatRuntimeStore {
   private sessions = new Map<string, SessionState>();
   private inflight = new Map<string, AbortController>();
   private listeners = new Set<() => void>();
+  private statusMapCache: Record<string, SessionStatus> = {};
+  private statusMapDirty = true;
   private ws: WebSocket | null = null;
   private wsReconnectTimer: number | null = null;
   private wsBackoffMs = 500;
@@ -258,6 +255,7 @@ class ChatRuntimeStore {
       loading: false,
     };
     this.sessions.set(sessionId, created);
+    this.statusMapDirty = true;
     return created;
   }
 
@@ -265,26 +263,34 @@ class ChatRuntimeStore {
     const current = this.ensureSession(sessionId);
     const next = nextState(current, action);
     this.sessions.set(sessionId, next);
+    this.statusMapDirty = true;
     this.notify();
   }
 
+  private static readonly emptySnapshot: SessionSnapshot = {
+    messages: [],
+    status: "idle",
+    error: null,
+    loaded: false,
+    loading: false,
+  };
+
   getSnapshot = (sessionId: string): SessionSnapshot => {
     const state = this.sessions.get(sessionId);
-    if (!state) return { messages: [], status: "idle", error: null, loading: false };
-    return {
-      messages: state.messages,
-      status: state.status,
-      error: state.error,
-      loading: state.loading,
-    };
+    return state ?? ChatRuntimeStore.emptySnapshot;
   };
 
   getStatusMap = (): Record<string, SessionStatus> => {
-    const out: Record<string, SessionStatus> = {};
-    for (const [sessionId, state] of this.sessions.entries()) {
-      out[sessionId] = state.status;
+    if (!this.statusMapDirty) {
+      return this.statusMapCache;
     }
-    return out;
+    const next: Record<string, SessionStatus> = {};
+    for (const [sessionId, state] of this.sessions.entries()) {
+      next[sessionId] = state.status;
+    }
+    this.statusMapCache = next;
+    this.statusMapDirty = false;
+    return this.statusMapCache;
   };
 
   async loadHistory(sessionId: string): Promise<void> {
@@ -519,8 +525,15 @@ class ChatRuntimeStore {
       this.wsReconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.close();
+      const ws = this.ws;
       this.ws = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     }
   }
 
