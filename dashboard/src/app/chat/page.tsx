@@ -80,6 +80,8 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
     const text = message.text?.trim();
     if (!text) return;
 
+    setInput("");
+
     // Auto-create session on first message if none exists
     if (!sessionId) {
       if (creatingSessionRef.current) return;
@@ -91,14 +93,18 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
         await chatRuntime.sendMessage({ sessionId: newSess.id, userId, text });
         return;
       } catch {
-        // Continue without session — backend will auto-create
+        setInput(text);
+        return;
       } finally {
         creatingSessionRef.current = false;
       }
     }
 
-    await chatRuntime.sendMessage({ sessionId, userId, text });
-    setInput("");
+    try {
+      await chatRuntime.sendMessage({ sessionId, userId, text });
+    } catch {
+      setInput(text);
+    }
   }
 
   const isStreaming = status === "streaming";
