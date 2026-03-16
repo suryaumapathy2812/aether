@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -90,6 +91,25 @@ func NewEvent(reqID, jobID string, kind EventType, seq int, payload map[string]a
 		Payload:        payload,
 		Metrics:        map[string]any{},
 	}
+}
+
+// TruncateTitle creates a short title from a message, truncated to maxLen.
+func TruncateTitle(text string, maxLen int) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return "New chat"
+	}
+	// Remove newlines.
+	t = strings.ReplaceAll(t, "\n", " ")
+	t = strings.ReplaceAll(t, "\r", " ")
+	// Collapse whitespace.
+	for strings.Contains(t, "  ") {
+		t = strings.ReplaceAll(t, "  ", " ")
+	}
+	if len(t) <= maxLen {
+		return t
+	}
+	return t[:maxLen] + "…"
 }
 
 type LLMResultEnvelope struct {

@@ -44,6 +44,8 @@ func New(opts Options) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/conversations/turn", h.handleTurn)
+	mux.HandleFunc("/v1/sessions", h.handleSessions)
+	mux.HandleFunc("/v1/sessions/", h.handleSessionByID)
 }
 
 func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +75,32 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := firstNonEmpty(strings.TrimSpace(req.User), strings.TrimSpace(req.UserID), "default")
-	sessionID := firstNonEmpty(strings.TrimSpace(req.Session), userID)
+	sessionID := strings.TrimSpace(req.Session)
+
+	// Session management: validate existing or create new.
+	newSession := false
+	if sessionID != "" && h.store != nil {
+		if _, err := h.store.GetChatSession(r.Context(), sessionID); err != nil {
+			// Session ID provided but doesn't exist — create it.
+			title := llm.TruncateTitle(fmt.Sprintf("%v", llm.LatestUserMessageContent(req.Messages)), 60)
+			if _, err := h.store.CreateChatSession(r.Context(), userID, title); err == nil {
+				newSession = true
+			}
+			// If creation fails, proceed anyway — messages still work without session row.
+		}
+	} else if h.store != nil {
+		// No session ID — auto-create one.
+		title := llm.TruncateTitle(fmt.Sprintf("%v", llm.LatestUserMessageContent(req.Messages)), 60)
+		sess, err := h.store.CreateChatSession(r.Context(), userID, title)
+		if err == nil {
+			sessionID = sess.ID
+			newSession = true
+		} else {
+			sessionID = userID // fallback
+		}
+	} else {
+		sessionID = userID
+	}
 
 	latestUser, err := latestUserTurnMessage(req.Messages)
 	if err != nil {
@@ -122,6 +149,12 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Touch session timestamp + emit session ID in start event metadata.
+	if h.store != nil && sessionID != "" && sessionID != userID {
+		_ = h.store.TouchChatSession(r.Context(), sessionID)
+	}
+	_ = newSession // used for auto-title below
+
 	answerParts := []string{}
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
@@ -132,6 +165,10 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		chunk := map[string]any{"type": string(ev.EventType)}
 		for k, v := range ev.Payload {
 			chunk[k] = v
+		}
+		// Inject sessionId into start event so the client knows which session this is.
+		if ev.EventType == conversation.EventStart {
+			chunk["messageMetadata"] = map[string]any{"sessionId": sessionID}
 		}
 		writeSSE(w, chunk)
 		flusher.Flush()
@@ -512,5 +549,111 @@ func isSupportedAudioFormat(ext string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// ── Session endpoints ──────────────────────────────────
+
+func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeError(w, http.StatusInternalServerError, "store unavailable")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+		if userID == "" {
+			userID = "default"
+		}
+		limit := 50
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if n, err := fmt.Sscanf(raw, "%d", &limit); n == 0 || err != nil {
+				limit = 50
+			}
+		}
+		sessions, err := h.store.ListChatSessions(r.Context(), userID, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+
+	case http.MethodPost:
+		var req struct {
+			UserID string `json:"user_id"`
+			Title  string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		userID := strings.TrimSpace(req.UserID)
+		if userID == "" {
+			userID = "default"
+		}
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = "New chat"
+		}
+		sess, err := h.store.CreateChatSession(r.Context(), userID, title)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, sess)
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeError(w, http.StatusInternalServerError, "store unavailable")
+		return
+	}
+	// Extract session ID from path: /v1/sessions/{id}
+	sessionID := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
+	sessionID = strings.Trim(sessionID, "/")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session id required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		sess, err := h.store.GetChatSession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		// Also load messages for this session.
+		msgs, _ := h.store.ListChatMessages(r.Context(), sess.UserID, sessionID, 500)
+		writeJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs})
+
+	case http.MethodPatch:
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := h.store.UpdateChatSessionTitle(r.Context(), sessionID, strings.TrimSpace(req.Title)); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		sess, _ := h.store.GetChatSession(r.Context(), sessionID)
+		writeJSON(w, http.StatusOK, sess)
+
+	case http.MethodDelete:
+		if err := h.store.DeleteChatSession(r.Context(), sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
