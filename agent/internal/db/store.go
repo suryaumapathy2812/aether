@@ -251,6 +251,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL DEFAULT 'default',
 			title TEXT NOT NULL DEFAULT '',
+			archived INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);`,

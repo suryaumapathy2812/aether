@@ -633,15 +633,24 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPatch:
 		var req struct {
-			Title string `json:"title"`
+			Title   *string `json:"title"`
+			Archive *bool   `json:"archive"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
-		if err := h.store.UpdateChatSessionTitle(r.Context(), sessionID, strings.TrimSpace(req.Title)); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+		if req.Title != nil {
+			if err := h.store.UpdateChatSessionTitle(r.Context(), sessionID, strings.TrimSpace(*req.Title)); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if req.Archive != nil && *req.Archive {
+			if err := h.store.ArchiveChatSession(r.Context(), sessionID); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 		sess, _ := h.store.GetChatSession(r.Context(), sessionID)
 		writeJSON(w, http.StatusOK, sess)

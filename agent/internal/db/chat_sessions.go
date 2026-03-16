@@ -13,6 +13,7 @@ type ChatSession struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
 	Title     string    `json:"title"`
+	Archived  bool      `json:"archived"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -41,14 +42,16 @@ func (s *Store) CreateChatSession(ctx context.Context, userID, title string) (Ch
 
 func (s *Store) GetChatSession(ctx context.Context, sessionID string) (ChatSession, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, title, created_at, updated_at
+		SELECT id, user_id, title, archived, created_at, updated_at
 		FROM chat_sessions WHERE id = ?
 	`, sessionID)
 	var rec ChatSession
 	var createdAt, updatedAt string
-	if err := row.Scan(&rec.ID, &rec.UserID, &rec.Title, &createdAt, &updatedAt); err != nil {
+	var archived int
+	if err := row.Scan(&rec.ID, &rec.UserID, &rec.Title, &archived, &createdAt, &updatedAt); err != nil {
 		return ChatSession{}, fmt.Errorf("get chat session: %w", err)
 	}
+	rec.Archived = archived != 0
 	var err error
 	rec.CreatedAt, err = parseTS(createdAt)
 	if err != nil {
@@ -69,9 +72,9 @@ func (s *Store) ListChatSessions(ctx context.Context, userID string, limit int) 
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, title, created_at, updated_at
+		SELECT id, user_id, title, archived, created_at, updated_at
 		FROM chat_sessions
-		WHERE user_id = ?
+		WHERE user_id = ? AND archived = 0
 		ORDER BY updated_at DESC
 		LIMIT ?
 	`, userID, limit)
@@ -83,9 +86,11 @@ func (s *Store) ListChatSessions(ctx context.Context, userID string, limit int) 
 	for rows.Next() {
 		var rec ChatSession
 		var createdAt, updatedAt string
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.Title, &createdAt, &updatedAt); err != nil {
+		var archived int
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.Title, &archived, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		rec.Archived = archived != 0
 		rec.CreatedAt, _ = parseTS(createdAt)
 		rec.UpdatedAt, _ = parseTS(updatedAt)
 		out = append(out, rec)
@@ -103,6 +108,13 @@ func (s *Store) UpdateChatSessionTitle(ctx context.Context, sessionID, title str
 func (s *Store) TouchChatSession(ctx context.Context, sessionID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE chat_sessions SET updated_at = ? WHERE id = ?
+	`, formatTS(time.Now().UTC()), sessionID)
+	return err
+}
+
+func (s *Store) ArchiveChatSession(ctx context.Context, sessionID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE chat_sessions SET archived = 1, updated_at = ? WHERE id = ?
 	`, formatTS(time.Now().UTC()), sessionID)
 	return err
 }

@@ -1,12 +1,26 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth-client";
 import { useShortcutsContext } from "@/components/KeyboardShortcutsProvider";
-import { listChatSessions, createChatSession, type ChatSession } from "@/lib/api";
+import {
+  listChatSessions,
+  createChatSession,
+  updateChatSessionTitle,
+  archiveChatSession,
+  deleteChatSession,
+  type ChatSession,
+} from "@/lib/api";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   MessageCircle,
   Brain,
@@ -16,9 +30,21 @@ import {
   PanelLeftClose,
   PanelLeft,
   Plus,
+  MoreHorizontal,
+  Pencil,
+  Archive,
+  Trash2,
 } from "lucide-react";
 
 export default function Sidebar() {
+  return (
+    <Suspense>
+      <SidebarInner />
+    </Suspense>
+  );
+}
+
+function SidebarInner() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -27,6 +53,9 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   const activeSessionId = searchParams.get("s") || "";
 
@@ -36,13 +65,16 @@ export default function Sidebar() {
     setSidebarToggle(toggle);
   }, [toggle, setSidebarToggle]);
 
-  // Load sessions
-  useEffect(() => {
+  const loadSessions = useCallback(() => {
     if (!session?.user?.id) return;
     listChatSessions(session.user.id, 30)
       .then((res) => setSessions(res.sessions || []))
       .catch(() => {});
-  }, [session?.user?.id, pathname]);
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions, pathname]);
 
   async function handleNewChat() {
     if (!session?.user?.id) return;
@@ -56,7 +88,40 @@ export default function Sidebar() {
     setMobileOpen(false);
   }
 
-  // Hide on login page
+  function startRename(s: ChatSession) {
+    setEditingId(s.id);
+    setEditTitle(s.title);
+    setTimeout(() => editInputRef.current?.focus(), 50);
+  }
+
+  async function commitRename() {
+    if (!editingId) return;
+    const trimmed = editTitle.trim();
+    if (trimmed) {
+      await updateChatSessionTitle(editingId, trimmed).catch(() => {});
+      setSessions((prev) =>
+        prev.map((s) => (s.id === editingId ? { ...s, title: trimmed } : s))
+      );
+    }
+    setEditingId(null);
+  }
+
+  async function handleArchive(id: string) {
+    await archiveChatSession(id).catch(() => {});
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (activeSessionId === id) {
+      router.push("/chat");
+    }
+  }
+
+  async function handleDelete(id: string) {
+    await deleteChatSession(id).catch(() => {});
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (activeSessionId === id) {
+      router.push("/chat");
+    }
+  }
+
   if (pathname === "/") return null;
 
   const navItems = [
@@ -66,13 +131,10 @@ export default function Sidebar() {
     { href: "/account", label: "Settings", icon: Settings },
   ];
 
-  // Group sessions by date
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-  const weekAgo = new Date(today);
-  weekAgo.setDate(weekAgo.getDate() - 7);
 
   const todaySessions = sessions.filter((s) => new Date(s.updated_at) >= today);
   const yesterdaySessions = sessions.filter((s) => {
@@ -81,74 +143,85 @@ export default function Sidebar() {
   });
   const olderSessions = sessions.filter((s) => new Date(s.updated_at) < yesterday);
 
-  const sidebarContent = (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className={cn("flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
-        {!collapsed && (
-          <span className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
-            aether
-          </span>
+  const renderSession = (s: ChatSession) => {
+    const isActive = s.id === activeSessionId;
+    const isEditing = s.id === editingId;
+
+    return (
+      <div
+        key={s.id}
+        className={cn(
+          "group flex items-center gap-1 rounded-md transition-colors",
+          isActive ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
         )}
-        <button
-          onClick={toggle}
-          className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/[0.04] transition-colors"
-        >
-          {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
-        </button>
-      </div>
-
-      {/* New Chat */}
-      <div className="px-3 pb-2">
-        <button
-          onClick={handleNewChat}
-          className={cn(
-            "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
-            "text-foreground/80 hover:bg-white/[0.06]",
-            collapsed && "justify-center px-0"
-          )}
-        >
-          <Plus className="size-4 shrink-0" />
-          {!collapsed && "New Chat"}
-        </button>
-      </div>
-
-      {/* Sessions */}
-      {!collapsed && sessions.length > 0 && (
-        <div className="flex-1 overflow-y-auto px-3 pt-2">
-          <SessionGroup label="Today" sessions={todaySessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
-          <SessionGroup label="Yesterday" sessions={yesterdaySessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
-          <SessionGroup label="Previous" sessions={olderSessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
-        </div>
-      )}
-      {collapsed && <div className="flex-1" />}
-
-      {/* Nav */}
-      <div className="mt-auto border-t border-white/[0.06] px-3 py-3 space-y-0.5">
-        {navItems.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={() => setMobileOpen(false)}
-            className={cn(
-              "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
-              pathname.startsWith(item.href)
-                ? "text-foreground/90 bg-white/[0.06]"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
-              collapsed && "justify-center px-0"
-            )}
+      >
+        {isEditing ? (
+          <input
+            ref={editInputRef}
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setEditingId(null);
+            }}
+            className="flex-1 min-w-0 px-3 py-1.5 text-[13px] bg-transparent text-foreground outline-none"
+          />
+        ) : (
+          <button
+            onClick={() => {
+              router.push(`/chat?s=${s.id}`);
+              setMobileOpen(false);
+            }}
+            onDoubleClick={() => startRename(s)}
+            className="flex-1 min-w-0 text-left px-3 py-1.5 text-[13px] text-muted-foreground truncate"
           >
-            <item.icon className="size-4 shrink-0" />
-            {!collapsed && item.label}
-          </Link>
-        ))}
+            {s.title || "New chat"}
+          </button>
+        )}
+
+        {!isEditing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="shrink-0 w-6 h-6 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground">
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-36">
+              <DropdownMenuItem onClick={() => startRename(s)} className="text-xs">
+                <Pencil className="size-3 mr-2" />
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleArchive(s.id)} className="text-xs">
+                <Archive className="size-3 mr-2" />
+                Archive
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => handleDelete(s.id)} className="text-xs text-red-400 focus:text-red-400">
+                <Trash2 className="size-3 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderGroup = (label: string, items: ChatSession[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div className="mb-3">
+        <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/50 font-medium">
+          {label}
+        </p>
+        <div className="space-y-0.5">{items.map(renderSession)}</div>
+      </div>
+    );
+  };
 
   return (
     <>
-      {/* Mobile hamburger */}
       <button
         onClick={() => setMobileOpen(true)}
         className="md:hidden fixed top-5 left-5 z-50 w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-sm border border-white/[0.08] text-muted-foreground"
@@ -157,7 +230,6 @@ export default function Sidebar() {
         <MessageCircle className="size-3.5" />
       </button>
 
-      {/* Mobile overlay */}
       {mobileOpen && (
         <div
           className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
@@ -165,7 +237,6 @@ export default function Sidebar() {
         />
       )}
 
-      {/* Sidebar */}
       <aside
         className={cn(
           "h-full shrink-0 bg-white/[0.02] border-r border-white/[0.06] transition-all duration-200",
@@ -174,45 +245,69 @@ export default function Sidebar() {
           mobileOpen && "!block fixed inset-y-0 left-0 z-50 w-[260px] bg-[#111111]"
         )}
       >
-        {sidebarContent}
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className={cn("flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
+            {!collapsed && (
+              <span className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
+                aether
+              </span>
+            )}
+            <button
+              onClick={toggle}
+              className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/[0.04] transition-colors"
+            >
+              {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+          </div>
+
+          {/* New Chat */}
+          <div className="px-3 pb-2">
+            <button
+              onClick={handleNewChat}
+              className={cn(
+                "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
+                "text-foreground/80 hover:bg-white/[0.06]",
+                collapsed && "justify-center px-0"
+              )}
+            >
+              <Plus className="size-4 shrink-0" />
+              {!collapsed && "New Chat"}
+            </button>
+          </div>
+
+          {/* Sessions */}
+          {!collapsed && sessions.length > 0 && (
+            <div className="flex-1 overflow-y-auto px-3 pt-2">
+              {renderGroup("Today", todaySessions)}
+              {renderGroup("Yesterday", yesterdaySessions)}
+              {renderGroup("Previous", olderSessions)}
+            </div>
+          )}
+          {collapsed && <div className="flex-1" />}
+
+          {/* Nav */}
+          <div className="mt-auto border-t border-white/[0.06] px-3 py-3 space-y-0.5">
+            {navItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
+                  pathname.startsWith(item.href)
+                    ? "text-foreground/90 bg-white/[0.06]"
+                    : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+                  collapsed && "justify-center px-0"
+                )}
+              >
+                <item.icon className="size-4 shrink-0" />
+                {!collapsed && item.label}
+              </Link>
+            ))}
+          </div>
+        </div>
       </aside>
     </>
-  );
-}
-
-function SessionGroup({
-  label,
-  sessions,
-  activeId,
-  onSelect,
-}: {
-  label: string;
-  sessions: ChatSession[];
-  activeId: string;
-  onSelect: (id: string) => void;
-}) {
-  if (sessions.length === 0) return null;
-  return (
-    <div className="mb-3">
-      <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/50 font-medium">
-        {label}
-      </p>
-      <div className="space-y-0.5">
-        {sessions.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => onSelect(s.id)}
-            className={cn(
-              "w-full text-left px-3 py-1.5 rounded-md text-[13px] transition-colors truncate",
-              s.id === activeId
-                ? "text-foreground bg-white/[0.06]"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
-            )}
-          >
-            {s.title || "New chat"}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }

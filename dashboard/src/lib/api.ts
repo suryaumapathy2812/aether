@@ -645,6 +645,13 @@ export async function updateChatSessionTitle(sessionId: string, title: string) {
   });
 }
 
+export async function archiveChatSession(sessionId: string) {
+  return api<ChatSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archive: true }),
+  });
+}
+
 export async function deleteChatSession(sessionId: string) {
   return api<{ deleted: boolean }>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
