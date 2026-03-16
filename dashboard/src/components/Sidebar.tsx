@@ -74,7 +74,7 @@ function SidebarInner() {
 
   useEffect(() => {
     loadSessions();
-  }, [loadSessions, pathname]);
+  }, [loadSessions, pathname, activeSessionId]);
 
   async function handleNewChat() {
     if (!session?.user?.id) return;

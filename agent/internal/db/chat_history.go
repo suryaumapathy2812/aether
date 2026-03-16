@@ -9,12 +9,12 @@ import (
 )
 
 type ChatMessageRecord struct {
-	ID        int64
-	UserID    string
-	SessionID string
-	Role      string
-	Content   map[string]any
-	CreatedAt time.Time
+	ID        int64          `json:"id"`
+	UserID    string         `json:"user_id"`
+	SessionID string         `json:"session_id"`
+	Role      string         `json:"role"`
+	Content   map[string]any `json:"content"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 func (s *Store) AppendChatMessage(ctx context.Context, userID, sessionID string, message map[string]any) error {

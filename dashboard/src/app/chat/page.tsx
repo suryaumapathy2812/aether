@@ -39,6 +39,27 @@ import {
 import { IconCopy, IconSparkles } from "@tabler/icons-react";
 import type { UIMessage } from "ai";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function textFromStoredMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!isRecord(content)) return "";
+
+  const inner = content.content;
+  if (typeof inner === "string") return inner;
+  if (!Array.isArray(inner)) return "";
+
+  return inner
+    .map((part) => {
+      if (!isRecord(part)) return "";
+      if (part.type !== "text") return "";
+      return typeof part.text === "string" ? part.text : "";
+    })
+    .join("");
+}
+
 export default function ChatPage() {
   return (
     <Suspense>
@@ -70,6 +91,8 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
   const [input, setInput] = useState("");
   const [loadingHistory, setLoadingHistory] = useState(!!initialSessionId);
   const [sessionId, setSessionId] = useState(initialSessionId);
+  const [pendingFirstMessage, setPendingFirstMessage] = useState<string | null>(null);
+  const creatingSessionRef = useRef(false);
 
   const userId = session.user.id;
 
@@ -82,6 +105,13 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
     transport,
   });
 
+  useEffect(() => {
+    if (!sessionId || !pendingFirstMessage) return;
+    sendMessage({ text: pendingFirstMessage });
+    setPendingFirstMessage(null);
+    setInput("");
+  }, [sessionId, pendingFirstMessage, sendMessage]);
+
   // Load session messages on mount
   useEffect(() => {
     if (!initialSessionId) {
@@ -92,10 +122,12 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
       .then((res) => {
         const restored: UIMessage[] = [];
         for (const msg of res.messages || []) {
-          const content = msg.content as Record<string, unknown>;
-          const role = content.role as string;
+          const role = typeof msg.role === "string"
+            ? msg.role
+            : (isRecord(msg.content) && typeof msg.content.role === "string" ? msg.content.role : "");
+          const text = textFromStoredMessageContent(msg.content);
+
           if (role === "user") {
-            const text = (content.content as string) || "";
             if (text.trim()) {
               restored.push({
                 id: `msg-${msg.id}-user`,
@@ -104,7 +136,6 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
               });
             }
           } else if (role === "assistant") {
-            const text = (content.content as string) || "";
             if (text.trim()) {
               restored.push({
                 id: `msg-${msg.id}-assistant`,
@@ -126,12 +157,18 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
     // Auto-create session on first message if none exists
     if (!sessionId) {
+      if (creatingSessionRef.current) return;
+      creatingSessionRef.current = true;
       try {
         const newSess = await createChatSession(userId, text.slice(0, 60));
         setSessionId(newSess.id);
         router.replace(`/chat?s=${newSess.id}`, { scroll: false });
+        setPendingFirstMessage(text);
+        return;
       } catch {
         // Continue without session — backend will auto-create
+      } finally {
+        creatingSessionRef.current = false;
       }
     }
 

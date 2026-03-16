@@ -83,7 +83,8 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.store.GetChatSession(r.Context(), sessionID); err != nil {
 			// Session ID provided but doesn't exist — create it.
 			title := llm.TruncateTitle(fmt.Sprintf("%v", llm.LatestUserMessageContent(req.Messages)), 60)
-			if _, err := h.store.CreateChatSession(r.Context(), userID, title); err == nil {
+			if sess, err := h.store.CreateChatSession(r.Context(), userID, title); err == nil {
+				sessionID = sess.ID
 				newSession = true
 			}
 			// If creation fails, proceed anyway — messages still work without session row.

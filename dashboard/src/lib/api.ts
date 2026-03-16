@@ -633,7 +633,7 @@ export async function createChatSession(userId: string, title = "New chat") {
 }
 
 export async function getChatSession(sessionId: string) {
-  return api<{ session: ChatSession; messages: Array<{ id: number; content: Record<string, unknown> }> }>(
+  return api<{ session: ChatSession; messages: Array<{ id: number; role?: string; content: unknown; created_at?: string }> }>(
     `/v1/sessions/${encodeURIComponent(sessionId)}`
   );
 }
