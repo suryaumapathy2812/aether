@@ -26,7 +26,7 @@ export default function ContentShell({
           {back && (
             <button
               onClick={() => router.push(back)}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors md:hidden"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors"
             >
               <ChevronLeft className="size-4" />
             </button>

@@ -5,24 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useSession } from "@/lib/auth-client";
 import { listPlugins, PluginInfo } from "@/lib/api";
-import {
-  Search,
-  Mail,
-  Calendar,
-  Contact2,
-  HardDrive,
-  CloudSun,
-  Compass,
-  MapPin,
-  Rss,
-  Music,
-  BookOpen,
-  Calculator,
-  Puzzle,
-} from "lucide-react";
+import { Search, ChevronRight } from "lucide-react";
 
 export default function PluginsPage() {
   return (
@@ -30,26 +15,6 @@ export default function PluginsPage() {
       <PluginsContent />
     </Suspense>
   );
-}
-
-// ── Icon mapping ──
-
-const PLUGIN_ICONS: Record<string, React.ElementType> = {
-  gmail: Mail,
-  google_calendar: Calendar,
-  google_contacts: Contact2,
-  google_drive: HardDrive,
-  weather: CloudSun,
-  brave_search: Compass,
-  local_search: MapPin,
-  rss: Rss,
-  spotify: Music,
-  wikipedia: BookOpen,
-  wolfram: Calculator,
-};
-
-function getPluginIcon(name: string): React.ElementType {
-  return PLUGIN_ICONS[name] || Puzzle;
 }
 
 // ── Main content ──
@@ -88,17 +53,29 @@ function PluginsContent() {
     }
   }
 
-  const installed = useMemo(
-    () => plugins.filter((p) => p.installed),
+  // "Installed" = active (enabled + connected)
+  // "Browse" = everything else (not installed, disabled, needs attention)
+  const active = useMemo(
+    () =>
+      plugins.filter(
+        (p) => p.installed && p.enabled && p.connected && !p.needs_reconnect
+      ),
     [plugins]
   );
-  const available = useMemo(
-    () => plugins.filter((p) => !p.installed),
+  const inactive = useMemo(
+    () =>
+      plugins.filter(
+        (p) =>
+          !p.installed ||
+          !p.enabled ||
+          !p.connected ||
+          p.needs_reconnect
+      ),
     [plugins]
   );
 
   const filtered = useMemo(() => {
-    const list = tab === "installed" ? installed : available;
+    const list = tab === "installed" ? active : inactive;
     if (!search.trim()) return list;
     const q = search.toLowerCase();
     return list.filter(
@@ -106,7 +83,7 @@ function PluginsContent() {
         p.display_name.toLowerCase().includes(q) ||
         p.description.toLowerCase().includes(q)
     );
-  }, [tab, installed, available, search]);
+  }, [tab, active, inactive, search]);
 
   if (isPending || !session) return null;
 
@@ -114,20 +91,40 @@ function PluginsContent() {
     <ContentShell title="Plugins">
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-6">
-        <TabButton
-          active={tab === "installed"}
+        <button
           onClick={() => setTab("installed")}
-          count={installed.length}
+          className={`
+            flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            ${
+              tab === "installed"
+                ? "bg-white/[0.08] text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+            }
+          `}
         >
           Installed
-        </TabButton>
-        <TabButton
-          active={tab === "browse"}
+          <span
+            className={`
+              text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
+              ${tab === "installed" ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
+            `}
+          >
+            {active.length}
+          </span>
+        </button>
+        <button
           onClick={() => setTab("browse")}
-          count={available.length}
+          className={`
+            px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            ${
+              tab === "browse"
+                ? "bg-white/[0.08] text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+            }
+          `}
         >
           Browse
-        </TabButton>
+        </button>
       </div>
 
       {/* Search */}
@@ -170,10 +167,10 @@ function PluginsContent() {
             {search.trim()
               ? "No plugins match your search."
               : tab === "installed"
-                ? "No plugins installed yet."
-                : "No more plugins available."}
+                ? "No active plugins yet."
+                : "All plugins are active."}
           </p>
-          {tab === "installed" && !search.trim() && available.length > 0 && (
+          {tab === "installed" && !search.trim() && inactive.length > 0 && (
             <button
               onClick={() => setTab("browse")}
               className="mt-3 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
@@ -183,9 +180,9 @@ function PluginsContent() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1">
           {filtered.map((plugin) => (
-            <PluginCard key={plugin.name} plugin={plugin} tab={tab} />
+            <PluginRow key={plugin.name} plugin={plugin} tab={tab} />
           ))}
         </div>
       )}
@@ -193,87 +190,65 @@ function PluginsContent() {
   );
 }
 
-// ── Tab button ──
+// ── Plugin row ──
 
-function TabButton({
-  active,
-  onClick,
-  count,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  count: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
-        ${
-          active
-            ? "bg-white/[0.08] text-foreground"
-            : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
-        }
-      `}
-    >
-      {children}
-      <span
-        className={`
-          text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
-          ${active ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
-        `}
-      >
-        {count}
-      </span>
-    </button>
-  );
-}
-
-// ── Plugin card ──
-
-function PluginCard({
+function PluginRow({
   plugin,
   tab,
 }: {
   plugin: PluginInfo;
   tab: "installed" | "browse";
 }) {
-  const Icon = getPluginIcon(plugin.name);
   const status = getPluginStatus(plugin);
 
   return (
     <Link
       href={`/plugins/${plugin.name}`}
-      className="group flex items-start gap-3.5 p-4 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/[0.1] transition-all"
+      className="group flex items-center gap-3 px-3 py-3 -mx-3 rounded-xl hover:bg-white/[0.03] transition-colors"
     >
-      {/* Icon */}
-      <div className="w-10 h-10 rounded-xl bg-white/[0.06] flex items-center justify-center shrink-0 group-hover:bg-white/[0.08] transition-colors">
-        <Icon className="size-4.5 text-muted-foreground" strokeWidth={1.5} />
-      </div>
+      {/* Status dot */}
+      <span
+        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+          status === "active"
+            ? "bg-emerald-400"
+            : status === "attention"
+              ? "bg-amber-400"
+              : "bg-white/[0.15]"
+        }`}
+      />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium text-foreground truncate">
-            {plugin.display_name}
-          </span>
-          {tab === "installed" && (
-            <StatusBadge status={status} />
-          )}
-        </div>
-        <p className="text-[11px] text-muted-foreground/70 mt-0.5 line-clamp-2 leading-relaxed">
+        <span className="text-[13px] font-medium text-foreground">
+          {plugin.display_name}
+        </span>
+        <p className="text-[11px] text-muted-foreground/60 mt-0.5 line-clamp-1">
           {plugin.description}
         </p>
       </div>
 
-      {/* Browse tab: Get button */}
-      {tab === "browse" && (
-        <span className="shrink-0 mt-0.5 text-[11px] font-medium text-foreground/70 bg-white/[0.08] hover:bg-white/[0.12] px-3 py-1 rounded-full transition-colors">
+      {/* Browse tab: Get pill */}
+      {tab === "browse" && !plugin.installed && (
+        <span className="shrink-0 text-[11px] font-medium text-foreground/70 bg-white/[0.08] px-3 py-1 rounded-full">
           Get
         </span>
       )}
+
+      {/* Browse tab: needs setup indicator */}
+      {tab === "browse" && plugin.installed && status === "attention" && (
+        <span className="shrink-0 text-[10px] text-amber-400/70">
+          Needs setup
+        </span>
+      )}
+
+      {/* Browse tab: disabled indicator */}
+      {tab === "browse" && plugin.installed && status === "disabled" && (
+        <span className="shrink-0 text-[10px] text-muted-foreground/40">
+          Disabled
+        </span>
+      )}
+
+      <ChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
     </Link>
   );
 }
@@ -293,35 +268,4 @@ function getPluginStatus(plugin: PluginInfo): PluginStatus {
     return "active";
   }
   return "disabled";
-}
-
-function StatusBadge({ status }: { status: PluginStatus }) {
-  if (status === "active") {
-    return (
-      <Badge
-        variant="outline"
-        className="text-[9px] px-1.5 py-0 h-4 border-emerald-500/20 text-emerald-400/80 bg-emerald-500/[0.06]"
-      >
-        Active
-      </Badge>
-    );
-  }
-  if (status === "attention") {
-    return (
-      <Badge
-        variant="outline"
-        className="text-[9px] px-1.5 py-0 h-4 border-amber-500/20 text-amber-400/80 bg-amber-500/[0.06]"
-      >
-        Setup
-      </Badge>
-    );
-  }
-  return (
-    <Badge
-      variant="outline"
-      className="text-[9px] px-1.5 py-0 h-4 border-white/[0.06] text-muted-foreground/50 bg-white/[0.02]"
-    >
-      Off
-    </Badge>
-  );
 }
