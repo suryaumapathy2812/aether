@@ -41,7 +41,12 @@ search_email                                     archive_email
 **Searching vs. browsing:**
 - General inbox check → `list_unread`
 - Specific search (by sender, subject, date) → `search_email` with Gmail query syntax
-- Broad discovery (spending, receipts, confirmations) → run multiple `search_email` calls with different queries in parallel, then merge and deduplicate results
+- Broad discovery (spending, receipts, confirmations) → use **multiple focused searches** instead of one broad query. This returns fewer, more relevant results per query and avoids reading 150+ emails:
+  - `search_email query="subject:debit after:2026/02/01" max_results=20`
+  - `search_email query="subject:(transaction alert) after:2026/02/01" max_results=20`
+  - `search_email query="from:icici OR from:hdfc OR from:sbi after:2026/02/01" max_results=20`
+  - `search_email query="subject:(UPI payment) after:2026/02/01" max_results=20`
+- Read each search result batch (20-25 emails) → extract spending data → move to next query
 - Query examples: `from:alice@example.com`, `subject:invoice`, `has:attachment`, `is:unread after:2024/01/01`, `label:Work`
 
 **Before sending anything:**
@@ -64,9 +69,18 @@ search_email                                     archive_email
 - Keep summaries concise: "From Priya: asking about the Q3 report deadline"
 - For long threads, summarize the most recent message and note the thread length.
 
-## Parallel Reads
+## Batched Reads
 
-When reading multiple emails, call `read_gmail` in parallel (up to 25 concurrent). This is safe and dramatically faster than sequential reads. For bulk operations like marking 50 emails as read, batch in groups of 25.
+When reading multiple emails, process them in batches of **20-25 per iteration**. Do NOT call read_gmail for 100+ emails in a single turn — it will timeout and fail.
+
+**Pattern for large result sets:**
+1. Get list of message IDs (e.g., 150 results)
+2. Read first 20-25 in parallel → extract and summarize relevant data
+3. Read next 20-25 in parallel → add to running summary
+4. Continue until all processed or enough data collected
+5. Present final summary
+
+For tasks like "find my spending", you often don't need to read ALL emails. Read the first 25, check if you have enough data, and stop early if the pattern is clear. If not, continue with the next batch.
 
 ## Pagination
 
