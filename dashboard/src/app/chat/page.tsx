@@ -49,7 +49,9 @@ export default function ChatPage() {
 
 function ChatPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session, isPending } = useSession();
+  const sessionId = searchParams.get("s") || "";
 
   useEffect(() => {
     if (!isPending && !session) router.push("/");
@@ -57,16 +59,17 @@ function ChatPageInner() {
 
   if (isPending || !session) return null;
 
-  return <ChatView session={session} />;
+  // key={sessionId} forces full remount when session changes.
+  // This ensures useChat creates a fresh Chat instance with the
+  // correct transport for each session.
+  return <ChatView key={sessionId || "new"} session={session} sessionId={sessionId} />;
 }
 
-function ChatView({ session }: { session: { user: { id: string; name?: string | null } } }) {
+function ChatView({ session, sessionId: initialSessionId }: { session: { user: { id: string; name?: string | null } }; sessionId: string }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [input, setInput] = useState("");
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [sessionId, setSessionId] = useState(searchParams.get("s") || "");
-  const lastLoadedSession = useRef("");
+  const [loadingHistory, setLoadingHistory] = useState(!!initialSessionId);
+  const [sessionId, setSessionId] = useState(initialSessionId);
 
   const userId = session.user.id;
 
@@ -79,20 +82,13 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
     transport,
   });
 
-  // Load session messages when session ID changes
+  // Load session messages on mount
   useEffect(() => {
-    const sid = searchParams.get("s") || "";
-    if (sid === lastLoadedSession.current) return;
-    setSessionId(sid);
-    lastLoadedSession.current = sid;
-
-    if (!sid) {
-      setMessages([]);
+    if (!initialSessionId) {
+      setLoadingHistory(false);
       return;
     }
-
-    setLoadingHistory(true);
-    getChatSession(sid)
+    getChatSession(initialSessionId)
       .then((res) => {
         const restored: UIMessage[] = [];
         for (const msg of res.messages || []) {
@@ -117,14 +113,12 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
               });
             }
           }
-          // tool_calls and tool results are part of the context but
-          // not displayed in restored history (they ran in the past)
         }
         setMessages(restored);
       })
-      .catch(() => setMessages([]))
+      .catch(() => {})
       .finally(() => setLoadingHistory(false));
-  }, [searchParams, setMessages]);
+  }, [initialSessionId, setMessages]);
 
   async function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
@@ -135,7 +129,6 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
       try {
         const newSess = await createChatSession(userId, text.slice(0, 60));
         setSessionId(newSess.id);
-        lastLoadedSession.current = newSess.id;
         router.replace(`/chat?s=${newSess.id}`, { scroll: false });
       } catch {
         // Continue without session — backend will auto-create
