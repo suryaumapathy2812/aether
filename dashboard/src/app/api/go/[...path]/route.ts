@@ -55,10 +55,12 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
     const responseHeaders = new Headers();
     const upstreamType = response.headers.get("content-type");
     if (upstreamType) responseHeaders.set("content-type", upstreamType);
-    if (upstreamType && upstreamType.toLowerCase().startsWith("text/event-stream")) {
+    const isSSE = upstreamType && upstreamType.toLowerCase().startsWith("text/event-stream");
+    if (isSSE) {
       responseHeaders.set("cache-control", "no-cache, no-transform");
       responseHeaders.set("connection", "keep-alive");
       responseHeaders.set("x-accel-buffering", "no");
+      responseHeaders.set("transfer-encoding", "chunked");
     }
     const location = response.headers.get("location");
     if (location) responseHeaders.set("location", location);
@@ -67,6 +69,36 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
     }
     const setCookie = response.headers.get("set-cookie");
     if (setCookie) responseHeaders.set("set-cookie", setCookie);
+
+    // For SSE responses, explicitly pipe through a TransformStream to ensure
+    // chunk-by-chunk delivery even when Next.js standalone mode runs edge
+    // routes on Node.js (which can buffer ReadableStream bodies).
+    if (isSSE && response.body) {
+      const { readable, writable } = new TransformStream();
+      const upstream = response.body;
+      const writer = writable.getWriter();
+
+      (async () => {
+        const reader = upstream.getReader();
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            await writer.write(value);
+          }
+        } catch {
+          // upstream closed
+        } finally {
+          try { writer.close(); } catch { /* already closed */ }
+        }
+      })();
+
+      return new Response(readable, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      });
+    }
 
     return new Response(response.body, {
       status: response.status,
