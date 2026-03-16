@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Fragment } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 import { useChat } from "@ai-sdk/react";
-import { getMemoryConversations } from "@/lib/api";
+import { getChatSession, createChatSession } from "@/lib/api";
 import { createAetherTransport } from "@/lib/aether-transport";
 import StatusOrb from "@/components/StatusOrb";
 import {
@@ -40,6 +40,14 @@ import { CopyIcon, Sparkles } from "lucide-react";
 import type { UIMessage } from "ai";
 
 export default function ChatPage() {
+  return (
+    <Suspense>
+      <ChatPageInner />
+    </Suspense>
+  );
+}
+
+function ChatPageInner() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
 
@@ -53,74 +61,87 @@ export default function ChatPage() {
 }
 
 function ChatView({ session }: { session: { user: { id: string; name?: string | null } } }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [input, setInput] = useState("");
-  const [loadingHistory, setLoadingHistory] = useState(true);
-  const historyLoadedRef = useRef(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [sessionId, setSessionId] = useState(searchParams.get("s") || "");
+  const lastLoadedSession = useRef("");
 
   const userId = session.user.id;
 
   const transport = useMemo(
-    () => createAetherTransport({ userId, sessionId: userId }),
-    [userId]
+    () => createAetherTransport({ userId, sessionId }),
+    [userId, sessionId]
   );
 
   const { messages, setMessages, sendMessage, status, error } = useChat({
     transport,
   });
 
+  // Load session messages when session ID changes
   useEffect(() => {
-    if (historyLoadedRef.current) return;
-    historyLoadedRef.current = true;
+    const sid = searchParams.get("s") || "";
+    if (sid === lastLoadedSession.current) return;
+    setSessionId(sid);
+    lastLoadedSession.current = sid;
 
-    async function loadTodayHistory(): Promise<void> {
-      try {
-        const uid = userId;
-        if (!uid) return;
-        const res = await getMemoryConversations(uid, 200);
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
-        const startSec = Math.floor(startOfToday.getTime() / 1000);
+    if (!sid) {
+      setMessages([]);
+      return;
+    }
 
-        const todayTurns = (res.conversations || [])
-          .filter((c) => (c.timestamp || 0) >= startSec)
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
+    setLoadingHistory(true);
+    getChatSession(sid)
+      .then((res) => {
         const restored: UIMessage[] = [];
-        for (const turn of todayTurns) {
-          const userText = (turn.user_message || "").trim();
-          const assistantText = (turn.assistant_message || "").trim();
-          if (userText) {
-            restored.push({
-              id: `hist-${turn.id}-user`,
-              role: "user",
-              parts: [{ type: "text", text: userText }],
-            });
+        for (const msg of res.messages || []) {
+          const content = msg.content as Record<string, unknown>;
+          const role = content.role as string;
+          if (role === "user") {
+            const text = (content.content as string) || "";
+            if (text.trim()) {
+              restored.push({
+                id: `msg-${msg.id}-user`,
+                role: "user",
+                parts: [{ type: "text", text }],
+              });
+            }
+          } else if (role === "assistant") {
+            const text = (content.content as string) || "";
+            if (text.trim()) {
+              restored.push({
+                id: `msg-${msg.id}-assistant`,
+                role: "assistant",
+                parts: [{ type: "text", text }],
+              });
+            }
           }
-          if (assistantText) {
-            restored.push({
-              id: `hist-${turn.id}-assistant`,
-              role: "assistant",
-              parts: [{ type: "text", text: assistantText }],
-            });
-          }
+          // tool_calls and tool results are part of the context but
+          // not displayed in restored history (they ran in the past)
         }
+        setMessages(restored);
+      })
+      .catch(() => setMessages([]))
+      .finally(() => setLoadingHistory(false));
+  }, [searchParams, setMessages]);
 
-        if (restored.length > 0) {
-          setMessages(restored);
-        }
+  async function handleSubmit(message: PromptInputMessage) {
+    const text = message.text?.trim();
+    if (!text) return;
+
+    // Auto-create session on first message if none exists
+    if (!sessionId) {
+      try {
+        const newSess = await createChatSession(userId, text.slice(0, 60));
+        setSessionId(newSess.id);
+        lastLoadedSession.current = newSess.id;
+        router.replace(`/chat?s=${newSess.id}`, { scroll: false });
       } catch {
-        // Ignore history load errors; chat should remain usable.
-      } finally {
-        setLoadingHistory(false);
+        // Continue without session — backend will auto-create
       }
     }
 
-    void loadTodayHistory();
-  }, [userId, setMessages]);
-
-  function handleSubmit(message: PromptInputMessage) {
-    const text = message.text?.trim();
-    if (!text) return;
     sendMessage({ text });
     setInput("");
   }
@@ -129,12 +150,10 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
 
   return (
     <div className="h-full flex flex-col">
-      {/* Status indicator */}
       <div className="absolute top-5 right-5 z-10">
         <StatusOrb status={isStreaming ? "thinking" : "connected"} size={8} />
       </div>
 
-      {/* Messages */}
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-[720px] mx-auto w-full">
           {loadingHistory ? (
@@ -227,7 +246,6 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
         </div>
       )}
 
-      {/* Input */}
       <div className="max-w-[720px] mx-auto w-full px-6 pb-5 pt-2">
         <PromptInput onSubmit={handleSubmit}>
           <PromptInputBody>

@@ -606,6 +606,48 @@ export async function uninstallPlugin(name: string) {
   return api(`/api/plugins/${name}`, { method: "DELETE" });
 }
 
+// ── Chat sessions ──
+
+export interface ChatSession {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listChatSessions(userId: string, limit = 50) {
+  return api<{ sessions: ChatSession[] }>(
+    `/v1/sessions?user_id=${encodeURIComponent(userId)}&limit=${limit}`
+  );
+}
+
+export async function createChatSession(userId: string, title = "New chat") {
+  return api<ChatSession>("/v1/sessions", {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, title }),
+  });
+}
+
+export async function getChatSession(sessionId: string) {
+  return api<{ session: ChatSession; messages: Array<{ id: number; content: Record<string, unknown> }> }>(
+    `/v1/sessions/${encodeURIComponent(sessionId)}`
+  );
+}
+
+export async function updateChatSessionTitle(sessionId: string, title: string) {
+  return api<ChatSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteChatSession(sessionId: string) {
+  return api<{ deleted: boolean }>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
 // ── Chat completions ──
 
 export interface ChatMessage {

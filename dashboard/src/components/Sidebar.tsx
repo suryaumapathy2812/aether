@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth-client";
 import { useShortcutsContext } from "@/components/KeyboardShortcutsProvider";
-import { getMemoryConversations } from "@/lib/api";
+import { listChatSessions, createChatSession, type ChatSession } from "@/lib/api";
 import {
   MessageCircle,
   Brain,
@@ -18,20 +18,17 @@ import {
   Plus,
 } from "lucide-react";
 
-interface ConversationItem {
-  id: number;
-  user_message: string;
-  timestamp: number;
-}
-
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session } = useSession();
   const { setSidebarToggle } = useShortcutsContext();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+
+  const activeSessionId = searchParams.get("s") || "";
 
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
 
@@ -39,21 +36,25 @@ export default function Sidebar() {
     setSidebarToggle(toggle);
   }, [toggle, setSidebarToggle]);
 
+  // Load sessions
   useEffect(() => {
     if (!session?.user?.id) return;
-    getMemoryConversations(session.user.id, 20)
-      .then((res) => {
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
-        const todaySec = Math.floor(startOfToday.getTime() / 1000);
-        const items = (res.conversations || [])
-          .filter((c: ConversationItem) => (c.timestamp || 0) >= todaySec && c.user_message?.trim())
-          .sort((a: ConversationItem, b: ConversationItem) => (b.timestamp || 0) - (a.timestamp || 0))
-          .slice(0, 12);
-        setConversations(items);
-      })
+    listChatSessions(session.user.id, 30)
+      .then((res) => setSessions(res.sessions || []))
       .catch(() => {});
-  }, [session?.user?.id]);
+  }, [session?.user?.id, pathname]);
+
+  async function handleNewChat() {
+    if (!session?.user?.id) return;
+    try {
+      const newSess = await createChatSession(session.user.id);
+      setSessions((prev) => [newSess, ...prev]);
+      router.push(`/chat?s=${newSess.id}`);
+    } catch {
+      router.push("/chat");
+    }
+    setMobileOpen(false);
+  }
 
   // Hide on login page
   if (pathname === "/") return null;
@@ -64,6 +65,21 @@ export default function Sidebar() {
     { href: "/memory", label: "Memory", icon: Brain },
     { href: "/account", label: "Settings", icon: Settings },
   ];
+
+  // Group sessions by date
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const weekAgo = new Date(today);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
+  const todaySessions = sessions.filter((s) => new Date(s.updated_at) >= today);
+  const yesterdaySessions = sessions.filter((s) => {
+    const d = new Date(s.updated_at);
+    return d >= yesterday && d < today;
+  });
+  const olderSessions = sessions.filter((s) => new Date(s.updated_at) < yesterday);
 
   const sidebarContent = (
     <div className="flex flex-col h-full">
@@ -85,14 +101,10 @@ export default function Sidebar() {
       {/* New Chat */}
       <div className="px-3 pb-2">
         <button
-          onClick={() => {
-            router.push("/chat");
-            setMobileOpen(false);
-          }}
+          onClick={handleNewChat}
           className={cn(
             "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
             "text-foreground/80 hover:bg-white/[0.06]",
-            pathname === "/chat" && "bg-white/[0.06]",
             collapsed && "justify-center px-0"
           )}
         >
@@ -101,26 +113,12 @@ export default function Sidebar() {
         </button>
       </div>
 
-      {/* Conversations */}
-      {!collapsed && conversations.length > 0 && (
+      {/* Sessions */}
+      {!collapsed && sessions.length > 0 && (
         <div className="flex-1 overflow-y-auto px-3 pt-2">
-          <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60 font-medium">
-            Today
-          </p>
-          <div className="space-y-0.5">
-            {conversations.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => {
-                  router.push("/chat");
-                  setMobileOpen(false);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-md text-[13px] text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04] transition-colors truncate"
-              >
-                {c.user_message.length > 40 ? c.user_message.slice(0, 40) + "..." : c.user_message}
-              </button>
-            ))}
-          </div>
+          <SessionGroup label="Today" sessions={todaySessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
+          <SessionGroup label="Yesterday" sessions={yesterdaySessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
+          <SessionGroup label="Previous" sessions={olderSessions} activeId={activeSessionId} onSelect={(id) => { router.push(`/chat?s=${id}`); setMobileOpen(false); }} />
         </div>
       )}
       {collapsed && <div className="flex-1" />}
@@ -171,15 +169,50 @@ export default function Sidebar() {
       <aside
         className={cn(
           "h-full shrink-0 bg-white/[0.02] border-r border-white/[0.06] transition-all duration-200",
-          // Desktop
           "hidden md:block",
           collapsed ? "w-[60px]" : "w-[240px]",
-          // Mobile
           mobileOpen && "!block fixed inset-y-0 left-0 z-50 w-[260px] bg-[#111111]"
         )}
       >
         {sidebarContent}
       </aside>
     </>
+  );
+}
+
+function SessionGroup({
+  label,
+  sessions,
+  activeId,
+  onSelect,
+}: {
+  label: string;
+  sessions: ChatSession[];
+  activeId: string;
+  onSelect: (id: string) => void;
+}) {
+  if (sessions.length === 0) return null;
+  return (
+    <div className="mb-3">
+      <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/50 font-medium">
+        {label}
+      </p>
+      <div className="space-y-0.5">
+        {sessions.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => onSelect(s.id)}
+            className={cn(
+              "w-full text-left px-3 py-1.5 rounded-md text-[13px] transition-colors truncate",
+              s.id === activeId
+                ? "text-foreground bg-white/[0.06]"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+            )}
+          >
+            {s.title || "New chat"}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
