@@ -6,6 +6,7 @@ import SessionSync from "@/components/SessionSync";
 import NotificationProvider from "@/components/NotificationProvider";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
 import Sidebar from "@/components/Sidebar";
+import KeyboardShortcutsProvider from "@/components/KeyboardShortcutsProvider";
 import { UIPreferencesProvider } from "@/lib/ui-preferences";
 import "./globals.css";
 
@@ -46,12 +47,14 @@ export default function RootLayout({
             <SessionSync />
             <ServiceWorkerRegistrar />
             <NotificationProvider>
-              <div className="app-layout">
-                <Sidebar />
-                <main className="flex-1 min-w-0 h-full overflow-hidden">
-                  {children}
-                </main>
-              </div>
+              <KeyboardShortcutsProvider>
+                <div className="app-layout">
+                  <Sidebar />
+                  <main className="flex-1 min-w-0 h-full overflow-hidden">
+                    {children}
+                  </main>
+                </div>
+              </KeyboardShortcutsProvider>
             </NotificationProvider>
             <Toaster />
           </TooltipProvider>

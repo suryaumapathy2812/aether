@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth-client";
+import { useShortcutsContext } from "@/components/KeyboardShortcutsProvider";
 import { getMemoryConversations } from "@/lib/api";
 import {
   MessageCircle,
@@ -26,9 +27,16 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
+  const { setSidebarToggle } = useShortcutsContext();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+
+  const toggle = useCallback(() => setCollapsed((c) => !c), []);
+
+  useEffect(() => {
+    setSidebarToggle(toggle);
+  }, [toggle, setSidebarToggle]);
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -65,7 +73,7 @@ export default function Sidebar() {
           </Link>
         )}
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={toggle}
           className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/[0.04] transition-colors"
         >
           {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
