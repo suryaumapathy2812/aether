@@ -10,6 +10,8 @@ type SessionState = {
   error: string | null;
   loaded: boolean;
   loading: boolean;
+  loopState: string | null;
+  loopReason: string | null;
 };
 
 type NormalizedGlobalEvent =
@@ -61,6 +63,7 @@ type SessionAction =
       failed: boolean;
     }
   | { type: "session-status"; status: SessionStatus }
+  | { type: "loop-state-update"; loopState: string; loopReason: string }
   | { type: "message-upsert-from-event"; messageID: string; role: "assistant" | "user"; text?: string }
   | { type: "message-remove"; messageID: string }
   | { type: "part-upsert-delta"; messageID: string; partID: string; delta?: string; text?: string }
@@ -213,12 +216,14 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     case "history-error":
       return { ...current, loading: false, error: action.error, status: "error" };
     case "stream-start":
-      return { ...current, loaded: true, loading: false, status: "streaming", error: null };
+      return { ...current, loaded: true, loading: false, status: "streaming", error: null, loopState: null, loopReason: null };
     case "stream-end":
       return {
         ...current,
         status: current.status === "error" ? "error" : "idle",
         error: current.status === "error" ? current.error : null,
+        loopState: null,
+        loopReason: null,
       };
     case "stream-error":
       return { ...current, status: "error", error: action.error };
@@ -303,6 +308,8 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     }
     case "session-status":
       return { ...current, status: action.status };
+    case "loop-state-update":
+      return { ...current, loopState: action.loopState, loopReason: action.loopReason };
     case "message-upsert-from-event": {
       const idx = current.messages.findIndex((message) => message.id === action.messageID);
       if (idx === -1) {
@@ -395,6 +402,8 @@ class ChatRuntimeStore {
       error: null,
       loaded: false,
       loading: false,
+      loopState: null,
+      loopReason: null,
     };
     this.sessions.set(sessionId, created);
     this.statusMapDirty = true;
@@ -415,6 +424,8 @@ class ChatRuntimeStore {
     error: null,
     loaded: false,
     loading: false,
+    loopState: null,
+    loopReason: null,
   };
 
   getSnapshot = (sessionId: string): SessionSnapshot => {
@@ -569,6 +580,14 @@ class ChatRuntimeStore {
         errorText: typeof event.errorText === "string" ? event.errorText : undefined,
         failed: eventType === "tool-output-error",
       });
+      return;
+    }
+    if (eventType === "loop-state") {
+      const loopState = typeof event.state === "string" ? event.state : "";
+      const loopReason = typeof event.reason === "string" ? event.reason : "";
+      if (loopState) {
+        this.dispatch(sessionId, { type: "loop-state-update", loopState, loopReason });
+      }
       return;
     }
     if (eventType === "error") {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -212,7 +213,11 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		msg := buildHTTPStatusErrorMessage(t.manifest.DisplayName, resp.StatusCode, body)
-		return tools.Fail(msg, nil)
+		metadata := map[string]any{}
+		if retryAfterMs := parseRetryAfterHeader(resp); retryAfterMs > 0 {
+			metadata["retry_after_ms"] = retryAfterMs
+		}
+		return tools.Fail(msg, metadata)
 	}
 
 	// 7. Handle no-content responses.
@@ -615,6 +620,37 @@ func stringArg(args map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func parseRetryAfterHeader(resp *http.Response) int64 {
+	if resp == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	// Try as seconds (integer).
+	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil && secs > 0 {
+		if secs > 30 {
+			secs = 30
+		}
+		return secs * 1000
+	}
+	// Try as HTTP-date.
+	for _, layout := range []string{time.RFC1123, time.RFC850, "Mon Jan _2 15:04:05 2006"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			delayMs := time.Until(t).Milliseconds()
+			if delayMs <= 0 {
+				return 0
+			}
+			if delayMs > 30000 {
+				delayMs = 30000
+			}
+			return delayMs
+		}
+	}
+	return 0
 }
 
 func escapeSingleQuote(value string) string {

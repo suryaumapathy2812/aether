@@ -68,7 +68,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
   const creatingSessionRef = useRef(false);
 
   const userId = session.user.id;
-  const { messages, status, error, loading } = useChatSessionRuntime(sessionId);
+  const { messages, status, error, loading, loopState } = useChatSessionRuntime(sessionId);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -109,9 +109,20 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
   const isStreaming = status === "streaming";
 
+  const loopLabel = isStreaming && loopState && loopState !== "running" && loopState !== "stopped"
+    ? loopState === "retrying" ? "retrying..."
+    : loopState === "recovering" ? "recovering..."
+    : loopState === "blocked" ? "blocked"
+    : loopState === "compacting" ? "compacting context..."
+    : null
+    : null;
+
   return (
     <div className="h-full flex flex-col">
-      <div className="absolute top-5 right-5 z-10">
+      <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
+        {loopLabel && (
+          <span className="text-[10px] text-muted-foreground/60 animate-pulse">{loopLabel}</span>
+        )}
         <StatusOrb status={isStreaming ? "thinking" : "connected"} size={8} />
       </div>
 

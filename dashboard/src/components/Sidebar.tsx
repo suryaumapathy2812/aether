@@ -31,7 +31,7 @@ import {
   Brain,
   Zap,
   Smartphone,
-  Settings,
+  Sparkles,
   PanelLeftClose,
   PanelLeft,
   Plus,
@@ -40,6 +40,7 @@ import {
   Archive,
   Trash2,
 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { chatRuntime, useChatStatusMap } from "@/lib/chat-runtime";
 
 export default function Sidebar() {
@@ -137,11 +138,11 @@ function SidebarInner() {
 
   if (pathname === "/") return null;
 
-  const navItems = [
-    { href: "/plugins", label: "Plugins", icon: Zap },
+  const topNavItems = [
     { href: "/devices", label: "Devices", icon: Smartphone },
     { href: "/memory", label: "Memory", icon: Brain },
-    { href: "/account", label: "Settings", icon: Settings },
+    { href: "/plugins", label: "Plugins", icon: Zap },
+    { href: "/skills", label: "Skills", icon: Sparkles },
   ];
 
   const today = new Date();
@@ -335,25 +336,9 @@ function SidebarInner() {
             </Tooltip>
           </div>
 
-          {/* Sessions */}
-          {!collapsed && sessions.length > 0 && (
-            <div className="flex-1 overflow-y-auto px-3 pt-2">
-              {renderGroup("Today", todaySessions)}
-              {renderGroup("Yesterday", yesterdaySessions)}
-              {renderGroup("Previous", olderSessions)}
-            </div>
-          )}
-          {collapsed && (
-            <div className="flex-1 overflow-y-auto px-3 pt-2">
-              <div className="space-y-1.5">
-                {sessions.slice(0, 12).map(renderCollapsedSession)}
-              </div>
-            </div>
-          )}
-
-          {/* Nav */}
-          <div className="mt-auto border-t border-white/[0.06] px-3 py-3 space-y-0.5">
-            {navItems.map((item) => (
+          {/* Top Nav */}
+          <div className={cn("px-3 pb-2 space-y-0.5", collapsed && "flex flex-col items-center")}>
+            {topNavItems.map((item) => (
               <Tooltip key={item.href}>
                 <TooltipTrigger asChild>
                   <Link
@@ -375,6 +360,59 @@ function SidebarInner() {
                 {collapsed && <TooltipContent side="right">{item.label}</TooltipContent>}
               </Tooltip>
             ))}
+          </div>
+
+          {/* Sessions */}
+          {!collapsed && sessions.length > 0 && (
+            <div className="flex-1 overflow-y-auto px-3 pt-2">
+              {renderGroup("Today", todaySessions)}
+              {renderGroup("Yesterday", yesterdaySessions)}
+              {renderGroup("Previous", olderSessions)}
+            </div>
+          )}
+          {collapsed && (
+            <div className="flex-1 overflow-y-auto px-3 pt-2">
+              <div className="space-y-1.5">
+                {sessions.slice(0, 12).map(renderCollapsedSession)}
+              </div>
+            </div>
+          )}
+
+          {/* Profile */}
+          <div className="mt-auto border-t border-white/[0.06] px-3 py-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Link
+                  href="/account"
+                  onClick={() => setMobileOpen(false)}
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
+                    pathname.startsWith("/account")
+                      ? "text-foreground/90 bg-white/[0.06]"
+                      : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+                    collapsed && "justify-center px-0"
+                  )}
+                  aria-label="Profile"
+                >
+                  <Avatar size="sm">
+                    {session?.user?.image && (
+                      <AvatarImage src={session.user.image} alt={session?.user?.name || ""} />
+                    )}
+                    <AvatarFallback>
+                      {(session?.user?.name || session?.user?.email || "U").charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  {!collapsed && (
+                    <span className="truncate">{session?.user?.name || "Profile"}</span>
+                  )}
+                </Link>
+              </TooltipTrigger>
+              {collapsed && (
+                <TooltipContent side="right">
+                  {session?.user?.name || "Profile"}
+                </TooltipContent>
+              )}
+            </Tooltip>
           </div>
         </div>
       </aside>

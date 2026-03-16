@@ -183,7 +183,12 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			toolRetryBaseDelayMs = 50
 		}
 
+		contextWindowLimit := policyInt(env.Policy, "context_window_limit", 100000)
+		compactThreshold := policyFloat(env.Policy, "context_compact_threshold", 0.8)
+
 		for iteration := 0; iteration < maxIter; iteration++ {
+			env.Messages = c.compactIfNeeded(ctx, env, out, &seq, contextWindowLimit, compactThreshold)
+
 			seq++
 			out <- NewEvent(env.RequestID, env.JobID, EventStartStep, seq, nil)
 
@@ -266,6 +271,8 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": streamErr.Error()})
 				return
 			}
+
+			pendingToolCalls = c.repairToolCalls(env, pendingToolCalls)
 
 			if len(pendingToolCalls) == 0 {
 				if pendingRecovery && remainingRecovery > 0 {
@@ -538,6 +545,200 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func (c *Core) repairToolCalls(env LLMRequestEnvelope, calls []providers.LLMToolCall) []providers.LLMToolCall {
+	if len(calls) == 0 || c.orchestrator == nil {
+		return calls
+	}
+	toolNames := c.orchestrator.ToolNames()
+	nameIndex := map[string]string{}
+	for _, name := range toolNames {
+		nameIndex[strings.ToLower(strings.TrimSpace(name))] = name
+	}
+
+	repaired := make([]providers.LLMToolCall, 0, len(calls))
+	for _, tc := range calls {
+		tc.Name = strings.TrimSpace(tc.Name)
+
+		// 1. Exact match — no repair needed.
+		if _, ok := nameIndex[strings.ToLower(tc.Name)]; ok {
+			tc.Name = nameIndex[strings.ToLower(tc.Name)]
+			repaired = append(repaired, tc)
+			continue
+		}
+
+		// 2. Case-insensitive match (LLM says "World_Time", registry has "world_time").
+		lower := strings.ToLower(tc.Name)
+		if canonical, ok := nameIndex[lower]; ok {
+			tc.Name = canonical
+			repaired = append(repaired, tc)
+			continue
+		}
+
+		// 3. Plugin-prefixed match (LLM says "google_calendar_upcoming_events", registry has "upcoming_events").
+		matched := false
+		for lowered, canonical := range nameIndex {
+			if strings.HasSuffix(lower, "_"+lowered) || strings.HasSuffix(lower, "."+lowered) {
+				tc.Name = canonical
+				repaired = append(repaired, tc)
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+
+		// 4. Underscore/hyphen normalization (LLM says "web-search", registry has "web_search").
+		normalized := strings.ReplaceAll(lower, "-", "_")
+		if canonical, ok := nameIndex[normalized]; ok {
+			tc.Name = canonical
+			repaired = append(repaired, tc)
+			continue
+		}
+
+		// 5. No match found — pass through unchanged (orchestrator will return "Unknown tool" error).
+		repaired = append(repaired, tc)
+	}
+
+	// Strip unknown args for each repaired call.
+	for i, tc := range repaired {
+		def := c.orchestrator.DefinitionForTool(tc.Name)
+		if def == nil || len(def.Parameters) == 0 {
+			continue
+		}
+		knownParams := map[string]bool{}
+		for _, p := range def.Parameters {
+			knownParams[p.Name] = true
+		}
+		cleaned := map[string]any{}
+		for key, val := range tc.Arguments {
+			if knownParams[key] {
+				cleaned[key] = val
+			}
+		}
+		// Fill missing required params with defaults.
+		for _, p := range def.Parameters {
+			if _, ok := cleaned[p.Name]; !ok && p.Default != nil {
+				cleaned[p.Name] = p.Default
+			}
+		}
+		repaired[i].Arguments = cleaned
+	}
+
+	return repaired
+}
+
+const loopStateCompacting = "compacting"
+
+func estimateTokenCount(messages []map[string]any) int {
+	total := 0
+	for _, msg := range messages {
+		content, _ := msg["content"].(string)
+		total += len(content) / 4
+		if calls, ok := msg["tool_calls"]; ok {
+			b, _ := json.Marshal(calls)
+			total += len(b) / 4
+		}
+	}
+	return total
+}
+
+func (c *Core) compactIfNeeded(ctx context.Context, env LLMRequestEnvelope, out chan<- LLMEventEnvelope, seq *int, windowLimit int, threshold float64) []map[string]any {
+	if c.provider == nil || windowLimit <= 0 || threshold <= 0 {
+		return env.Messages
+	}
+	estimated := estimateTokenCount(env.Messages)
+	limit := int(float64(windowLimit) * threshold)
+	if estimated <= limit {
+		return env.Messages
+	}
+
+	// Keep system messages and last 4 turns. Summarize everything in between.
+	var systemMsgs []map[string]any
+	var middle []map[string]any
+	var tail []map[string]any
+
+	for _, msg := range env.Messages {
+		role, _ := msg["role"].(string)
+		if role == "system" {
+			systemMsgs = append(systemMsgs, msg)
+		} else {
+			middle = append(middle, msg)
+		}
+	}
+
+	keepTail := 4
+	if len(middle) <= keepTail+2 {
+		return env.Messages
+	}
+
+	tail = middle[len(middle)-keepTail:]
+	toSummarize := middle[:len(middle)-keepTail]
+
+	emitLoopState(out, env, seq, loopStateCompacting, "context_overflow")
+
+	var summaryBuf strings.Builder
+	for _, msg := range toSummarize {
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		summaryBuf.WriteString(role)
+		summaryBuf.WriteString(": ")
+		if len(content) > 200 {
+			summaryBuf.WriteString(content[:200])
+			summaryBuf.WriteString("...")
+		} else {
+			summaryBuf.WriteString(content)
+		}
+		summaryBuf.WriteString("\n")
+	}
+
+	summaryPrompt := []map[string]any{
+		{"role": "system", "content": "Summarize the following conversation excerpt in 2-3 sentences. Preserve key facts, decisions, and tool outcomes. Be concise."},
+		{"role": "user", "content": summaryBuf.String()},
+	}
+
+	summaryOpts := providers.GenerateOptions{
+		Messages:    summaryPrompt,
+		Tools:       nil,
+		Model:       policyString(env.Policy, "model"),
+		MaxTokens:   300,
+		Temperature: 0.0,
+	}
+
+	summaryText := ""
+	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	stream, err := c.provider.StreamWithTools(summaryCtx, summaryOpts)
+	if err == nil {
+		var sb strings.Builder
+		for ev := range stream {
+			if ev.Type == providers.EventToken {
+				sb.WriteString(ev.Content)
+			}
+		}
+		summaryText = strings.TrimSpace(sb.String())
+	}
+
+	if summaryText == "" {
+		return env.Messages
+	}
+
+	compactedMsg := map[string]any{
+		"role":    "system",
+		"content": "[Compacted conversation summary]\n" + summaryText,
+	}
+
+	result := make([]map[string]any, 0, len(systemMsgs)+1+len(tail))
+	result = append(result, systemMsgs...)
+	result = append(result, compactedMsg)
+	result = append(result, tail...)
+	return result
+}
+
 func emitLoopState(out chan<- LLMEventEnvelope, env LLMRequestEnvelope, seq *int, state, reason string) {
 	*seq = *seq + 1
 	payload := map[string]any{"state": state}
@@ -658,7 +859,19 @@ func (c *Core) executeToolWithRetry(ctx context.Context, call providers.LLMToolC
 			result.Metadata["retry_count"] = attempt - 1
 			return result
 		}
-		if !sleepWithContext(ctx, toolRetryDelay(baseDelay, attempt)) {
+		delay := toolRetryDelay(baseDelay, attempt)
+		if retryAfterMs, ok := result.Metadata["retry_after_ms"]; ok {
+			if ms, isNum := retryAfterMs.(int64); isNum && ms > 0 {
+				serverDelay := time.Duration(ms) * time.Millisecond
+				if serverDelay > 30*time.Second {
+					serverDelay = 30 * time.Second
+				}
+				if serverDelay > delay {
+					delay = serverDelay
+				}
+			}
+		}
+		if !sleepWithContext(ctx, delay) {
 			return tools.Fail("Tool retry aborted", map[string]any{"retry_count": attempt - 1})
 		}
 	}

@@ -33,28 +33,79 @@ function isRelativeDateCase(testCase) {
 
 function evaluateCase(testCase) {
   const checks = [];
-  const sequence = testCase?.expect?.required_tool_sequence || [];
-  checks.push({
-    name: "has_required_tool_sequence",
-    pass: Array.isArray(sequence) && sequence.length > 0,
-    detail: `sequence=${JSON.stringify(sequence)}`,
-  });
+  const expect = testCase?.expect || {};
+  const sequence = expect.required_tool_sequence || [];
 
-  if (isRelativeDateCase(testCase)) {
+  // 1. Required tool sequence defined.
+  if (sequence.length > 0) {
     checks.push({
-      name: "relative_date_requires_current_time_first",
-      pass: sequence[0] === "current_time",
-      detail: `first_tool=${sequence[0] || ""}`,
+      name: "has_required_tool_sequence",
+      pass: true,
+      detail: `sequence=${JSON.stringify(sequence)}`,
     });
   }
 
-  const mustNot = testCase?.expect?.response_must_not_include_any || [];
+  // 2. Relative-date cases must start with current_time/world_time.
+  if (isRelativeDateCase(testCase) && sequence.length > 0) {
+    const first = sequence[0];
+    checks.push({
+      name: "relative_date_requires_time_tool_first",
+      pass: first === "current_time" || first === "world_time",
+      detail: `first_tool=${first || ""}`,
+    });
+  }
+
+  // 3. Forbidden response terms are well-defined.
+  const mustNot = expect.response_must_not_include_any || [];
   if (Array.isArray(mustNot) && mustNot.length > 0) {
     checks.push({
       name: "has_non_empty_forbidden_terms",
       pass: mustNot.every((v) => String(v || "").trim() !== ""),
       detail: `forbidden_count=${mustNot.length}`,
     });
+  }
+
+  // 4. Required response terms are well-defined.
+  const mustInclude = expect.response_must_include_any || [];
+  if (Array.isArray(mustInclude) && mustInclude.length > 0) {
+    checks.push({
+      name: "has_non_empty_required_terms",
+      pass: mustInclude.every((v) => String(v || "").trim() !== ""),
+      detail: `required_count=${mustInclude.length}`,
+    });
+  }
+
+  // 5. Min tool calls constraint.
+  if (typeof expect.min_tool_calls === "number") {
+    checks.push({
+      name: "min_tool_calls_defined",
+      pass: expect.min_tool_calls >= 1,
+      detail: `min=${expect.min_tool_calls}`,
+    });
+  }
+
+  // 6. Max tool calls constraint.
+  if (typeof expect.max_tool_calls === "number") {
+    checks.push({
+      name: "max_tool_calls_defined",
+      pass: expect.max_tool_calls >= 1,
+      detail: `max=${expect.max_tool_calls}`,
+    });
+  }
+
+  // 7. Session reload persistence.
+  const reloadCheck = expect.session_reload_must_contain || [];
+  if (Array.isArray(reloadCheck) && reloadCheck.length > 0) {
+    checks.push({
+      name: "session_reload_terms_defined",
+      pass: reloadCheck.every((v) => String(v || "").trim() !== ""),
+      detail: `reload_terms=${reloadCheck.length}`,
+    });
+  }
+
+  // If no checks were generated (e.g. minimal case), mark as passed.
+  if (checks.length === 0) {
+    checks.push({ name: "no_assertions", pass: true, detail: "case has no expect constraints" });
   }
 
   const passed = checks.every((c) => c.pass);

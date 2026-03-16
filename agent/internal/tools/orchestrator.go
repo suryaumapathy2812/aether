@@ -23,6 +23,25 @@ func NewOrchestrator(registry *Registry, runtime ExecContext) *Orchestrator {
 	return &Orchestrator{registry: registry, runtime: runtime}
 }
 
+func (o *Orchestrator) ToolNames() []string {
+	if o == nil || o.registry == nil {
+		return nil
+	}
+	return o.registry.ToolNames()
+}
+
+func (o *Orchestrator) DefinitionForTool(name string) *Definition {
+	if o == nil || o.registry == nil {
+		return nil
+	}
+	t, ok := o.registry.Get(name)
+	if !ok {
+		return nil
+	}
+	def := t.Definition()
+	return &def
+}
+
 func (o *Orchestrator) Execute(ctx context.Context, toolName string, args map[string]any, callID string) Result {
 	execCtx := o.runtime
 	if pluginName := o.registry.PluginForTool(toolName); pluginName != "" && execCtx.Store != nil {
