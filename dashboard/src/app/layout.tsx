@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -48,9 +49,11 @@ export default function RootLayout({
             <ServiceWorkerRegistrar />
             <NotificationProvider>
               <KeyboardShortcutsProvider>
-                <div className="app-layout">
+              <div className="app-layout">
+                <Suspense>
                   <Sidebar />
-                  <main className="flex-1 min-w-0 h-full overflow-hidden">
+                </Suspense>
+                <main className="flex-1 min-w-0 h-full overflow-hidden">
                     {children}
                   </main>
                 </div>
