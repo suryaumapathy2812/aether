@@ -62,6 +62,7 @@ tools:
         required: false
         default: root
         description: Folder ID (default is root)
+        map_to: query.folder_id
       - name: max_results
         type: integer
         required: false
@@ -105,6 +106,7 @@ tools:
         type: string
         required: false
         default: root
+        map_to: body.parent_id
     response:
       success_msg: Folder created.
 

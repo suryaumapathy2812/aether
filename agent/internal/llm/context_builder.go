@@ -51,7 +51,7 @@ func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, 
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
-	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly."
+	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly.\n- For relative-date calendar requests (today/tomorrow/this week/next weekday), call world_time first before calendar tools.\n- Never ask the user to confirm the current date when world_time is available."
 	b.systemPrompt = basePrompt
 	return b
 }
@@ -155,7 +155,7 @@ func (b *ContextBuilder) ReloadSystemPrompt() string {
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
-	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly."
+	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly.\n- For relative-date calendar requests (today/tomorrow/this week/next weekday), call world_time first before calendar tools.\n- Never ask the user to confirm the current date when world_time is available."
 
 	b.mu.Lock()
 	b.systemPrompt = basePrompt

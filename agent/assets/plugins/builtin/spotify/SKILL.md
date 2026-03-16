@@ -9,7 +9,7 @@ Playing a specific song requires searching first to get the Spotify URI, then qu
 ```
 "Play [song]"  →  search_spotify → queue_track → skip_track (to jump to it)
 "What's playing?" → now_playing
-"Pause" / "Resume" → play_pause
+"Pause" / "Resume" → play_pause (action="pause" or action="play")
 "Next" / "Skip" → skip_track
 "What did I listen to?" → recent_tracks
 ```

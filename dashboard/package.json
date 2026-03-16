@@ -8,7 +8,10 @@
     "start": "next start",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "eval:run": "node scripts/evals/run.js",
+    "eval:diff": "node scripts/evals/diff.js",
+    "eval:gate": "node scripts/evals/gate.js"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.93",

@@ -16,6 +16,11 @@ import (
 
 const DefaultMaxToolIterations = 500
 
+const (
+	policyWorldTimeToolName      = "world_time"
+	policyUpcomingEventsToolName = "upcoming_events"
+)
+
 func randomPartID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
@@ -227,6 +232,20 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": streamErr.Error()})
 				return
+			}
+
+			pendingToolCalls = c.applyDeterministicToolPolicies(env, pendingToolCalls)
+
+			if len(pendingToolCalls) == 0 {
+				if retryCall, instruction, ok := c.validateFinalAssistantResponse(env, assistantText.String()); ok {
+					if strings.TrimSpace(instruction) != "" {
+						env.Messages = append(env.Messages, map[string]any{
+							"role":    "system",
+							"content": instruction,
+						})
+					}
+					pendingToolCalls = append(pendingToolCalls, retryCall)
+				}
 			}
 
 			if len(pendingToolCalls) == 0 {
@@ -465,6 +484,179 @@ func isRetryableProviderError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") || strings.Contains(msg, "timeout") || strings.Contains(msg, "temporar") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "503") || strings.Contains(msg, "502") || strings.Contains(msg, "504") || strings.Contains(msg, "overloaded") {
 		return true
+	}
+	return false
+}
+
+func (c *Core) applyDeterministicToolPolicies(env LLMRequestEnvelope, pending []providers.LLMToolCall) []providers.LLMToolCall {
+	if len(pending) == 0 {
+		return pending
+	}
+	userText := strings.ToLower(strings.TrimSpace(LatestUserMessageText(env.Messages)))
+	if !isRelativeDateIntent(userText) {
+		return pending
+	}
+	if !hasToolNamed(pending, policyUpcomingEventsToolName) {
+		return pending
+	}
+	if !toolAvailable(env.Tools, policyWorldTimeToolName) {
+		return pending
+	}
+	if hasToolBeenCalled(env.Messages, policyWorldTimeToolName) || hasToolNamed(pending, policyWorldTimeToolName) {
+		return pending
+	}
+	worldTimeCall := providers.LLMToolCall{
+		ID:   "policy-world-time-" + randomPartID(),
+		Name: policyWorldTimeToolName,
+		Arguments: map[string]any{
+			"timezone": inferPolicyTimezone(env.Policy),
+		},
+	}
+	return append([]providers.LLMToolCall{worldTimeCall}, pending...)
+}
+
+func (c *Core) validateFinalAssistantResponse(env LLMRequestEnvelope, assistantText string) (providers.LLMToolCall, string, bool) {
+	text := strings.ToLower(strings.TrimSpace(assistantText))
+	if text == "" {
+		return providers.LLMToolCall{}, "", false
+	}
+	if !isCalendarIntent(strings.ToLower(strings.TrimSpace(LatestUserMessageText(env.Messages)))) {
+		return providers.LLMToolCall{}, "", false
+	}
+	if !toolAvailable(env.Tools, policyWorldTimeToolName) || hasToolBeenCalled(env.Messages, policyWorldTimeToolName) {
+		return providers.LLMToolCall{}, "", false
+	}
+	if !asksForCurrentDateConfirmation(text) {
+		return providers.LLMToolCall{}, "", false
+	}
+	return providers.LLMToolCall{
+		ID:   "policy-world-time-retry-" + randomPartID(),
+		Name: policyWorldTimeToolName,
+		Arguments: map[string]any{
+			"timezone": inferPolicyTimezone(env.Policy),
+		},
+	}, "Do not ask the user to confirm the current date or time when the world_time tool is available. Call world_time first, then continue answering using tool outputs.", true
+}
+
+func hasToolNamed(calls []providers.LLMToolCall, name string) bool {
+	for _, call := range calls {
+		if strings.EqualFold(strings.TrimSpace(call.Name), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolAvailable(toolsSchema []map[string]any, name string) bool {
+	for _, tool := range toolsSchema {
+		fn, ok := tool["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		toolName, _ := fn["name"].(string)
+		if strings.EqualFold(strings.TrimSpace(toolName), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolBeenCalled(messages []map[string]any, toolName string) bool {
+	needle := strings.TrimSpace(strings.ToLower(toolName))
+	for _, msg := range messages {
+		callsRaw, ok := msg["tool_calls"]
+		if !ok {
+			continue
+		}
+		switch calls := callsRaw.(type) {
+		case []map[string]any:
+			for _, call := range calls {
+				if callFunctionName(call) == needle {
+					return true
+				}
+			}
+		case []any:
+			for _, item := range calls {
+				call, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if callFunctionName(call) == needle {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func callFunctionName(call map[string]any) string {
+	fn, ok := call["function"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := fn["name"].(string)
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+func inferPolicyTimezone(policy map[string]any) string {
+	if policy != nil {
+		for _, key := range []string{"timezone", "user_timezone", "tz"} {
+			if v, ok := policy[key].(string); ok {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return "Asia/Kolkata"
+}
+
+func isRelativeDateIntent(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	if strings.Contains(t, "tomorrow") || strings.Contains(t, "today") || strings.Contains(t, "this week") || strings.Contains(t, "next week") {
+		return true
+	}
+	if strings.Contains(t, "next ") {
+		for _, day := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
+			if strings.Contains(t, "next "+day) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isCalendarIntent(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	if strings.Contains(t, "calendar") || strings.Contains(t, "schedule") || strings.Contains(t, "event") {
+		return true
+	}
+	return isRelativeDateIntent(t)
+}
+
+func asksForCurrentDateConfirmation(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	phrases := []string{
+		"confirm the current date",
+		"what is the current date",
+		"please confirm the date",
+		"could you please confirm the current date",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(t, phrase) {
+			return true
+		}
 	}
 	return false
 }

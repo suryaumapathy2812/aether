@@ -37,8 +37,8 @@ tools:
       - name: action
         type: string
         required: false
-        default: toggle
-        description: "play, pause, or toggle"
+        default: play
+        description: "play or pause"
 
   - name: skip_track
     description: Skip to next track on Spotify.

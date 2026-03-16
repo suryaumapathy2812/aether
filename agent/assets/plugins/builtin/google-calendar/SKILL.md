@@ -37,6 +37,7 @@ get_event (if more detail needed)   create_event
 - Keep event summaries concise: "Team standup at 10:00 AM - 10:30 AM"
 - Group multi-day schedules by day.
 - Mention location and conferencing links when present and relevant.
+- For date-bound requests ("today", "tomorrow", "this week"), only mention events that fall inside the requested window. Do not mention recurring instances outside that window.
 - If no events found: "Your calendar is clear for that period."
 
 ## Pagination

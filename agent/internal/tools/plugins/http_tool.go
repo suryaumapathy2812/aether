@@ -50,6 +50,7 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	// 1. Build URL from base + path with template substitution.
 	baseURL := strings.TrimRight(t.manifest.API.BaseURL, "/")
 	path := t.toolDef.HTTP.Path
+	method := strings.ToUpper(t.toolDef.HTTP.Method)
 
 	// Collect params by mapping target.
 	queryParams := url.Values{}
@@ -83,7 +84,6 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 				mapTo = "path." + paramDef.Name
 			} else {
 				// Default: body for POST/PUT/PATCH, query for GET/DELETE.
-				method := strings.ToUpper(t.toolDef.HTTP.Method)
 				if method == "POST" || method == "PUT" || method == "PATCH" {
 					mapTo = "body." + paramDef.Name
 				} else {
@@ -107,6 +107,8 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 		}
 	}
 
+	normalizeToolRequest(t.pluginName, t.toolDef.Name, call.Args, queryParams, bodyFields, &method, &path)
+
 	// Apply transform if specified (for complex request building like MIME email).
 	if t.toolDef.Transform != "" {
 		transformed, err := applyTransform(t.toolDef.Transform, call.Args, bodyFields)
@@ -123,7 +125,6 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	}
 
 	// Build request body.
-	method := strings.ToUpper(t.toolDef.HTTP.Method)
 	var reqBody io.Reader
 	if len(bodyFields) > 0 && (method == "POST" || method == "PUT" || method == "PATCH") {
 		b, _ := json.Marshal(bodyFields)
@@ -237,6 +238,9 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 		var obj map[string]any
 		if err := json.Unmarshal(respBody, &obj); err == nil {
 			if extracted, ok := obj[extract]; ok {
+				if t.pluginName == "google-calendar" && t.toolDef.Name == "upcoming_events" {
+					extracted = filterCalendarEventsByWindow(extracted, queryParams.Get("timeMin"), queryParams.Get("timeMax"))
+				}
 				b, _ := json.Marshal(extracted)
 				output = string(b)
 			}
@@ -412,6 +416,206 @@ func transformLabelModify(args map[string]any, _ map[string]any) (map[string]any
 		return nil, fmt.Errorf("label_modify requires _label_action and _label_ids")
 	}
 	return map[string]any{action: labelIDs}, nil
+}
+
+func applyUpcomingEventsWindow(args map[string]any, queryParams url.Values) {
+	days := intArg(args, "days", 7)
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	start := time.Now().UTC()
+	end := start.AddDate(0, 0, days)
+
+	queryParams.Del("days")
+	queryParams.Set("singleEvents", "true")
+	queryParams.Set("orderBy", "startTime")
+	queryParams.Set("timeMin", start.Format(time.RFC3339))
+	queryParams.Set("timeMax", end.Format(time.RFC3339))
+}
+
+func normalizeToolRequest(pluginName, toolName string, args map[string]any, queryParams url.Values, bodyFields map[string]any, method, path *string) {
+	if pluginName == "google-calendar" && toolName == "upcoming_events" {
+		applyUpcomingEventsWindow(args, queryParams)
+		return
+	}
+
+	if pluginName == "google-drive" && toolName == "list_drive_files" {
+		applyDriveFolderFilter(args, queryParams)
+		return
+	}
+
+	if pluginName == "google-drive" && toolName == "create_folder" {
+		normalizeDriveCreateFolder(args, bodyFields)
+		return
+	}
+
+	if pluginName == "spotify" && toolName == "play_pause" {
+		normalizeSpotifyPlayPause(args, bodyFields, method, path)
+	}
+}
+
+func applyDriveFolderFilter(args map[string]any, queryParams url.Values) {
+	folderID := strings.TrimSpace(stringArg(args, "folder_id", ""))
+	if folderID == "" {
+		folderID = strings.TrimSpace(queryParams.Get("folder_id"))
+	}
+	if folderID == "" {
+		folderID = "root"
+	}
+	queryParams.Del("folder_id")
+	queryParams.Set("q", fmt.Sprintf("'%s' in parents and trashed = false", escapeSingleQuote(folderID)))
+}
+
+func normalizeDriveCreateFolder(args map[string]any, bodyFields map[string]any) {
+	if strings.TrimSpace(stringArg(args, "name", "")) == "" {
+		if strings.TrimSpace(fmt.Sprintf("%v", bodyFields["name"])) == "" {
+			return
+		}
+	}
+
+	parentID := strings.TrimSpace(stringArg(args, "parent_id", ""))
+	if parentID == "" {
+		if raw, ok := bodyFields["parent_id"]; ok {
+			parentID = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+	}
+	if parentID == "" {
+		parentID = "root"
+	}
+	bodyFields["mimeType"] = "application/vnd.google-apps.folder"
+	bodyFields["parents"] = []string{parentID}
+	delete(bodyFields, "parent_id")
+}
+
+func normalizeSpotifyPlayPause(args map[string]any, bodyFields map[string]any, method, path *string) {
+	action := strings.ToLower(strings.TrimSpace(stringArg(args, "action", "")))
+	if action == "" {
+		action = strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", bodyFields["action"])))
+	}
+	if action == "pause" {
+		*method = "PUT"
+		*path = "/me/player/pause"
+		delete(bodyFields, "action")
+		return
+	}
+	// For play and toggle, default to /play.
+	*method = "PUT"
+	*path = "/me/player/play"
+	delete(bodyFields, "action")
+}
+
+func intArg(args map[string]any, key string, fallback int) int {
+	if args == nil {
+		return fallback
+	}
+	v, ok := args[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float32:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i)
+		}
+	case string:
+		n = strings.TrimSpace(n)
+		if n == "" {
+			return fallback
+		}
+		if i, err := json.Number(n).Int64(); err == nil {
+			return int(i)
+		}
+	}
+	return fallback
+}
+
+func stringArg(args map[string]any, key, fallback string) string {
+	if args == nil {
+		return fallback
+	}
+	v, ok := args[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	if s, ok := v.(string); ok {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			return fallback
+		}
+		return trimmed
+	}
+	trimmed := strings.TrimSpace(fmt.Sprintf("%v", v))
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func escapeSingleQuote(value string) string {
+	return strings.ReplaceAll(value, "'", "\\'")
+}
+
+func filterCalendarEventsByWindow(extracted any, timeMinRaw, timeMaxRaw string) any {
+	items, ok := extracted.([]any)
+	if !ok {
+		return extracted
+	}
+	if len(items) == 0 {
+		return items
+	}
+	timeMin, errMin := time.Parse(time.RFC3339, strings.TrimSpace(timeMinRaw))
+	timeMax, errMax := time.Parse(time.RFC3339, strings.TrimSpace(timeMaxRaw))
+	if errMin != nil || errMax != nil {
+		return items
+	}
+
+	filtered := make([]any, 0, len(items))
+	for _, raw := range items {
+		event, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		start := eventStartTime(event)
+		if start.IsZero() {
+			continue
+		}
+		if (start.Equal(timeMin) || start.After(timeMin)) && start.Before(timeMax) {
+			filtered = append(filtered, raw)
+		}
+	}
+	return filtered
+}
+
+func eventStartTime(event map[string]any) time.Time {
+	startRaw, ok := event["start"].(map[string]any)
+	if !ok {
+		return time.Time{}
+	}
+	if dt, ok := startRaw["dateTime"].(string); ok {
+		if ts, err := time.Parse(time.RFC3339, strings.TrimSpace(dt)); err == nil {
+			return ts
+		}
+	}
+	if d, ok := startRaw["date"].(string); ok {
+		if ts, err := time.Parse("2006-01-02", strings.TrimSpace(d)); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
 }
 
 var _ tools.Tool = (*HTTPTool)(nil)

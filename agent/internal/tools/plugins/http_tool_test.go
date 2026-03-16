@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	coreplugins "github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
@@ -354,6 +355,192 @@ func TestHTTPTool_StaticQuery(t *testing.T) {
 
 	ht := NewHTTPTool("test", manifest, toolDef)
 	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_GoogleCalendarUpcomingEvents_AppliesTimeWindowAndFiltersOutput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("days") != "" {
+			t.Errorf("expected days to be omitted from upstream query, got %q", r.URL.Query().Get("days"))
+		}
+		if r.URL.Query().Get("singleEvents") != "true" {
+			t.Errorf("expected singleEvents=true, got %q", r.URL.Query().Get("singleEvents"))
+		}
+		if r.URL.Query().Get("orderBy") != "startTime" {
+			t.Errorf("expected orderBy=startTime, got %q", r.URL.Query().Get("orderBy"))
+		}
+
+		minRaw := r.URL.Query().Get("timeMin")
+		maxRaw := r.URL.Query().Get("timeMax")
+		if strings.TrimSpace(minRaw) == "" || strings.TrimSpace(maxRaw) == "" {
+			t.Fatalf("expected timeMin/timeMax in upstream query")
+		}
+
+		minTime, err := time.Parse(time.RFC3339, minRaw)
+		if err != nil {
+			t.Fatalf("invalid timeMin: %v", err)
+		}
+		insideStart := minTime.Add(2 * time.Hour).Format(time.RFC3339)
+		outsideStart := minTime.AddDate(0, 0, -10).Format(time.RFC3339)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []any{
+				map[string]any{"summary": "Inside Event", "start": map[string]any{"dateTime": insideStart}},
+				map[string]any{"summary": "Outside Event", "start": map[string]any{"dateTime": outsideStart}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	manifest := coreplugins.PluginManifest{
+		Name:        "google-calendar",
+		DisplayName: "Google Calendar",
+		Auth:        coreplugins.ManifestAuth{Type: "none"},
+		API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+	}
+	toolDef := coreplugins.ManifestTool{
+		Name: "upcoming_events",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/calendars/primary/events", Query: map[string]string{"singleEvents": "true", "orderBy": "startTime"}},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "days", Type: "integer", Required: false, Default: 7},
+			{Name: "max_results", Type: "integer", Required: false, Default: 10, MapTo: "query.maxResults"},
+		},
+		Response: coreplugins.ManifestResponse{Extract: "items"},
+	}
+
+	ht := NewHTTPTool("google-calendar", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"days": 2, "max_results": 10}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Inside Event") {
+		t.Fatalf("expected inside event in output, got: %s", result.Output)
+	}
+	if strings.Contains(result.Output, "Outside Event") {
+		t.Fatalf("expected outside event to be filtered out, got: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_GoogleDriveListDriveFiles_UsesFolderParentQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if q != "'folder-123' in parents and trashed = false" {
+			t.Fatalf("expected parent query filter, got %q", q)
+		}
+		if got := r.URL.Query().Get("folder_id"); got != "" {
+			t.Fatalf("expected folder_id to be removed from query, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"files": []any{map[string]any{"id": "f1", "name": "Doc"}}})
+	}))
+	defer srv.Close()
+
+	manifest := coreplugins.PluginManifest{
+		Name:        "google-drive",
+		DisplayName: "Google Drive",
+		Auth:        coreplugins.ManifestAuth{Type: "none"},
+		API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+	}
+	toolDef := coreplugins.ManifestTool{
+		Name: "list_drive_files",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/files"},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "folder_id", Type: "string", Required: false, Default: "root"},
+		},
+		Response: coreplugins.ManifestResponse{Extract: "files"},
+	}
+
+	ht := NewHTTPTool("google-drive", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"folder_id": "folder-123"}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Doc") {
+		t.Fatalf("expected extracted file, got: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_GoogleDriveCreateFolder_UsesParentsArrayAndFolderMimeType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["mimeType"] != "application/vnd.google-apps.folder" {
+			t.Fatalf("expected folder mimeType, got %v", body["mimeType"])
+		}
+		parents, ok := body["parents"].([]any)
+		if !ok || len(parents) != 1 || parents[0] != "parent-456" {
+			t.Fatalf("expected parents [parent-456], got %#v", body["parents"])
+		}
+		if _, exists := body["parent_id"]; exists {
+			t.Fatalf("did not expect parent_id field in request body")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "new-folder"})
+	}))
+	defer srv.Close()
+
+	manifest := coreplugins.PluginManifest{
+		Name:        "google-drive",
+		DisplayName: "Google Drive",
+		Auth:        coreplugins.ManifestAuth{Type: "none"},
+		API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+	}
+	toolDef := coreplugins.ManifestTool{
+		Name: "create_folder",
+		HTTP: coreplugins.ManifestHTTP{Method: "POST", Path: "/files"},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "name", Type: "string", Required: true, MapTo: "body.name"},
+			{Name: "parent_id", Type: "string", Required: false, Default: "root"},
+		},
+	}
+
+	ht := NewHTTPTool("google-drive", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"name": "Plans", "parent_id": "parent-456"}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_SpotifyPlayPause_UsesPauseEndpointForPauseAction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("expected PUT, got %s", r.Method)
+		}
+		if r.URL.Path != "/me/player/pause" {
+			t.Fatalf("expected pause endpoint, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	manifest := coreplugins.PluginManifest{
+		Name:        "spotify",
+		DisplayName: "Spotify",
+		Auth:        coreplugins.ManifestAuth{Type: "none"},
+		API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+	}
+	toolDef := coreplugins.ManifestTool{
+		Name: "play_pause",
+		HTTP: coreplugins.ManifestHTTP{Method: "PUT", Path: "/me/player/play"},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "action", Type: "string", Required: false, Default: "toggle"},
+		},
+	}
+
+	ht := NewHTTPTool("spotify", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"action": "pause"}))
 
 	if result.Error {
 		t.Fatalf("unexpected error: %s", result.Output)
