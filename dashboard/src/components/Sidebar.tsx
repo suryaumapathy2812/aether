@@ -58,10 +58,12 @@ export default function Sidebar() {
   const sidebarContent = (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-5 pb-4">
-        <Link href="/chat" className="logo-wordmark text-[11px] text-muted-foreground font-medium">
-          aether
-        </Link>
+      <div className="flex items-center justify-between px-4 pt-5 pb-4 min-w-0">
+        {!collapsed && (
+          <Link href="/chat" className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
+            aether
+          </Link>
+        )}
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="hidden md:flex items-center justify-center w-6 h-6 rounded text-muted-foreground/50 hover:text-muted-foreground transition-colors"

@@ -3,24 +3,19 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ContentShell from "@/components/ContentShell";
-import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import PushOptIn from "@/components/PushOptIn";
 import ModelPreference from "@/components/ModelPreference";
 import { useSession, signOut } from "@/lib/auth-client";
-import { useUIPreferences } from "@/lib/ui-preferences";
+import { LogOut, User, Bell, Cpu } from "lucide-react";
 
-/**
- * Account — profile info, edit, log out, settings.
- */
 export default function AccountPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const { dockBehavior, setDockBehavior } = useUIPreferences();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [view, setView] = useState<"menu" | "edit">("menu");
+  const [editingName, setEditingName] = useState(false);
 
   useEffect(() => {
     if (!isPending && !session) {
@@ -40,106 +35,68 @@ export default function AccountPage() {
 
   if (isPending || !session) return null;
 
-  if (view === "edit") {
-    return (
-      <ContentShell title="Edit Account" back="/account">
-        <div className="w-full max-w-[300px] mx-auto">
-          <MinimalInput label="Name" value={name} onChange={setName} />
-          <MinimalInput
-            label="Email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-          />
-          <Button
-            variant="aether"
-            size="aether"
-            className="w-full mt-2"
-          >
-            save
-          </Button>
-          <Button
-            variant="aether-link"
-            size="aether-link"
-            onClick={() => setView("menu")}
-            className="w-full text-center mt-6"
-          >
-            cancel
-          </Button>
-        </div>
-      </ContentShell>
-    );
-  }
-
   return (
-    <ContentShell title={name || "Account"} back="/home">
-      <div className="w-full max-w-[300px] mx-auto flex flex-col items-center gap-6">
-        
-        {/* Profile Actions */}
-        <div className="w-full space-y-2">
-          <Button
-            variant="aether-menu"
-            size="aether-menu"
-            onClick={() => setView("edit")}
-            className="w-full justify-center text-center"
-          >
-            Edit Profile
-          </Button>
-          <Button
-            variant="aether-menu"
-            size="aether-menu"
-            onClick={handleLogout}
-            className="w-full justify-center text-center text-red-300 hover:text-red-200"
-          >
-            Log Out
-          </Button>
-        </div>
-
-        <Separator className="w-full opacity-30" />
-
-        {/* Dock Settings */}
-        <div className="w-full px-1">
-          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground mb-3 text-center">
-            Dock Behavior
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setDockBehavior("shrink")}
-              className={`flex-1 py-2 rounded-lg text-xs transition-colors border ${
-                dockBehavior === "shrink"
-                  ? "bg-white/10 border-white/20 text-foreground"
-                  : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
-              }`}
-            >
-              Shrink
-            </button>
-            <button
-              onClick={() => setDockBehavior("auto-hide")}
-              className={`flex-1 py-2 rounded-lg text-xs transition-colors border ${
-                dockBehavior === "auto-hide"
-                  ? "bg-white/10 border-white/20 text-foreground"
-                  : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
-              }`}
-            >
-              Auto-Hide
-            </button>
+    <ContentShell title="Settings">
+      <div className="space-y-1">
+        {/* Profile */}
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center shrink-0">
+              <User className="size-4 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              {editingName ? (
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onBlur={() => setEditingName(false)}
+                  onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
+                  autoFocus
+                  className="bg-transparent border-b border-border text-sm text-foreground outline-none pb-0.5 w-full"
+                />
+              ) : (
+                <p
+                  className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground/80 transition-colors"
+                  onClick={() => setEditingName(true)}
+                >
+                  {name || "Set name"}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{email}</p>
+            </div>
           </div>
-        </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className="text-red-400 hover:text-red-300 hover:bg-red-500/10 h-8 px-3 text-xs"
+          >
+            <LogOut className="size-3 mr-1.5" />
+            Log out
+          </Button>
+        </section>
 
-        <Separator className="w-full opacity-30" />
+        <Separator className="opacity-0" />
 
-        {/* Push Notifications */}
-        <div className="w-full px-1">
-          <PushOptIn />
-        </div>
-
-        <Separator className="w-full opacity-30" />
-
-        {/* Model Preference */}
-        <div className="w-full px-1">
+        {/* Model */}
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Cpu className="size-3.5 text-muted-foreground" />
+            <h3 className="text-xs font-medium text-foreground">Model</h3>
+          </div>
           <ModelPreference />
-        </div>
+        </section>
 
+        <Separator className="opacity-0" />
+
+        {/* Notifications */}
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Bell className="size-3.5 text-muted-foreground" />
+            <h3 className="text-xs font-medium text-foreground">Notifications</h3>
+          </div>
+          <PushOptIn />
+        </section>
       </div>
     </ContentShell>
   );
