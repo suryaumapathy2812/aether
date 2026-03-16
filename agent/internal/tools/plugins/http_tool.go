@@ -211,10 +211,7 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	// 6. Handle error responses.
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		msg := fmt.Sprintf("%s API returned status %d", t.manifest.DisplayName, resp.StatusCode)
-		if len(body) > 0 && len(body) < 500 {
-			msg += ": " + string(body)
-		}
+		msg := buildHTTPStatusErrorMessage(t.manifest.DisplayName, resp.StatusCode, body)
 		return tools.Fail(msg, nil)
 	}
 
@@ -448,6 +445,11 @@ func normalizeToolRequest(pluginName, toolName string, args map[string]any, quer
 		return
 	}
 
+	if pluginName == "google-drive" && toolName == "search_drive" {
+		normalizeDriveSearchQuery(args, queryParams)
+		return
+	}
+
 	if pluginName == "google-drive" && toolName == "create_folder" {
 		normalizeDriveCreateFolder(args, bodyFields)
 		return
@@ -468,6 +470,38 @@ func applyDriveFolderFilter(args map[string]any, queryParams url.Values) {
 	}
 	queryParams.Del("folder_id")
 	queryParams.Set("q", fmt.Sprintf("'%s' in parents and trashed = false", escapeSingleQuote(folderID)))
+}
+
+func normalizeDriveSearchQuery(args map[string]any, queryParams url.Values) {
+	raw := strings.TrimSpace(stringArg(args, "query", ""))
+	if raw == "" {
+		raw = strings.TrimSpace(queryParams.Get("q"))
+	}
+	if raw == "" {
+		return
+	}
+	if looksLikeDriveQuery(raw) {
+		queryParams.Set("q", ensureDriveNotTrashedClause(raw))
+		return
+	}
+
+	terms := strings.Fields(raw)
+	clauses := make([]string, 0, len(terms)+1)
+	for _, term := range terms {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			continue
+		}
+		clauses = append(clauses, fmt.Sprintf("name contains '%s'", escapeSingleQuote(term)))
+		if len(clauses) >= 8 {
+			break
+		}
+	}
+	if len(clauses) == 0 {
+		clauses = append(clauses, fmt.Sprintf("name contains '%s'", escapeSingleQuote(raw)))
+	}
+	clauses = append(clauses, "trashed = false")
+	queryParams.Set("q", strings.Join(clauses, " and "))
 }
 
 func normalizeDriveCreateFolder(args map[string]any, bodyFields map[string]any) {
@@ -569,6 +603,31 @@ func escapeSingleQuote(value string) string {
 	return strings.ReplaceAll(value, "'", "\\'")
 }
 
+func looksLikeDriveQuery(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return false
+	}
+	patterns := []string{" contains ", " and ", " or ", "=", " in parents", " mimetype", " modifiedtime", "name ", "trashed"}
+	for _, pattern := range patterns {
+		if strings.Contains(v, pattern) {
+			return true
+		}
+	}
+	return strings.Contains(v, "'")
+}
+
+func ensureDriveNotTrashedClause(query string) string {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return "trashed = false"
+	}
+	if strings.Contains(strings.ToLower(q), "trashed") {
+		return q
+	}
+	return q + " and trashed = false"
+}
+
 func filterCalendarEventsByWindow(extracted any, timeMinRaw, timeMaxRaw string) any {
 	items, ok := extracted.([]any)
 	if !ok {
@@ -616,6 +675,34 @@ func eventStartTime(event map[string]any) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func buildHTTPStatusErrorMessage(displayName string, statusCode int, body []byte) string {
+	statusText := strings.TrimSpace(strings.ToLower(http.StatusText(statusCode)))
+	base := fmt.Sprintf("%s API returned status %d", displayName, statusCode)
+
+	switch {
+	case statusCode == http.StatusBadRequest:
+		base = fmt.Sprintf("%s API bad request (400)", displayName)
+	case statusCode == http.StatusUnauthorized:
+		base = fmt.Sprintf("%s API unauthorized (401)", displayName)
+	case statusCode == http.StatusForbidden:
+		base = fmt.Sprintf("%s API forbidden (403)", displayName)
+	case statusCode == http.StatusTooManyRequests:
+		base = fmt.Sprintf("%s API rate limit exceeded (429)", displayName)
+	case statusCode == http.StatusServiceUnavailable || statusCode == http.StatusBadGateway || statusCode == http.StatusGatewayTimeout:
+		base = fmt.Sprintf("%s API temporarily unavailable (%d)", displayName, statusCode)
+	case statusCode >= 500:
+		base = fmt.Sprintf("%s API server error (%d)", displayName, statusCode)
+	case statusText != "":
+		base = fmt.Sprintf("%s API %s (%d)", displayName, statusText, statusCode)
+	}
+
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText != "" && len(bodyText) < 500 {
+		base += ": " + bodyText
+	}
+	return base
 }
 
 var _ tools.Tool = (*HTTPTool)(nil)

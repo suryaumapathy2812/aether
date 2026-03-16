@@ -16,9 +16,16 @@ import (
 
 const DefaultMaxToolIterations = 500
 
+type toolErrorClass string
+
 const (
-	policyWorldTimeToolName      = "world_time"
-	policyUpcomingEventsToolName = "upcoming_events"
+	toolErrorRetryable toolErrorClass = "retryable"
+	toolErrorFixable   toolErrorClass = "fixable_input"
+	toolErrorDenied    toolErrorClass = "permission"
+	toolErrorAuth      toolErrorClass = "auth"
+	toolErrorConfig    toolErrorClass = "config"
+	toolErrorFatal     toolErrorClass = "fatal"
+	toolErrorUnknown   toolErrorClass = "unknown"
 )
 
 func randomPartID() string {
@@ -152,6 +159,20 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			maxIter = DefaultMaxToolIterations
 		}
 		recentSignatures := []string{}
+		pendingRecovery := false
+		remainingRecovery := policyNonNegativeInt(env.Policy, "tool_recovery_attempts", 1)
+		continueLoopOnDeny := policyBool(env.Policy, "continue_loop_on_deny", false)
+		toolRetryAttempts := policyNonNegativeInt(env.Policy, "tool_retry_attempts", 1)
+		toolRetryBaseDelayMs := policyNonNegativeInt(env.Policy, "tool_retry_base_delay_ms", 400)
+		if remainingRecovery < 0 {
+			remainingRecovery = 0
+		}
+		if toolRetryAttempts < 0 {
+			toolRetryAttempts = 0
+		}
+		if toolRetryBaseDelayMs < 50 {
+			toolRetryBaseDelayMs = 50
+		}
 
 		for iteration := 0; iteration < maxIter; iteration++ {
 			seq++
@@ -234,21 +255,18 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				return
 			}
 
-			pendingToolCalls = c.applyDeterministicToolPolicies(env, pendingToolCalls)
-
 			if len(pendingToolCalls) == 0 {
-				if retryCall, instruction, ok := c.validateFinalAssistantResponse(env, assistantText.String()); ok {
-					if strings.TrimSpace(instruction) != "" {
-						env.Messages = append(env.Messages, map[string]any{
-							"role":    "system",
-							"content": instruction,
-						})
-					}
-					pendingToolCalls = append(pendingToolCalls, retryCall)
+				if pendingRecovery && remainingRecovery > 0 {
+					remainingRecovery--
+					pendingRecovery = false
+					env.Messages = append(env.Messages, map[string]any{
+						"role":    "system",
+						"content": "A previous tool call failed. If the request is not complete, attempt one corrected tool call (adjust tool choice or arguments) before stopping.",
+					})
+					seq++
+					out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
+					continue
 				}
-			}
-
-			if len(pendingToolCalls) == 0 {
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 				seq++
@@ -294,20 +312,25 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				wg.Add(1)
 				go func(idx int, call providers.LLMToolCall) {
 					defer wg.Done()
-					results[idx] = toolResult{tc: call, result: c.orchestrator.Execute(ctx, call.Name, call.Arguments, call.ID)}
+					results[idx] = toolResult{tc: call, result: c.executeToolWithRetry(ctx, call, toolRetryAttempts, time.Duration(toolRetryBaseDelayMs)*time.Millisecond)}
 				}(i, tc)
 			}
 			wg.Wait()
 
 			// Emit results and append to messages.
+			iterationRecoverableToolError := false
 			for _, tr := range results {
 				toolText := tr.result.Output
 				if len(toolText) > 12000 {
 					toolText = toolText[:12000] + "\n...truncated"
 				}
 				if tr.result.Error {
+					classification := classifyToolError(toolText)
+					if shouldAttemptRecoveryForToolError(classification, continueLoopOnDeny) {
+						iterationRecoverableToolError = true
+					}
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "errorText": toolText})
+					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "errorText": toolText, "class": string(classification)})
 				} else {
 					seq++
 					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "output": toolText})
@@ -319,6 +342,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 					"content":      tr.result.Output,
 				})
 			}
+			pendingRecovery = iterationRecoverableToolError
 
 			// Emit finish-step for this iteration (tools were called, looping back).
 			seq++
@@ -433,6 +457,40 @@ func policyInt(policy map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+func policyNonNegativeInt(policy map[string]any, key string, fallback int) int {
+	v, ok := policy[key]
+	if !ok {
+		return fallback
+	}
+	switch n := v.(type) {
+	case int:
+		if n >= 0 {
+			return n
+		}
+	case int64:
+		if n >= 0 {
+			return int(n)
+		}
+	case float64:
+		if n >= 0 {
+			return int(n)
+		}
+	}
+	return fallback
+}
+
+func policyBool(policy map[string]any, key string, fallback bool) bool {
+	v, ok := policy[key]
+	if !ok {
+		return fallback
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return fallback
+	}
+	return b
+}
+
 func policyFloat(policy map[string]any, key string, fallback float64) float64 {
 	v, ok := policy[key]
 	if !ok {
@@ -488,177 +546,99 @@ func isRetryableProviderError(err error) bool {
 	return false
 }
 
-func (c *Core) applyDeterministicToolPolicies(env LLMRequestEnvelope, pending []providers.LLMToolCall) []providers.LLMToolCall {
-	if len(pending) == 0 {
-		return pending
-	}
-	userText := strings.ToLower(strings.TrimSpace(LatestUserMessageText(env.Messages)))
-	if !isRelativeDateIntent(userText) {
-		return pending
-	}
-	if !hasToolNamed(pending, policyUpcomingEventsToolName) {
-		return pending
-	}
-	if !toolAvailable(env.Tools, policyWorldTimeToolName) {
-		return pending
-	}
-	if hasToolBeenCalled(env.Messages, policyWorldTimeToolName) || hasToolNamed(pending, policyWorldTimeToolName) {
-		return pending
-	}
-	worldTimeCall := providers.LLMToolCall{
-		ID:   "policy-world-time-" + randomPartID(),
-		Name: policyWorldTimeToolName,
-		Arguments: map[string]any{
-			"timezone": inferPolicyTimezone(env.Policy),
-		},
-	}
-	return append([]providers.LLMToolCall{worldTimeCall}, pending...)
-}
-
-func (c *Core) validateFinalAssistantResponse(env LLMRequestEnvelope, assistantText string) (providers.LLMToolCall, string, bool) {
-	text := strings.ToLower(strings.TrimSpace(assistantText))
-	if text == "" {
-		return providers.LLMToolCall{}, "", false
-	}
-	if !isCalendarIntent(strings.ToLower(strings.TrimSpace(LatestUserMessageText(env.Messages)))) {
-		return providers.LLMToolCall{}, "", false
-	}
-	if !toolAvailable(env.Tools, policyWorldTimeToolName) || hasToolBeenCalled(env.Messages, policyWorldTimeToolName) {
-		return providers.LLMToolCall{}, "", false
-	}
-	if !asksForCurrentDateConfirmation(text) {
-		return providers.LLMToolCall{}, "", false
-	}
-	return providers.LLMToolCall{
-		ID:   "policy-world-time-retry-" + randomPartID(),
-		Name: policyWorldTimeToolName,
-		Arguments: map[string]any{
-			"timezone": inferPolicyTimezone(env.Policy),
-		},
-	}, "Do not ask the user to confirm the current date or time when the world_time tool is available. Call world_time first, then continue answering using tool outputs.", true
-}
-
-func hasToolNamed(calls []providers.LLMToolCall, name string) bool {
-	for _, call := range calls {
-		if strings.EqualFold(strings.TrimSpace(call.Name), name) {
-			return true
-		}
-	}
-	return false
-}
-
-func toolAvailable(toolsSchema []map[string]any, name string) bool {
-	for _, tool := range toolsSchema {
-		fn, ok := tool["function"].(map[string]any)
-		if !ok {
-			continue
-		}
-		toolName, _ := fn["name"].(string)
-		if strings.EqualFold(strings.TrimSpace(toolName), name) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasToolBeenCalled(messages []map[string]any, toolName string) bool {
-	needle := strings.TrimSpace(strings.ToLower(toolName))
-	for _, msg := range messages {
-		callsRaw, ok := msg["tool_calls"]
-		if !ok {
-			continue
-		}
-		switch calls := callsRaw.(type) {
-		case []map[string]any:
-			for _, call := range calls {
-				if callFunctionName(call) == needle {
-					return true
-				}
-			}
-		case []any:
-			for _, item := range calls {
-				call, ok := item.(map[string]any)
-				if !ok {
-					continue
-				}
-				if callFunctionName(call) == needle {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func callFunctionName(call map[string]any) string {
-	fn, ok := call["function"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	name, _ := fn["name"].(string)
-	return strings.TrimSpace(strings.ToLower(name))
-}
-
-func inferPolicyTimezone(policy map[string]any) string {
-	if policy != nil {
-		for _, key := range []string{"timezone", "user_timezone", "tz"} {
-			if v, ok := policy[key].(string); ok {
-				v = strings.TrimSpace(v)
-				if v != "" {
-					return v
-				}
-			}
-		}
-	}
-	return "Asia/Kolkata"
-}
-
-func isRelativeDateIntent(text string) bool {
+func classifyToolError(text string) toolErrorClass {
 	t := strings.ToLower(strings.TrimSpace(text))
 	if t == "" {
-		return false
+		return toolErrorUnknown
 	}
-	if strings.Contains(t, "tomorrow") || strings.Contains(t, "today") || strings.Contains(t, "this week") || strings.Contains(t, "next week") {
+	if hasAnyMarker(t, []string{"timed out", "timeout", "temporar", "rate limit", "too many requests", "connection reset", "503", "502", "504", "overloaded", "econnreset", "network"}) {
+		return toolErrorRetryable
+	}
+	if hasAnyMarker(t, []string{"invalid value", "invalid query", "invalid argument", "bad request", "malformed", "missing required", "must be"}) {
+		return toolErrorFixable
+	}
+	if hasAnyMarker(t, []string{"permission denied", "access denied", "not allowed", "approval required", "rejected"}) {
+		return toolErrorDenied
+	}
+	if hasAnyMarker(t, []string{"unauthorized", "forbidden", "invalid api key", "invalid credential", "token refresh failed", "oauth", "authentication"}) {
+		return toolErrorAuth
+	}
+	if hasAnyMarker(t, []string{"tool execution is not configured", "disabled plugin", "not connected", "missing config", "not configured"}) {
+		return toolErrorConfig
+	}
+	if hasAnyMarker(t, []string{"fatal", "panic", "segmentation fault"}) {
+		return toolErrorFatal
+	}
+	return toolErrorUnknown
+}
+
+func shouldAttemptRecoveryForToolError(class toolErrorClass, continueLoopOnDeny bool) bool {
+	switch class {
+	case toolErrorRetryable, toolErrorFixable, toolErrorUnknown:
 		return true
-	}
-	if strings.Contains(t, "next ") {
-		for _, day := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
-			if strings.Contains(t, "next "+day) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isCalendarIntent(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if t == "" {
+	case toolErrorDenied:
+		return continueLoopOnDeny
+	case toolErrorAuth, toolErrorConfig, toolErrorFatal:
+		return false
+	default:
 		return false
 	}
-	if strings.Contains(t, "calendar") || strings.Contains(t, "schedule") || strings.Contains(t, "event") {
-		return true
-	}
-	return isRelativeDateIntent(t)
 }
 
-func asksForCurrentDateConfirmation(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if t == "" {
-		return false
-	}
-	phrases := []string{
-		"confirm the current date",
-		"what is the current date",
-		"please confirm the date",
-		"could you please confirm the current date",
-	}
-	for _, phrase := range phrases {
-		if strings.Contains(t, phrase) {
+func hasAnyMarker(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+func (c *Core) executeToolWithRetry(ctx context.Context, call providers.LLMToolCall, maxRetries int, baseDelay time.Duration) tools.Result {
+	if c.orchestrator == nil {
+		return tools.Fail("Tool execution is not configured", nil)
+	}
+	attempt := 0
+	for {
+		attempt++
+		result := c.orchestrator.Execute(ctx, call.Name, call.Arguments, call.ID)
+		if !result.Error {
+			if attempt > 1 {
+				if result.Metadata == nil {
+					result.Metadata = map[string]any{}
+				}
+				result.Metadata["retry_count"] = attempt - 1
+			}
+			return result
+		}
+		if attempt >= maxRetries+1 {
+			if result.Metadata == nil {
+				result.Metadata = map[string]any{}
+			}
+			result.Metadata["retry_count"] = attempt - 1
+			return result
+		}
+		if classifyToolError(result.Output) != toolErrorRetryable {
+			if result.Metadata == nil {
+				result.Metadata = map[string]any{}
+			}
+			result.Metadata["retry_count"] = attempt - 1
+			return result
+		}
+		if !sleepWithContext(ctx, toolRetryDelay(baseDelay, attempt)) {
+			return tools.Fail("Tool retry aborted", map[string]any{"retry_count": attempt - 1})
+		}
+	}
+}
+
+func toolRetryDelay(base time.Duration, attempt int) time.Duration {
+	if attempt <= 1 {
+		return base
+	}
+	if attempt == 2 {
+		return base * 2
+	}
+	return base * 4
 }
 
 func NewBasicEnvelope(messages []map[string]any, tools []map[string]any) LLMRequestEnvelope {

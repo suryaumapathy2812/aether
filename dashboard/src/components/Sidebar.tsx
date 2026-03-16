@@ -22,6 +22,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   MessageCircle,
   Brain,
   Zap,
@@ -35,6 +40,7 @@ import {
   Archive,
   Trash2,
 } from "lucide-react";
+import { useChatStatusMap } from "@/lib/chat-runtime";
 
 export default function Sidebar() {
   return (
@@ -58,6 +64,7 @@ function SidebarInner() {
   const editInputRef = useRef<HTMLInputElement>(null);
 
   const activeSessionId = searchParams.get("s") || "";
+  const statusMap = useChatStatusMap();
 
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
 
@@ -146,6 +153,7 @@ function SidebarInner() {
   const renderSession = (s: ChatSession) => {
     const isActive = s.id === activeSessionId;
     const isEditing = s.id === editingId;
+    const isRunning = statusMap[s.id] === "streaming";
 
     return (
       <div
@@ -180,6 +188,10 @@ function SidebarInner() {
           </button>
         )}
 
+        {isRunning && !isEditing && (
+          <span className="shrink-0 mr-1 inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+        )}
+
         {!isEditing && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -205,6 +217,41 @@ function SidebarInner() {
           </DropdownMenu>
         )}
       </div>
+    );
+  };
+
+  const renderCollapsedSession = (s: ChatSession) => {
+    const isActive = s.id === activeSessionId;
+    const isRunning = statusMap[s.id] === "streaming";
+    const label = (s.title || "New chat").trim();
+    const glyph = label.charAt(0).toUpperCase() || "C";
+
+    return (
+      <Tooltip key={s.id}>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => {
+              router.push(`/chat?s=${s.id}`);
+              setMobileOpen(false);
+            }}
+            className={cn(
+              "w-8 h-8 rounded-md flex items-center justify-center text-[11px] font-medium transition-colors",
+              isActive
+                ? "bg-white/[0.1] text-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+            )}
+            aria-label={label}
+          >
+            <span className="relative inline-flex items-center justify-center">
+              {glyph}
+              {isRunning && (
+                <span className="absolute -top-1 -right-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              )}
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
     );
   };
 
@@ -263,17 +310,23 @@ function SidebarInner() {
 
           {/* New Chat */}
           <div className="px-3 pb-2">
-            <button
-              onClick={handleNewChat}
-              className={cn(
-                "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
-                "text-foreground/80 hover:bg-white/[0.06]",
-                collapsed && "justify-center px-0"
-              )}
-            >
-              <Plus className="size-4 shrink-0" />
-              {!collapsed && "New Chat"}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={handleNewChat}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
+                    "text-foreground/80 hover:bg-white/[0.06]",
+                    collapsed && "justify-center px-0"
+                  )}
+                  aria-label="New Chat"
+                >
+                  <Plus className="size-4 shrink-0" />
+                  {!collapsed && "New Chat"}
+                </button>
+              </TooltipTrigger>
+              {collapsed && <TooltipContent side="right">New Chat</TooltipContent>}
+            </Tooltip>
           </div>
 
           {/* Sessions */}
@@ -284,26 +337,37 @@ function SidebarInner() {
               {renderGroup("Previous", olderSessions)}
             </div>
           )}
-          {collapsed && <div className="flex-1" />}
+          {collapsed && (
+            <div className="flex-1 overflow-y-auto px-3 pt-2">
+              <div className="space-y-1.5">
+                {sessions.slice(0, 12).map(renderCollapsedSession)}
+              </div>
+            </div>
+          )}
 
           {/* Nav */}
           <div className="mt-auto border-t border-white/[0.06] px-3 py-3 space-y-0.5">
             {navItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                className={cn(
-                  "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
-                  pathname.startsWith(item.href)
-                    ? "text-foreground/90 bg-white/[0.06]"
-                    : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
-                  collapsed && "justify-center px-0"
-                )}
-              >
-                <item.icon className="size-4 shrink-0" />
-                {!collapsed && item.label}
-              </Link>
+              <Tooltip key={item.href}>
+                <TooltipTrigger asChild>
+                  <Link
+                    href={item.href}
+                    onClick={() => setMobileOpen(false)}
+                    className={cn(
+                      "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
+                      pathname.startsWith(item.href)
+                        ? "text-foreground/90 bg-white/[0.06]"
+                        : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+                      collapsed && "justify-center px-0"
+                    )}
+                    aria-label={item.label}
+                  >
+                    <item.icon className="size-4 shrink-0" />
+                    {!collapsed && item.label}
+                  </Link>
+                </TooltipTrigger>
+                {collapsed && <TooltipContent side="right">{item.label}</TooltipContent>}
+              </Tooltip>
             ))}
           </div>
         </div>

@@ -466,6 +466,44 @@ func TestHTTPTool_GoogleDriveListDriveFiles_UsesFolderParentQuery(t *testing.T) 
 	}
 }
 
+func TestHTTPTool_GoogleDriveSearchDrive_NormalizesNaturalLanguageQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		expected := "name contains 'project' and name contains 'ai' and name contains 'job' and name contains 'finder' and trashed = false"
+		if q != expected {
+			t.Fatalf("expected normalized drive query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"files": []any{map[string]any{"id": "1", "name": "project ai job finder"}}})
+	}))
+	defer srv.Close()
+
+	manifest := coreplugins.PluginManifest{
+		Name:        "google-drive",
+		DisplayName: "Google Drive",
+		Auth:        coreplugins.ManifestAuth{Type: "none"},
+		API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+	}
+	toolDef := coreplugins.ManifestTool{
+		Name: "search_drive",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/files"},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "query", Type: "string", Required: true, MapTo: "query.q"},
+		},
+		Response: coreplugins.ManifestResponse{Extract: "files"},
+	}
+
+	ht := NewHTTPTool("google-drive", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"query": "project ai job finder"}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "project ai job finder") {
+		t.Fatalf("expected file in output, got: %s", result.Output)
+	}
+}
+
 func TestHTTPTool_GoogleDriveCreateFolder_UsesParentsArrayAndFolderMimeType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -568,6 +606,55 @@ func TestHTTPTool_ErrorResponse(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "500") {
 		t.Errorf("expected status 500 in error, got: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_ErrorResponse_ForbiddenIncludesPermissionMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"denied"}`))
+	}))
+	defer srv.Close()
+
+	manifest := makeManifest(coreplugins.ManifestAuth{Type: "none"}, srv.URL)
+	toolDef := coreplugins.ManifestTool{
+		Name: "forbidden_tool",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/forbidden"},
+	}
+
+	ht := NewHTTPTool("test", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{}))
+
+	if !result.Error {
+		t.Fatal("expected error for 403 response")
+	}
+	if !strings.Contains(strings.ToLower(result.Output), "forbidden") {
+		t.Errorf("expected forbidden marker in error, got: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_ErrorResponse_RateLimitIncludesRetryableMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":"too many requests"}`))
+	}))
+	defer srv.Close()
+
+	manifest := makeManifest(coreplugins.ManifestAuth{Type: "none"}, srv.URL)
+	toolDef := coreplugins.ManifestTool{
+		Name: "ratelimited_tool",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/ratelimit"},
+	}
+
+	ht := NewHTTPTool("test", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{}))
+
+	if !result.Error {
+		t.Fatal("expected error for 429 response")
+	}
+	out := strings.ToLower(result.Output)
+	if !strings.Contains(out, "rate limit") && !strings.Contains(out, "429") {
+		t.Errorf("expected retryable marker in error, got: %s", result.Output)
 	}
 }
 

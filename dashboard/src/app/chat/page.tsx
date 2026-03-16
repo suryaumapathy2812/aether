@@ -1,11 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { Suspense, useEffect, useRef, useState, Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
-import { useChat } from "@ai-sdk/react";
-import { getChatSession, createChatSession } from "@/lib/api";
-import { createAetherTransport } from "@/lib/aether-transport";
+import { createChatSession } from "@/lib/api";
+import { chatRuntime, useChatSessionRuntime } from "@/lib/chat-runtime";
 import StatusOrb from "@/components/StatusOrb";
 import {
   Conversation,
@@ -37,28 +36,6 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { IconCopy, IconSparkles } from "@tabler/icons-react";
-import type { UIMessage } from "ai";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function textFromStoredMessageContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!isRecord(content)) return "";
-
-  const inner = content.content;
-  if (typeof inner === "string") return inner;
-  if (!Array.isArray(inner)) return "";
-
-  return inner
-    .map((part) => {
-      if (!isRecord(part)) return "";
-      if (part.type !== "text") return "";
-      return typeof part.text === "string" ? part.text : "";
-    })
-    .join("");
-}
 
 export default function ChatPage() {
   return (
@@ -80,76 +57,23 @@ function ChatPageInner() {
 
   if (isPending || !session) return null;
 
-  // key={sessionId} forces full remount when session changes.
-  // This ensures useChat creates a fresh Chat instance with the
-  // correct transport for each session.
+  // Keep key remount so route changes reset local input state.
   return <ChatView key={sessionId || "new"} session={session} sessionId={sessionId} />;
 }
 
 function ChatView({ session, sessionId: initialSessionId }: { session: { user: { id: string; name?: string | null } }; sessionId: string }) {
   const router = useRouter();
   const [input, setInput] = useState("");
-  const [loadingHistory, setLoadingHistory] = useState(!!initialSessionId);
   const [sessionId, setSessionId] = useState(initialSessionId);
-  const [pendingFirstMessage, setPendingFirstMessage] = useState<string | null>(null);
   const creatingSessionRef = useRef(false);
 
   const userId = session.user.id;
-
-  const transport = useMemo(
-    () => createAetherTransport({ userId, sessionId }),
-    [userId, sessionId]
-  );
-
-  const { messages, setMessages, sendMessage, status, error } = useChat({
-    transport,
-  });
+  const { messages, status, error, loading } = useChatSessionRuntime(sessionId);
 
   useEffect(() => {
-    if (!sessionId || !pendingFirstMessage) return;
-    sendMessage({ text: pendingFirstMessage });
-    setPendingFirstMessage(null);
-    setInput("");
-  }, [sessionId, pendingFirstMessage, sendMessage]);
-
-  // Load session messages on mount
-  useEffect(() => {
-    if (!initialSessionId) {
-      setLoadingHistory(false);
-      return;
-    }
-    getChatSession(initialSessionId)
-      .then((res) => {
-        const restored: UIMessage[] = [];
-        for (const msg of res.messages || []) {
-          const role = typeof msg.role === "string"
-            ? msg.role
-            : (isRecord(msg.content) && typeof msg.content.role === "string" ? msg.content.role : "");
-          const text = textFromStoredMessageContent(msg.content);
-
-          if (role === "user") {
-            if (text.trim()) {
-              restored.push({
-                id: `msg-${msg.id}-user`,
-                role: "user",
-                parts: [{ type: "text", text }],
-              });
-            }
-          } else if (role === "assistant") {
-            if (text.trim()) {
-              restored.push({
-                id: `msg-${msg.id}-assistant`,
-                role: "assistant",
-                parts: [{ type: "text", text }],
-              });
-            }
-          }
-        }
-        setMessages(restored);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingHistory(false));
-  }, [initialSessionId, setMessages]);
+    if (!sessionId) return;
+    void chatRuntime.loadHistory(sessionId);
+  }, [sessionId]);
 
   async function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
@@ -163,7 +87,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
         const newSess = await createChatSession(userId, text.slice(0, 60));
         setSessionId(newSess.id);
         router.replace(`/chat?s=${newSess.id}`, { scroll: false });
-        setPendingFirstMessage(text);
+        await chatRuntime.sendMessage({ sessionId: newSess.id, userId, text });
         return;
       } catch {
         // Continue without session — backend will auto-create
@@ -172,11 +96,11 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
       }
     }
 
-    sendMessage({ text });
+    await chatRuntime.sendMessage({ sessionId, userId, text });
     setInput("");
   }
 
-  const isStreaming = status === "streaming" || status === "submitted";
+  const isStreaming = status === "streaming";
 
   return (
     <div className="h-full flex flex-col">
@@ -186,7 +110,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-[720px] mx-auto w-full">
-          {loadingHistory ? (
+          {loading ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-muted-foreground/60 text-xs">loading...</p>
             </div>
@@ -272,7 +196,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
       {error && (
         <div className="max-w-[720px] mx-auto w-full px-6 py-1">
-          <p className="text-[11px] text-red-400/80">{error.message}</p>
+          <p className="text-[11px] text-red-400/80">{error}</p>
         </div>
       )}
 
