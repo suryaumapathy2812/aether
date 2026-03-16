@@ -7,6 +7,7 @@ import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth-client";
 import { listPlugins, PluginInfo } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
 
 export default function PluginsPage() {
   return (
@@ -50,105 +51,96 @@ function PluginsContent() {
 
   if (isPending || !session) return null;
 
+  // Group plugins by status
+  const connected = plugins.filter((p) => p.installed && p.enabled && p.connected);
+  const attention = plugins.filter((p) => p.needs_reconnect || (p.installed && !p.enabled) || (p.auth_type === "oauth2" && p.installed && !p.connected));
+  const available = plugins.filter((p) => !p.installed);
+
   return (
-    <ContentShell title="Connections">
+    <ContentShell title="Plugins">
       {loading ? (
-        <p className="text-muted-foreground text-xs tracking-wider">
-          loading...
-        </p>
+        <p className="text-muted-foreground/60 text-xs">loading...</p>
       ) : error || oauthError ? (
         <div>
           <p className="text-muted-foreground text-xs mb-4">
-            {error ? "Could not load your connections right now." : "Could not finish that connection. Please try again."}
+            {error || "Could not finish that connection. Please try again."}
           </p>
-          <Button variant="aether" size="aether" onClick={loadPlugins}>
-            try again
+          <Button variant="ghost" size="sm" onClick={loadPlugins} className="text-xs">
+            Try again
           </Button>
         </div>
       ) : plugins.length === 0 ? (
-        <p className="text-muted-foreground text-xs">No connections available yet.</p>
+        <p className="text-muted-foreground text-xs">No plugins available yet.</p>
       ) : (
-        <div className="space-y-2">
-          <p className="text-[12px] text-muted-foreground mb-1">
-            Connect your favorite apps so Aether can help across everything in one place.
-          </p>
-          {plugins.map((plugin) => (
-            <PluginRow key={plugin.name} plugin={plugin} />
-          ))}
+        <div className="space-y-8">
+          {connected.length > 0 && (
+            <PluginSection title="Active" plugins={connected} />
+          )}
+          {attention.length > 0 && (
+            <PluginSection title="Needs attention" plugins={attention} />
+          )}
+          {available.length > 0 && (
+            <PluginSection title="Available" plugins={available} />
+          )}
         </div>
       )}
     </ContentShell>
   );
 }
 
-function PluginRow({ plugin }: { plugin: PluginInfo }) {
-  const shortDescription = toSimpleDescription(plugin.description);
-
+function PluginSection({ title, plugins }: { title: string; plugins: PluginInfo[] }) {
   return (
-    <div className="py-4 px-3 rounded-2xl border border-border/60 bg-white/5 flex items-start justify-between gap-4">
-      <Link
-        href={`/plugins/${plugin.name}`}
-        className="block group min-w-0 flex-1"
-      >
-        <h3 className="text-[14px] text-foreground group-hover:text-secondary-foreground transition-colors duration-300 font-medium mb-1">
-          {plugin.display_name}
-        </h3>
-        <p className="text-[12px] text-muted-foreground leading-relaxed font-normal line-clamp-2">
-          {shortDescription}
-        </p>
-      </Link>
-
-      <div className="flex items-start justify-end shrink-0 pt-0.5">
-        <PluginStatus plugin={plugin} />
+    <div>
+      <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60 font-medium mb-3">
+        {title}
+      </p>
+      <div className="space-y-0.5">
+        {plugins.map((plugin) => (
+          <PluginRow key={plugin.name} plugin={plugin} />
+        ))}
       </div>
     </div>
   );
 }
 
-function PluginStatus({ plugin }: { plugin: PluginInfo }) {
-  if (!plugin.installed) {
-    return (
-      <Link
-        href={`/plugins/${plugin.name}`}
-        className="text-[11px] tracking-wider px-2.5 py-1 rounded-full bg-secondary/10 text-secondary-foreground hover:bg-secondary/20 transition-colors duration-300"
-      >
-        set up
-      </Link>
-    );
-  }
-
-  if (plugin.needs_reconnect || (plugin.auth_type === "oauth2" && !plugin.connected)) {
-    return (
-      <Link href={`/plugins/${plugin.name}`} className="block">
-        <span className="text-[11px] tracking-wider px-2 py-1 rounded-full bg-amber-500/10 text-amber-400">
-          needs attention
-        </span>
-      </Link>
-    );
-  }
-
-  if (plugin.installed && !plugin.enabled) {
-    return (
-      <Link href={`/plugins/${plugin.name}`} className="block">
-        <span className="text-[11px] tracking-wider px-2 py-1 rounded-full bg-muted/50 text-muted-foreground">
-          off
-        </span>
-      </Link>
-    );
-  }
-
+function PluginRow({ plugin }: { plugin: PluginInfo }) {
   return (
-    <Link href={`/plugins/${plugin.name}`} className="block">
-      <span className="text-[11px] tracking-wider px-2 py-1 rounded-full bg-green-500/10 text-green-400">
-        connected
-      </span>
+    <Link
+      href={`/plugins/${plugin.name}`}
+      className="flex items-center justify-between py-3 group"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[13px] text-foreground font-medium">
+            {plugin.display_name}
+          </span>
+          <StatusDot plugin={plugin} />
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+          {toSimpleDescription(plugin.description)}
+        </p>
+      </div>
+      <ChevronRight className="size-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors shrink-0 ml-4" />
     </Link>
   );
 }
 
+function StatusDot({ plugin }: { plugin: PluginInfo }) {
+  if (plugin.needs_reconnect || (plugin.auth_type === "oauth2" && plugin.installed && !plugin.connected)) {
+    return <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="Needs reconnection" />;
+  }
+  if (plugin.installed && plugin.enabled && plugin.connected) {
+    return <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Connected" />;
+  }
+  if (plugin.installed && !plugin.enabled) {
+    return <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" title="Disabled" />;
+  }
+  return null;
+}
+
 function toSimpleDescription(text: string): string {
   const value = text.trim();
-  if (!value) return "Use this app with Aether.";
+  if (!value) return "Use this plugin with Aether.";
   const clean = value.replace(/oauth|api|sdk|token|webhook/gi, "").replace(/\s+/g, " ").trim();
-  return clean || "Use this app with Aether.";
+  return clean || "Use this plugin with Aether.";
 }
