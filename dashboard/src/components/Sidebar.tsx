@@ -40,7 +40,7 @@ import {
   Archive,
   Trash2,
 } from "lucide-react";
-import { useChatStatusMap } from "@/lib/chat-runtime";
+import { chatRuntime, useChatStatusMap } from "@/lib/chat-runtime";
 
 export default function Sidebar() {
   return (
@@ -82,6 +82,12 @@ function SidebarInner() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions, pathname, activeSessionId]);
+
+  useEffect(() => {
+    const userId = session?.user?.id?.trim();
+    if (!userId) return;
+    void chatRuntime.bootstrapForUser(userId);
+  }, [session?.user?.id]);
 
   async function handleNewChat() {
     if (!session?.user?.id) return;

@@ -212,7 +212,9 @@ func main() {
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
-	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media})
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: func(userID, eventType string, payload map[string]any) {
+		wsHub.Broadcast(userID, ws.Message{Type: eventType, Payload: payload})
+	}})
 	convHandler.RegisterRoutes(mux)
 	dataHandler := dataapi.New(store, mediaService)
 	dataHandler.RegisterRoutes(mux)

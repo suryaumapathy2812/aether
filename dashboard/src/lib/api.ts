@@ -625,6 +625,12 @@ export async function listChatSessions(userId: string, limit = 50) {
   );
 }
 
+export async function getChatSessionStatuses(userId: string) {
+  return api<{ statuses: Record<string, "idle" | "streaming" | "error"> }>(
+    `/v1/sessions/status?user_id=${encodeURIComponent(userId)}`
+  );
+}
+
 export async function createChatSession(userId: string, title = "New chat") {
   return api<ChatSession>("/v1/sessions", {
     method: "POST",

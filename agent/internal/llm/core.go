@@ -28,6 +28,14 @@ const (
 	toolErrorUnknown   toolErrorClass = "unknown"
 )
 
+const (
+	loopStateRunning    = "running"
+	loopStateRetrying   = "retrying"
+	loopStateRecovering = "recovering"
+	loopStateBlocked    = "blocked"
+	loopStateStopped    = "stopped"
+)
+
 func randomPartID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
@@ -54,6 +62,7 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 		seq := 0
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventStart, seq, nil)
+		emitLoopState(out, env, &seq, loopStateRunning, "")
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventStartStep, seq, nil)
 
@@ -194,6 +203,9 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			attempt := 0
 			for {
 				attempt++
+				if attempt > 1 {
+					emitLoopState(out, env, &seq, loopStateRetrying, "provider_stream")
+				}
 				stream, err := c.provider.StreamWithTools(ctx, opts)
 				if err != nil {
 					if attempt < defaultStreamRetryAttempts && isRetryableProviderError(err) {
@@ -257,6 +269,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 
 			if len(pendingToolCalls) == 0 {
 				if pendingRecovery && remainingRecovery > 0 {
+					emitLoopState(out, env, &seq, loopStateRecovering, "tool_error")
 					remainingRecovery--
 					pendingRecovery = false
 					env.Messages = append(env.Messages, map[string]any{
@@ -271,6 +284,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": finishReason})
+				emitLoopState(out, env, &seq, loopStateStopped, finishReason)
 				return
 			}
 
@@ -286,6 +300,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "Detected repeated identical tool calls (doom loop)"})
 				seq++
 				out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "error"})
+				emitLoopState(out, env, &seq, loopStateStopped, "error")
 				return
 			}
 
@@ -319,6 +334,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 
 			// Emit results and append to messages.
 			iterationRecoverableToolError := false
+			iterationBlocked := false
 			for _, tr := range results {
 				toolText := tr.result.Output
 				if len(toolText) > 12000 {
@@ -326,6 +342,9 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				}
 				if tr.result.Error {
 					classification := classifyToolError(toolText)
+					if classification == toolErrorDenied || classification == toolErrorAuth || classification == toolErrorConfig || classification == toolErrorFatal {
+						iterationBlocked = true
+					}
 					if shouldAttemptRecoveryForToolError(classification, continueLoopOnDeny) {
 						iterationRecoverableToolError = true
 					}
@@ -343,6 +362,9 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				})
 			}
 			pendingRecovery = iterationRecoverableToolError
+			if iterationBlocked && !iterationRecoverableToolError {
+				emitLoopState(out, env, &seq, loopStateBlocked, "tool_error")
+			}
 
 			// Emit finish-step for this iteration (tools were called, looping back).
 			seq++
@@ -370,6 +392,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			out <- NewEvent(env.RequestID, env.JobID, EventError, seq, map[string]any{"errorText": "Max steps reached and summary generation failed: " + summaryErr.Error()})
 			seq++
 			out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
+			emitLoopState(out, env, &seq, loopStateStopped, "length")
 			return
 		}
 		summaryTextID := randomPartID()
@@ -395,6 +418,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 		out <- NewEvent(env.RequestID, env.JobID, EventFinishStep, seq, nil)
 		seq++
 		out <- NewEvent(env.RequestID, env.JobID, EventFinish, seq, map[string]any{"finishReason": "length"})
+		emitLoopState(out, env, &seq, loopStateStopped, "length")
 	}()
 
 	return out
@@ -512,6 +536,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func emitLoopState(out chan<- LLMEventEnvelope, env LLMRequestEnvelope, seq *int, state, reason string) {
+	*seq = *seq + 1
+	payload := map[string]any{"state": state}
+	if strings.TrimSpace(reason) != "" {
+		payload["reason"] = reason
+	}
+	out <- NewEvent(env.RequestID, env.JobID, EventType("loop-state"), *seq, payload)
 }
 
 func retryDelay(attempt int) time.Duration {

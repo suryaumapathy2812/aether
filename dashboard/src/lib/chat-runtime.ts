@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
-import { getChatSession, getSessionToken } from "@/lib/api";
+import { getChatSession, getChatSessionStatuses, getSessionToken } from "@/lib/api";
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
@@ -11,6 +11,24 @@ type SessionState = {
   loaded: boolean;
   loading: boolean;
 };
+
+type NormalizedGlobalEvent =
+  | { kind: "session-status"; sessionID: string; status: SessionStatus; version: number }
+  | { kind: "session-created"; sessionID: string; version: number }
+  | { kind: "session-updated"; sessionID: string; archived?: boolean; version: number }
+  | { kind: "session-deleted"; sessionID: string; version: number }
+  | { kind: "message-updated"; sessionID: string; messageID: string; role?: string; version: number }
+  | { kind: "message-removed"; sessionID: string; messageID: string; version: number }
+  | {
+      kind: "part-updated";
+      sessionID: string;
+      messageID: string;
+      partID: string;
+      delta?: string;
+      text?: string;
+      version: number;
+    }
+  | { kind: "part-removed"; sessionID: string; messageID: string; partID: string; version: number };
 
 type SessionSnapshot = SessionState;
 
@@ -42,7 +60,11 @@ type SessionAction =
       errorText?: string;
       failed: boolean;
     }
-  | { type: "session-status"; status: SessionStatus };
+  | { type: "session-status"; status: SessionStatus }
+  | { type: "message-upsert-from-event"; messageID: string; role: "assistant" | "user"; text?: string }
+  | { type: "message-remove"; messageID: string }
+  | { type: "part-upsert-delta"; messageID: string; partID: string; delta?: string; text?: string }
+  | { type: "part-remove"; messageID: string; partID: string };
 
 const RUNNING_SESSIONS_KEY = "aether.chat.runtime.running.v1";
 
@@ -102,6 +124,77 @@ function toTurnPayload(messages: UIMessage[]): Array<{ role: string; content: st
       .join("");
     return { role: message.role, content: text };
   });
+}
+
+function parseEventVersion(payload: Record<string, unknown>): number {
+  const candidates = [payload.sequence, payload.seq, payload.version, payload.updatedAt, payload.updated_at, payload.timestamp];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return Date.now();
+}
+
+function normalizeStatus(value: unknown): SessionStatus {
+  const text = String(value || "").toLowerCase();
+  if (text === "busy" || text === "running" || text === "streaming") return "streaming";
+  if (text === "error" || text === "failed" || text === "blocked") return "error";
+  return "idle";
+}
+
+function normalizeGlobalEvent(eventType: string, payload: Record<string, unknown>): NormalizedGlobalEvent | null {
+  const normalizedType = String(eventType || "").toLowerCase();
+  const sessionID = typeof payload.sessionID === "string" ? payload.sessionID : typeof payload.session_id === "string" ? payload.session_id : "";
+  if (!sessionID) return null;
+  const version = parseEventVersion(payload);
+
+  if (normalizedType === "session.status") {
+    const raw = isRecord(payload.status) ? payload.status.type : payload.status;
+    return { kind: "session-status", sessionID, status: normalizeStatus(raw), version };
+  }
+  if (normalizedType === "session.created") {
+    return { kind: "session-created", sessionID, version };
+  }
+  if (normalizedType === "session.updated") {
+    return {
+      kind: "session-updated",
+      sessionID,
+      archived: Boolean(payload.archived),
+      version,
+    };
+  }
+  if (normalizedType === "session.deleted") {
+    return { kind: "session-deleted", sessionID, version };
+  }
+  if (normalizedType === "message.updated") {
+    const messageID = typeof payload.messageID === "string" ? payload.messageID : "msg-latest";
+    const role = typeof payload.role === "string" ? payload.role : undefined;
+    return { kind: "message-updated", sessionID, messageID, role, version };
+  }
+  if (normalizedType === "message.removed") {
+    const messageID = typeof payload.messageID === "string" ? payload.messageID : "";
+    if (!messageID) return null;
+    return { kind: "message-removed", sessionID, messageID, version };
+  }
+  if (normalizedType === "message.part.updated" || normalizedType === "message.part.delta") {
+    const messageID = typeof payload.messageID === "string" ? payload.messageID : "assistant-current";
+    const partID = typeof payload.partID === "string" ? payload.partID : "text";
+    const delta = typeof payload.delta === "string" ? payload.delta : undefined;
+    const text = typeof payload.text === "string" ? payload.text : undefined;
+    return { kind: "part-updated", sessionID, messageID, partID, delta, text, version };
+  }
+  if (normalizedType === "message.part.removed") {
+    const messageID = typeof payload.messageID === "string" ? payload.messageID : "";
+    const partID = typeof payload.partID === "string" ? payload.partID : "";
+    if (!messageID || !partID) return null;
+    return { kind: "part-removed", sessionID, messageID, partID, version };
+  }
+  return null;
 }
 
 function nextState(current: SessionState, action: SessionAction): SessionState {
@@ -210,6 +303,53 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     }
     case "session-status":
       return { ...current, status: action.status };
+    case "message-upsert-from-event": {
+      const idx = current.messages.findIndex((message) => message.id === action.messageID);
+      if (idx === -1) {
+        const next: UIMessage = {
+          id: action.messageID,
+          role: action.role,
+          parts: action.text ? [{ type: "text", text: action.text }] : [],
+        };
+        return { ...current, messages: [...current.messages, next] };
+      }
+      const existing = current.messages[idx];
+      const nextMessages = [...current.messages];
+      if (action.text) {
+        nextMessages[idx] = { ...existing, role: action.role, parts: [{ type: "text", text: action.text }] };
+      } else {
+        nextMessages[idx] = { ...existing, role: action.role };
+      }
+      return { ...current, messages: nextMessages };
+    }
+    case "message-remove":
+      return { ...current, messages: current.messages.filter((message) => message.id !== action.messageID) };
+    case "part-upsert-delta": {
+      const messages = current.messages.map((message) => {
+        if (message.id !== action.messageID) return message;
+        const parts = [...message.parts];
+        const existingIndex = parts.findIndex((part) => String((part as Record<string, unknown>).partId || "") === action.partID);
+        const incomingText = action.text ?? action.delta ?? "";
+        if (existingIndex === -1) {
+          parts.push({ type: "text", text: incomingText, partId: action.partID } as UIMessage["parts"][number]);
+          return { ...message, parts };
+        }
+        const part = parts[existingIndex] as Record<string, unknown>;
+        const currentText = typeof part.text === "string" ? part.text : "";
+        const nextText = action.text != null ? action.text : `${currentText}${action.delta || ""}`;
+        parts[existingIndex] = { ...part, text: nextText } as UIMessage["parts"][number];
+        return { ...message, parts };
+      });
+      return { ...current, messages };
+    }
+    case "part-remove": {
+      const messages = current.messages.map((message) => {
+        if (message.id !== action.messageID) return message;
+        const parts = message.parts.filter((part) => String((part as Record<string, unknown>).partId || "") !== action.partID);
+        return { ...message, parts };
+      });
+      return { ...current, messages };
+    }
     default:
       return current;
   }
@@ -217,8 +357,10 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
 
 class ChatRuntimeStore {
   private sessions = new Map<string, SessionState>();
+  private eventVersions = new Map<string, number>();
   private inflight = new Map<string, AbortController>();
   private listeners = new Set<() => void>();
+  private bootstrappedUsers = new Set<string>();
   private statusMapCache: Record<string, SessionStatus> = {};
   private statusMapDirty = true;
   private ws: WebSocket | null = null;
@@ -292,6 +434,23 @@ class ChatRuntimeStore {
     this.statusMapDirty = false;
     return this.statusMapCache;
   };
+
+  async bootstrapForUser(userId: string): Promise<void> {
+	const normalizedUserID = userId.trim();
+	if (!normalizedUserID) return;
+	if (this.bootstrappedUsers.has(normalizedUserID)) return;
+	this.bootstrappedUsers.add(normalizedUserID);
+	try {
+		const response = await getChatSessionStatuses(normalizedUserID);
+		const statuses = response.statuses || {};
+		for (const [sessionID, status] of Object.entries(statuses)) {
+			if (!sessionID) continue;
+			this.dispatch(sessionID, { type: "session-status", status: status || "idle" });
+		}
+	} catch {
+		// Non-fatal: websocket stream and local state still work.
+	}
+  }
 
   async loadHistory(sessionId: string): Promise<void> {
     if (!sessionId) return;
@@ -495,28 +654,78 @@ class ChatRuntimeStore {
   }
 
   private reduceGlobalEvent(eventType: string, payload: Record<string, unknown>) {
-    const normalized = String(eventType || "").toLowerCase();
-    const sessionID = typeof payload.sessionID === "string" ? payload.sessionID : "";
-    if (!sessionID) return;
-
-    if (normalized === "session.status") {
-      const statusRaw = isRecord(payload.status) ? payload.status.type : payload.status;
-      const statusText = String(statusRaw || "").toLowerCase();
-      const status: SessionStatus = statusText === "busy" ? "streaming" : statusText === "error" ? "error" : "idle";
-      this.dispatch(sessionID, { type: "session-status", status });
+    const normalized = normalizeGlobalEvent(eventType, payload);
+    if (!normalized) return;
+    if (this.shouldIgnoreStaleGlobalEvent(normalized.sessionID, normalized.version)) {
       return;
     }
 
-    if (normalized === "message.updated") {
-      this.ensureSession(sessionID);
-      void this.loadHistory(sessionID);
-      return;
-    }
+    switch (normalized.kind) {
+      case "session-status":
+        this.dispatch(normalized.sessionID, { type: "session-status", status: normalized.status });
+        if (normalized.status === "streaming") {
+          this.markSessionRunning(normalized.sessionID, true);
+        }
+        if (normalized.status === "idle") {
+          this.markSessionRunning(normalized.sessionID, false);
+        }
+        return;
 
-    if (normalized === "message.part.updated" || normalized === "message.part.delta") {
-      this.ensureSession(sessionID);
-      this.dispatch(sessionID, { type: "session-status", status: "streaming" });
+      case "session-created":
+      case "session-updated":
+        this.ensureSession(normalized.sessionID);
+        return;
+
+      case "session-deleted":
+        this.sessions.delete(normalized.sessionID);
+        this.eventVersions.delete(normalized.sessionID);
+        this.statusMapDirty = true;
+        this.markSessionRunning(normalized.sessionID, false);
+        this.notify();
+        return;
+
+      case "message-updated":
+        this.dispatch(normalized.sessionID, {
+          type: "message-upsert-from-event",
+          messageID: normalized.messageID,
+          role: normalized.role === "user" ? "user" : "assistant",
+        });
+        return;
+
+      case "message-removed":
+        this.dispatch(normalized.sessionID, { type: "message-remove", messageID: normalized.messageID });
+        return;
+
+      case "part-updated":
+        this.dispatch(normalized.sessionID, {
+          type: "part-upsert-delta",
+          messageID: normalized.messageID,
+          partID: normalized.partID,
+          delta: normalized.delta,
+          text: normalized.text,
+        });
+        return;
+
+      case "part-removed":
+        this.dispatch(normalized.sessionID, {
+          type: "part-remove",
+          messageID: normalized.messageID,
+          partID: normalized.partID,
+        });
+        return;
+
+      default:
+        return;
     }
+  }
+
+  private shouldIgnoreStaleGlobalEvent(sessionID: string, version: number): boolean {
+    const current = this.eventVersions.get(sessionID);
+    if (current != null && version <= current) {
+      return true;
+    }
+    this.eventVersions.set(sessionID, version);
+    return false;
   }
 
   private teardownGlobalSubscription() {
@@ -615,6 +824,7 @@ export function useChatStatusMap(): Record<string, SessionStatus> {
 }
 
 export const chatRuntime = {
+  bootstrapForUser: (userId: string) => runtimeStore.bootstrapForUser(userId),
   loadHistory: (sessionId: string) => runtimeStore.loadHistory(sessionId),
   sendMessage: (input: { sessionId: string; userId: string; text: string }) =>
     runtimeStore.sendMessage(input),

@@ -72,8 +72,9 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
   useEffect(() => {
     if (!sessionId) return;
+    void chatRuntime.bootstrapForUser(userId);
     void chatRuntime.loadHistory(sessionId);
-  }, [sessionId]);
+  }, [sessionId, userId]);
 
   async function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();

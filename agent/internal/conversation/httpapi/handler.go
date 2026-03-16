@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
@@ -27,6 +28,8 @@ type Handler struct {
 	media   *media.Service
 	store   *db.Store
 	limits  agentcfg.MediaLimitsConfig
+	notify  func(userID, eventType string, payload map[string]any)
+	status  *sessionStatusTracker
 }
 
 type Options struct {
@@ -36,16 +39,55 @@ type Options struct {
 	Media   *media.Service
 	Store   *db.Store
 	Limits  agentcfg.MediaLimitsConfig
+	Notify  func(userID, eventType string, payload map[string]any)
 }
 
 func New(opts Options) *Handler {
-	return &Handler{runtime: opts.Runtime, builder: opts.Builder, memory: opts.Memory, media: opts.Media, store: opts.Store, limits: opts.Limits}
+	return &Handler{runtime: opts.Runtime, builder: opts.Builder, memory: opts.Memory, media: opts.Media, store: opts.Store, limits: opts.Limits, notify: opts.Notify, status: newSessionStatusTracker()}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/conversations/turn", h.handleTurn)
+	mux.HandleFunc("/v1/sessions/status", h.handleSessionStatus)
 	mux.HandleFunc("/v1/sessions", h.handleSessions)
 	mux.HandleFunc("/v1/sessions/", h.handleSessionByID)
+}
+
+type sessionStatusTracker struct {
+	mu    sync.RWMutex
+	state map[string]string
+}
+
+func newSessionStatusTracker() *sessionStatusTracker {
+	return &sessionStatusTracker{state: map[string]string{}}
+}
+
+func (s *sessionStatusTracker) set(sessionID, status string) {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state[sessionID] = status
+}
+
+func (s *sessionStatusTracker) get(sessionID string) string {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return "idle"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if status, ok := s.state[sessionID]; ok && strings.TrimSpace(status) != "" {
+		return status
+	}
+	return "idle"
+}
+
+func (h *Handler) emit(userID, eventType string, payload map[string]any) {
+	if h == nil || h.notify == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(eventType) == "" {
+		return
+	}
+	h.notify(userID, eventType, payload)
 }
 
 func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +166,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	messages := append(history, latestUser)
 	if h.store != nil {
 		_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, latestUser)
+		h.emit(userID, "message.updated", map[string]any{"sessionID": sessionID, "role": "user", "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 	}
 
 	policy := map[string]any{}
@@ -154,6 +197,11 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	if h.store != nil && sessionID != "" && sessionID != userID {
 		_ = h.store.TouchChatSession(r.Context(), sessionID)
 	}
+	h.status.set(sessionID, "streaming")
+	h.emit(userID, "session.status", map[string]any{"sessionID": sessionID, "status": map[string]any{"type": "busy"}, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
+	if newSession {
+		h.emit(userID, "session.created", map[string]any{"sessionID": sessionID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
+	}
 	_ = newSession // used for auto-title below
 
 	answerParts := []string{}
@@ -179,6 +227,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		case conversation.EventTextDelta:
 			delta, _ := ev.Payload["delta"].(string)
 			answerParts = append(answerParts, delta)
+			h.emit(userID, "message.part.delta", map[string]any{"sessionID": sessionID, "messageID": "assistant-current", "partID": "text", "delta": delta, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 
 		case conversation.EventToolInputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
@@ -241,7 +290,10 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	answer := strings.TrimSpace(strings.Join(answerParts, ""))
 	if answer != "" && h.store != nil {
 		_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{"role": "assistant", "content": answer})
+		h.emit(userID, "message.updated", map[string]any{"sessionID": sessionID, "role": "assistant", "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 	}
+	h.status.set(sessionID, "idle")
+	h.emit(userID, "session.status", map[string]any{"sessionID": sessionID, "status": map[string]any{"type": "idle"}, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 
 	log.Printf("conversation turn: user=%s session=%s", env.UserID, env.SessionID)
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
@@ -555,6 +607,33 @@ func isSupportedAudioFormat(ext string) bool {
 
 // ── Session endpoints ──────────────────────────────────
 
+func (h *Handler) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeError(w, http.StatusInternalServerError, "store unavailable")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if userID == "" {
+		userID = "default"
+	}
+	limit := 100
+	sessions, err := h.store.ListChatSessions(r.Context(), userID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := map[string]string{}
+	for _, sess := range sessions {
+		out[sess.ID] = h.status.get(sess.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"statuses": out})
+}
+
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		writeError(w, http.StatusInternalServerError, "store unavailable")
@@ -601,6 +680,8 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		h.status.set(sess.ID, "idle")
+		h.emit(userID, "session.created", map[string]any{"sessionID": sess.ID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		writeJSON(w, http.StatusCreated, sess)
 
 	default:
@@ -646,24 +727,43 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			h.emit(sessUserIDFromStore(h, r.Context(), sessionID), "session.updated", map[string]any{"sessionID": sessionID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		}
 		if req.Archive != nil && *req.Archive {
 			if err := h.store.ArchiveChatSession(r.Context(), sessionID); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			h.emit(sessUserIDFromStore(h, r.Context(), sessionID), "session.updated", map[string]any{"sessionID": sessionID, "archived": true, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		}
 		sess, _ := h.store.GetChatSession(r.Context(), sessionID)
 		writeJSON(w, http.StatusOK, sess)
 
 	case http.MethodDelete:
+		userID := sessUserIDFromStore(h, r.Context(), sessionID)
 		if err := h.store.DeleteChatSession(r.Context(), sessionID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		h.status.set(sessionID, "idle")
+		h.emit(userID, "session.deleted", map[string]any{"sessionID": sessionID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func sessUserIDFromStore(h *Handler, ctx context.Context, sessionID string) string {
+	if h == nil || h.store == nil {
+		return "default"
+	}
+	sess, err := h.store.GetChatSession(ctx, sessionID)
+	if err != nil {
+		return "default"
+	}
+	if strings.TrimSpace(sess.UserID) == "" {
+		return "default"
+	}
+	return sess.UserID
 }
