@@ -30,7 +30,7 @@ const sections = [
     shortcuts: [
       { keys: "G → C", label: "Go to Chat" },
       { keys: "G → S", label: "Go to Settings" },
-      { keys: "G → P", label: "Go to Connections" },
+      { keys: "G → P", label: "Go to Plugins" },
       { keys: "G → M", label: "Go to Memory" },
     ],
   },

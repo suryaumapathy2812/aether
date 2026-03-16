@@ -93,7 +93,7 @@ export default function AccountPage() {
           className="w-full flex items-center justify-between group"
         >
           <div>
-            <p className="text-[13px] text-foreground text-left">Connections</p>
+            <p className="text-[13px] text-foreground text-left">Plugins</p>
             <p className="text-[11px] text-muted-foreground mt-0.5 text-left">
               Manage Gmail, Calendar, and other integrations
             </p>

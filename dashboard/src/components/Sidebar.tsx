@@ -58,7 +58,7 @@ export default function Sidebar() {
   if (pathname === "/") return null;
 
   const navItems = [
-    { href: "/plugins", label: "Connections", icon: Zap },
+    { href: "/plugins", label: "Plugins", icon: Zap },
     { href: "/memory", label: "Memory", icon: Brain },
     { href: "/account", label: "Settings", icon: Settings },
   ];
@@ -68,9 +68,9 @@ export default function Sidebar() {
       {/* Header */}
       <div className={cn("flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
         {!collapsed && (
-          <Link href="/chat" className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
+          <span className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
             aether
-          </Link>
+          </span>
         )}
         <button
           onClick={toggle}
