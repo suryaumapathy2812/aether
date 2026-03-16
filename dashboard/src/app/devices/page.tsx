@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,7 +100,7 @@ function DevicesContent() {
   if (isPending || !session) return null;
 
   return (
-    <PageShell title="Devices" back="/home" centered={loading}>
+    <ContentShell title="Devices" back="/home">
       {loading ? (
         <p className="text-muted-foreground text-xs tracking-wider">
           loading...
@@ -220,6 +220,6 @@ function DevicesContent() {
           </div>
         </div>
       )}
-    </PageShell>
+    </ContentShell>
   );
 }

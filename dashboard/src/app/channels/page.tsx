@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import { useSession } from "@/lib/auth-client";
 import { listChannels, type ChannelInfo } from "@/lib/api";
 import {
@@ -86,7 +86,7 @@ export default function ChannelsPage() {
   }
 
   return (
-    <PageShell title="Channels" back="/home">
+    <ContentShell title="Channels" back="/home">
       <div className="space-y-2">
         <p className="text-[12px] text-muted-foreground mb-1">
           Connect messaging platforms so you can talk to Aether from anywhere.
@@ -161,6 +161,6 @@ export default function ChannelsPage() {
           );
         })}
       </div>
-    </PageShell>
+    </ContentShell>
   );
 }

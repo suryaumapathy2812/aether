@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -115,7 +115,7 @@ export default function TelegramChannelPage() {
   if (isPending || !session) return null;
 
   return (
-    <PageShell title="Telegram" back="/channels">
+    <ContentShell title="Telegram" back="/channels">
       <div className="space-y-6">
         {/* Description */}
         <div>
@@ -192,7 +192,7 @@ export default function TelegramChannelPage() {
           </>
         )}
       </div>
-    </PageShell>
+    </ContentShell>
   );
 }
 

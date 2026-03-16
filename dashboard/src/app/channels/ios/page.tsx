@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { IconDeviceMobile } from "@tabler/icons-react";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -95,7 +95,7 @@ export default function IOSChannelPage() {
   if (isPending || !session) return null;
 
   return (
-    <PageShell title="iOS" back="/channels">
+    <ContentShell title="iOS" back="/channels">
       <div className="space-y-6">
         <div>
           <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[78ch]">
@@ -144,7 +144,7 @@ export default function IOSChannelPage() {
           </>
         )}
       </div>
-    </PageShell>
+    </ContentShell>
   );
 }
 

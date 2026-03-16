@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import {
   Empty,
   EmptyDescription,
@@ -38,7 +38,7 @@ export default function NotificationsPage() {
   if (isPending || !session) return null;
 
   return (
-    <PageShell title="Notifications" back="/home">
+    <ContentShell title="Notifications" back="/home">
       <div className="space-y-6 max-w-[980px] mx-auto">
         {notifications.length === 0 ? (
           <Empty className="border border-border/60 bg-white/[0.02]">
@@ -103,6 +103,6 @@ export default function NotificationsPage() {
           </div>
         )}
       </div>
-    </PageShell>
+    </ContentShell>
   );
 }

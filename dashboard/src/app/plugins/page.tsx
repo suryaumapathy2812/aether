@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth-client";
 import { listPlugins, PluginInfo } from "@/lib/api";
@@ -51,7 +51,7 @@ function PluginsContent() {
   if (isPending || !session) return null;
 
   return (
-    <PageShell title="Connections" back="/home" centered={loading || !!error}>
+    <ContentShell title="Connections">
       {loading ? (
         <p className="text-muted-foreground text-xs tracking-wider">
           loading...
@@ -77,7 +77,7 @@ function PluginsContent() {
           ))}
         </div>
       )}
-    </PageShell>
+    </ContentShell>
   );
 }
 

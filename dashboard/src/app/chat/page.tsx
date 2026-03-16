@@ -2,13 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { useChat } from "@ai-sdk/react";
 import { getMemoryConversations } from "@/lib/api";
 import { createAetherTransport } from "@/lib/aether-transport";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import StatusOrb from "@/components/StatusOrb";
 import {
   Conversation,
@@ -39,7 +36,7 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { CopyIcon, MessageSquare } from "lucide-react";
+import { CopyIcon, Sparkles } from "lucide-react";
 import type { UIMessage } from "ai";
 
 export default function ChatPage() {
@@ -56,7 +53,6 @@ export default function ChatPage() {
 }
 
 function ChatView({ session }: { session: { user: { id: string; name?: string | null } } }) {
-  const router = useRouter();
   const [input, setInput] = useState("");
   const [loadingHistory, setLoadingHistory] = useState(true);
   const historyLoadedRef = useRef(false);
@@ -72,7 +68,6 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
     transport,
   });
 
-  // Load today's conversation history into the Chat instance.
   useEffect(() => {
     if (historyLoadedRef.current) return;
     historyLoadedRef.current = true;
@@ -133,40 +128,24 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
   const isStreaming = status === "streaming" || status === "submitted";
 
   return (
-    <div className="h-full flex flex-col w-full px-6 sm:px-8 pb-4">
-      <header className="flex items-center justify-between pt-7 sm:pt-8 pb-4 shrink-0">
-        <div className="w-8 min-w-[44px] -ml-2 flex items-center justify-start">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => router.push("/home")}
-            className="w-8 h-8 min-w-[44px] min-h-[44px] md:hidden"
-            aria-label="Go back"
-          >
-            <ChevronLeft className="size-[18px]" strokeWidth={1.5} />
-          </Button>
-        </div>
-        <span className="text-[11px] tracking-[0.18em] uppercase text-secondary-foreground font-normal">
-          Chat
-        </span>
-        <div className="w-8 flex items-center justify-center">
-          <StatusOrb status={isStreaming ? "thinking" : "connected"} size={10} />
-        </div>
-      </header>
+    <div className="h-full flex flex-col">
+      {/* Status indicator */}
+      <div className="absolute top-5 right-5 z-10">
+        <StatusOrb status={isStreaming ? "thinking" : "connected"} size={8} />
+      </div>
 
-      <Separator className="shrink-0 w-auto opacity-80" />
-
+      {/* Messages */}
       <Conversation className="flex-1 min-h-0">
-        <ConversationContent className="gap-6 px-0 pt-6">
+        <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-[720px] mx-auto w-full">
           {loadingHistory ? (
             <div className="flex items-center justify-center h-full">
-              <p className="text-muted-foreground text-xs">loading today&apos;s chat...</p>
+              <p className="text-muted-foreground/60 text-xs">loading...</p>
             </div>
           ) : messages.length === 0 ? (
             <ConversationEmptyState
-              icon={<MessageSquare className="size-8 text-muted-foreground/50" />}
+              icon={<Sparkles className="size-6 text-muted-foreground/30" />}
               title="What can I help you with?"
-              description="Type a message to begin"
+              description=""
             />
           ) : (
             messages.map((message, messageIndex) => (
@@ -199,7 +178,6 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
                         if (part.type.startsWith("tool-")) {
                           const toolPart = part as { type: string; state: string; toolCallId: string; input?: unknown; output?: unknown; errorText?: string };
                           const toolName = toolPart.type.replace("tool-", "");
-                          // Extract a meaningful subtitle from the input
                           const inputObj = toolPart.input as Record<string, unknown> | undefined;
                           const subtitle = inputObj
                             ? (inputObj.query || inputObj.message_id || inputObj.name || inputObj.summary || "") as string
@@ -228,7 +206,7 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
                         return (
                           <div
                             key={key}
-                            className="text-xs text-muted-foreground italic border-l-2 border-muted pl-3 py-1"
+                            className="text-xs text-muted-foreground/60 italic border-l border-white/[0.08] pl-3 py-1"
                           >
                             {part.text}
                           </div>
@@ -244,31 +222,31 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
       </Conversation>
 
       {error && (
-        <div className="py-2">
-          <p className="text-[11px] text-red-400">{error.message}</p>
+        <div className="max-w-[720px] mx-auto w-full px-6 py-1">
+          <p className="text-[11px] text-red-400/80">{error.message}</p>
         </div>
       )}
 
-      <PromptInput
-        onSubmit={handleSubmit}
-        className="mt-2 shrink-0"
-      >
-        <PromptInputBody>
-          <PromptInputTextarea
-            value={input}
-            onChange={(e) => setInput(e.currentTarget.value)}
-            placeholder="Type a message..."
-            className="min-h-[44px]"
-          />
-        </PromptInputBody>
-        <PromptInputFooter>
-          <PromptInputTools />
-          <PromptInputSubmit
-            status={isStreaming ? "streaming" : "ready"}
-            disabled={!input.trim() && !isStreaming}
-          />
-        </PromptInputFooter>
-      </PromptInput>
+      {/* Input */}
+      <div className="max-w-[720px] mx-auto w-full px-6 pb-5 pt-2">
+        <PromptInput onSubmit={handleSubmit}>
+          <PromptInputBody>
+            <PromptInputTextarea
+              value={input}
+              onChange={(e) => setInput(e.currentTarget.value)}
+              placeholder="Message aether..."
+              className="min-h-[44px]"
+            />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <PromptInputTools />
+            <PromptInputSubmit
+              status={isStreaming ? "streaming" : "ready"}
+              disabled={!input.trim() && !isStreaming}
+            />
+          </PromptInputFooter>
+        </PromptInput>
+      </div>
     </div>
   );
 }

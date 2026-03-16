@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -211,10 +211,10 @@ export default function PluginDetailPage() {
     : "";
 
   return (
-    <PageShell
+    <ContentShell
       title={plugin?.display_name || "Connection"}
       back="/plugins"
-      centered={loading || !!error}
+     
     >
       {loading ? (
         <p className="text-muted-foreground text-xs tracking-wider">
@@ -400,6 +400,6 @@ export default function PluginDetailPage() {
           )}
         </div>
       )}
-    </PageShell>
+    </ContentShell>
   );
 }

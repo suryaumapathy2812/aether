@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import SessionSync from "@/components/SessionSync";
 import NotificationProvider from "@/components/NotificationProvider";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
-import Dock from "@/components/Dock";
+import Sidebar from "@/components/Sidebar";
 import { UIPreferencesProvider } from "@/lib/ui-preferences";
 import "./globals.css";
 
@@ -35,7 +35,6 @@ export default function RootLayout({
     <html lang="en" className={jakarta.variable}>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-        {/* PWA / home screen */}
         <meta name="theme-color" content="#0f1512" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
         <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -52,10 +51,14 @@ export default function RootLayout({
               <div className="app-scene-vignette app-scene-vignette-animate" />
               <div className="app-scene-content">
                 <div className="app-glass-shell app-glass-shell-animate">
-                  <div className="app-shell-content">{children}</div>
+                  <div className="app-shell-content flex">
+                    <Sidebar />
+                    <div className="flex-1 min-w-0 h-full overflow-hidden">
+                      {children}
+                    </div>
+                  </div>
                 </div>
               </div>
-              <Dock />
             </main>
             </NotificationProvider>
             <Toaster />

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -42,7 +42,7 @@ export default function AccountPage() {
 
   if (view === "edit") {
     return (
-      <PageShell title="Edit Account" back="/account">
+      <ContentShell title="Edit Account" back="/account">
         <div className="w-full max-w-[300px] mx-auto">
           <MinimalInput label="Name" value={name} onChange={setName} />
           <MinimalInput
@@ -67,12 +67,12 @@ export default function AccountPage() {
             cancel
           </Button>
         </div>
-      </PageShell>
+      </ContentShell>
     );
   }
 
   return (
-    <PageShell title={name || "Account"} back="/home" centered>
+    <ContentShell title={name || "Account"} back="/home">
       <div className="w-full max-w-[300px] mx-auto flex flex-col items-center gap-6">
         
         {/* Profile Actions */}
@@ -141,6 +141,6 @@ export default function AccountPage() {
         </div>
 
       </div>
-    </PageShell>
+    </ContentShell>
   );
 }

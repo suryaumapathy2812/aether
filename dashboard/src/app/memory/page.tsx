@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
-import PageShell from "@/components/PageShell";
+import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -178,10 +178,10 @@ export default function MemoryPage() {
     decisions.length === 0;
 
   return (
-    <PageShell
+    <ContentShell
       title="Memory"
       back="/home"
-      centered={loading || !!error || isEmpty}
+     
     >
       {loading ? (
         <p className="text-muted-foreground text-xs tracking-wider text-center">
@@ -236,7 +236,7 @@ export default function MemoryPage() {
           {tab === "decisions" && <DecisionsTab decisions={decisions} />}
         </div>
       )}
-    </PageShell>
+    </ContentShell>
   );
 }
 
