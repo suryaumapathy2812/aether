@@ -196,7 +196,17 @@ export default function MemoryPage() {
       ) : (
         <div className="space-y-6 max-w-[950px] mx-auto">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <TabBar tab={tab} onTabChange={setTab} />
+            <TabBar
+              tab={tab}
+              onTabChange={setTab}
+              counts={{
+                about: facts.length,
+                conversations: conversations.length,
+                entities: entities.length,
+                memories: memories.length,
+                decisions: decisions.length,
+              }}
+            />
             <Button
               variant="aether-link"
               size="aether-link"
@@ -243,34 +253,45 @@ export default function MemoryPage() {
 function TabBar({
   tab,
   onTabChange,
+  counts,
 }: {
   tab: Tab;
   onTabChange: (t: Tab) => void;
+  counts: Record<Tab, number>;
 }) {
   const tabs: { id: Tab; label: string }[] = [
-    { id: "about", label: "about you" },
-    { id: "conversations", label: "conversations" },
-    { id: "entities", label: "entities" },
-    { id: "memories", label: "memories" },
-    { id: "decisions", label: "decisions" },
+    { id: "about", label: "About You" },
+    { id: "conversations", label: "Conversations" },
+    { id: "entities", label: "Entities" },
+    { id: "memories", label: "Memories" },
+    { id: "decisions", label: "Decisions" },
   ];
 
   return (
-    <div className="flex gap-3 sm:gap-6 flex-wrap">
+    <div className="flex items-center gap-1 flex-wrap">
       {tabs.map((t) => (
-        <Button
+        <button
           key={t.id}
-          variant="aether-link"
-          size="aether-link"
           onClick={() => onTabChange(t.id)}
-          className={`text-[11px] tracking-[0.12em] uppercase pb-2 rounded-none border-b transition-all duration-300 shrink-0 ${
-            tab === t.id
-              ? "text-foreground border-foreground"
-              : "text-muted-foreground border-transparent hover:text-secondary-foreground"
-          }`}
+          className={`
+            flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors shrink-0
+            ${
+              tab === t.id
+                ? "bg-white/[0.08] text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+            }
+          `}
         >
           {t.label}
-        </Button>
+          <span
+            className={`
+              text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
+              ${tab === t.id ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
+            `}
+          >
+            {counts[t.id]}
+          </span>
+        </button>
       ))}
     </div>
   );
