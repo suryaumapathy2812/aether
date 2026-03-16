@@ -58,7 +58,7 @@ export default function Sidebar() {
   const sidebarContent = (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-5 pb-4 min-w-0">
+      <div className={cn("flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
         {!collapsed && (
           <Link href="/chat" className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
             aether
@@ -66,9 +66,9 @@ export default function Sidebar() {
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="hidden md:flex items-center justify-center w-6 h-6 rounded text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+          className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/[0.04] transition-colors"
         >
-          {collapsed ? <PanelLeft className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+          {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
         </button>
       </div>
 
@@ -82,10 +82,11 @@ export default function Sidebar() {
           className={cn(
             "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
             "text-foreground/80 hover:bg-white/[0.06]",
-            pathname === "/chat" && "bg-white/[0.06]"
+            pathname === "/chat" && "bg-white/[0.06]",
+            collapsed && "justify-center px-0"
           )}
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-4 shrink-0" />
           {!collapsed && "New Chat"}
         </button>
       </div>
@@ -125,10 +126,11 @@ export default function Sidebar() {
               "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
               pathname.startsWith(item.href)
                 ? "text-foreground/90 bg-white/[0.06]"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+              collapsed && "justify-center px-0"
             )}
           >
-            <item.icon className="size-3.5" />
+            <item.icon className="size-4 shrink-0" />
             {!collapsed && item.label}
           </Link>
         ))}
