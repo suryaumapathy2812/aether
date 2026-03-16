@@ -1,101 +1,62 @@
 # Google Contacts Plugin
 
-You have access to Google Contacts tools for searching and looking up contact information.
+Search and look up contact information from the user's Google Contacts.
 
----
+## Core Workflow
 
-## Tools Available
+Contact lookups are usually one or two steps:
 
-### `search_contacts`
-Search contacts by name, email address, or phone number.
+```
+search_contacts → present result
+                → get_contact (only if more detail needed)
+```
 
-**Parameters:**
-- `query` (required) — Name, email, or phone number to search for
+`search_contacts` handles name, email, and phone lookups and returns the most common fields (name, emails, phones, organization). Use `get_contact` only when you need fields not in the search result — like birthday, full address, or notes.
 
-**Returns:** Matching contacts with name, email addresses, phone numbers, organization, and resource name.
+## Decision Rules
 
-**Use when:** The user asks for someone's contact details, email address, or phone number. Also use this before sending an email to verify the correct address.
+**Looking up contacts:**
+- If multiple contacts match (e.g., searching "John"), list them and ask which one the user means.
+- If no contacts match, say "I couldn't find anyone named [X] in your contacts" and suggest trying a different spelling.
 
----
+**Presenting contact info:**
+- Be natural: "Priya's email is priya@example.com" — not raw field names.
+- Only share the specific detail the user asked for. Don't dump the entire contact record.
+- If a contact has multiple emails (work/personal), mention both and ask which to use.
 
-### `get_contact`
-Get full details of a specific contact by their resource name.
+**Privacy:**
+- Don't volunteer contact details the user didn't ask for. If they ask for a phone number, give just the phone number.
 
-**Parameters:**
-- `resource_name` (required) — The contact's resource name from `search_contacts` (e.g. `people/c12345`)
-
-**Returns:** Complete contact record including all emails, phones, addresses, birthday, notes, and organization.
-
-**Use when:** `search_contacts` returned a contact but you need more detail (e.g. multiple email addresses, their job title, or notes).
-
----
-
-## Pagination & Limits
-
-**Contacts API default page size:** 10 results per search (max 30).
-
-**For broad searches (common names like "John"):**
-1. Set `page_size` higher (up to 30) to get more results in one call
-2. The response includes a `nextPageToken` if more contacts match
-3. If the user needs a comprehensive list, make follow-up calls with `pageToken`
-
----
+**Cross-plugin integration:**
+- When the user says "email Priya", use `search_contacts` to find Priya's email address, then hand off to the Gmail plugin to compose.
+- When the user says "call Priya", look up her phone number and present it.
 
 ## Rate Limits
 
 | Quota | Limit |
 |---|---|
 | Read requests per minute per user | 90 |
-| Read requests per day per user | 20,000 |
 | Concurrent requests | 10 per user |
 
-**In practice:** Contact search rate limits are tighter than other Google APIs. Avoid making more than 5-10 parallel requests. For a single lookup, one call is usually enough.
-
----
-
-## Decision Rules
-
-**Looking up contacts:**
-- Use `search_contacts` first — it handles name, email, and phone lookups
-- If multiple contacts match, list them and ask the user which one they mean
-- Use `get_contact` only when you need fields not returned by search (e.g. birthday, full address, notes)
-
-**Presenting contact info:**
-- Be natural: "Priya's email is priya@example.com" not "email_addresses[0].value: priya@example.com"
-- Only share the specific detail the user asked for — don't dump the entire contact record
-- If a contact has multiple emails (work/personal), mention both and ask which to use
-
-**Privacy:**
-- Don't volunteer contact details the user didn't ask for
-- If the user asks for someone's phone number, give just the phone number — not their full profile
-
-**Integration with Gmail:**
-- When the user says "email Priya", use `search_contacts` to find Priya's email address before composing
-- When the user says "call Priya", use `search_contacts` to find her phone number
-
-**Error handling:**
-- If no contacts match, say "I couldn't find anyone named [X] in your contacts" and ask if they want to try a different spelling
-- If the query is ambiguous (e.g. "John"), list all matches and ask which one
-
----
+Contact API rate limits are tighter than other Google APIs. Avoid more than 5-10 parallel requests. A single lookup is usually one call.
 
 ## Example Workflows
 
-**"What's Priya's email?"**
+**User: "What's Priya's email?"**
 ```
 1. search_contacts query="Priya"
 2. "Priya Sharma's email is priya.sharma@company.com"
-   (If multiple Priyas: "I found 2 contacts named Priya — which one do you mean?")
+   (If multiple Priyas: "I found 2 contacts named Priya — which one?")
 ```
 
-**"Email Rahul about the project update"**
+**User: "Email Rahul about the project update"**
 ```
 1. search_contacts query="Rahul" → get email address
-2. Proceed to compose email using Gmail plugin
+2. Hand off to Gmail plugin to compose the email to rahul@example.com
 ```
 
-**"What's the phone number for Acme Corp?"**
+**User: "What's the phone number for Acme Corp?"**
 ```
 1. search_contacts query="Acme Corp"
-2. "Acme Corp's main number is +1-555-0100 (contact: John Smith)"
+2. "Acme Corp's main number is +1-555-0100 (contact: John Smith, Sales Director)"
 ```

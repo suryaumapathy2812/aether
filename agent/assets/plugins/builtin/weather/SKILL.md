@@ -1,86 +1,63 @@
 # Weather Plugin
 
-You have access to weather tools for checking current conditions and multi-day forecasts for any city.
+Current weather conditions and multi-day forecasts for any location.
 
----
+## Core Workflow
 
-## Tools Available
+```
+"What's the weather?"       →  current_weather
+"Will it rain this week?"   →  weather_forecast
+```
 
-### `current_weather`
-Get current weather conditions for a city.
-
-**Parameters:**
-- `city` (required) — City name (e.g. "Chennai", "New York", "London, UK")
-
-**Returns:** Temperature (°C), feels-like temperature, humidity, wind speed and direction, weather condition (sunny/cloudy/rainy/etc.), and visibility.
-
-**Use when:** The user asks about the weather right now, today's conditions, or "is it raining?".
-
----
-
-### `forecast`
-Get a multi-day weather forecast for a city.
-
-**Parameters:**
-- `city` (required) — City name
-- `days` (optional, default `3`) — Number of days to forecast (1–7)
-
-**Returns:** Day-by-day forecast with high/low temperatures, conditions, precipitation chance, and wind.
-
-**Use when:** The user asks about upcoming weather, planning for a trip, or "will it rain this week?".
-
----
+Two tools, straightforward choice: `current_weather` for right now, `weather_forecast` for upcoming days.
 
 ## Decision Rules
 
-**Choosing the right tool:**
-- "What's the weather like?" → `current_weather`
-- "What's the weather today?" → `current_weather`
-- "Will it rain tomorrow?" → `forecast days=2`
-- "What's the weather this week?" → `forecast days=7`
-- "Should I bring an umbrella for my trip on Friday?" → `forecast` covering that date
+**Which tool:**
+- "What's the weather?" / "Is it raining?" / today's conditions → `current_weather`
+- "Will it rain tomorrow?" → `weather_forecast` with `days=2` (today + tomorrow)
+- "What's the weather this week?" → `weather_forecast` with `days=7`
+- "Should I bring an umbrella Friday?" → `weather_forecast` covering that date
 
 **Location handling:**
-- If the user doesn't specify a city, check memory for their known location first (`search_memory query="user location city"`)
+- The parameter is `location` (not `city`). It accepts city names, regions, or countries.
+- If the user doesn't specify a location, check memory for their known location first.
 - If no location is in memory, ask: "Which city would you like the weather for?"
-- For ambiguous city names, add the country: "Paris, France" vs "Paris, Texas"
+- For ambiguous names, add the country: "Paris, France" vs "Paris, Texas"
 
 **Presenting weather:**
 - Be conversational: "It's 32°C and sunny in Chennai right now, feels like 36°C with high humidity"
-- Don't dump raw numbers — translate them: "wind at 25 km/h" → "breezy"
-- **Always highlight notable conditions:** heavy rain, extreme heat/cold, storms, poor visibility
-- For forecasts, lead with the most important information: "Rain expected Thursday and Friday, clear for the weekend"
+- Translate raw numbers into meaning: "wind at 25 km/h" → "breezy"
+- Highlight notable conditions: heavy rain, extreme heat/cold, storms, poor visibility.
+- For forecasts, lead with the most important info: "Rain expected Thursday and Friday, clear for the weekend"
 
 **Practical advice:**
-- Offer relevant suggestions when conditions are notable:
-  - Heavy rain → "You might want to carry an umbrella"
-  - Extreme heat → "Stay hydrated and avoid going out midday"
-  - Storm warning → "It might be best to stay indoors"
-- For travel planning, summarize the forecast for the trip dates specifically
+- Offer relevant suggestions for notable conditions:
+  - Heavy rain → "You might want an umbrella"
+  - Extreme heat → "Stay hydrated, avoid going out midday"
+  - Storm → "Might be best to stay indoors"
 
 **Units:**
-- Use Celsius (°C) by default
-- Switch to Fahrenheit if the user is in the US or explicitly asks for it
-
----
+- Use Celsius (°C) by default.
+- Switch to Fahrenheit if the user is in the US or explicitly asks.
 
 ## Example Workflows
 
-**"What's the weather in Chennai?"**
+**User: "What's the weather in Chennai?"**
 ```
-1. current_weather city="Chennai"
+1. current_weather location="Chennai"
 2. "It's 34°C and partly cloudy in Chennai right now. Feels like 38°C with 78% humidity and a light breeze."
 ```
 
-**"Will it rain this week?"**
+**User: "Will it rain this week?"**
 ```
-1. [check memory for user's city if not specified]
-2. forecast city="Chennai" days=7
+1. (Check memory for user's city if not specified)
+2. weather_forecast location="Chennai" days=7
 3. "Rain is expected Wednesday through Friday. The weekend looks clear with temperatures around 30°C."
 ```
 
-**"I'm traveling to London next week — what's the weather like?"**
+**User: "I'm traveling to London next week"**
 ```
-1. forecast city="London, UK" days=7
-2. "London next week: mostly cloudy with temperatures between 8–14°C. Rain expected Tuesday and Wednesday. Pack a light jacket and umbrella."
+1. weather_forecast location="London, UK" days=7
+2. "London next week: mostly cloudy, 8-14°C. Rain expected Tuesday and Wednesday. Pack a light jacket and umbrella."
 ```
