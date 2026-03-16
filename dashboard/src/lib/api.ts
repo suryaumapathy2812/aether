@@ -125,7 +125,10 @@ export async function listDevices(): Promise<Device[]> {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error((err as { detail?: string }).detail || "Failed to list devices");
   }
-  return res.json();
+  const data = await res.json();
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.devices)) return data.devices;
+  return [];
 }
 
 export interface RegisterTelegramRequest {
