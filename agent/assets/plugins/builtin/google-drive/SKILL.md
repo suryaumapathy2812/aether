@@ -14,6 +14,13 @@ list_drive_files (browse folder)   create_folder
 list_shared_drives                 
 ```
 
+## Autonomy Rules
+
+**Never ask the user to provide search terms.** When they say "find the document about X", search for X. When they say "find my files", start with `list_drive_files` at root. When the request is vague, try multiple search strategies:
+- Try the exact phrase first, then individual keywords
+- If no results, try broader terms or synonyms
+- Try at least 2-3 different queries before reporting nothing found
+
 ## Decision Rules
 
 **Finding files:**

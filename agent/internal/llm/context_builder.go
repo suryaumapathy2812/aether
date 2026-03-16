@@ -15,6 +15,17 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
+const executionPolicyAppendix = "\n\nExecution policy:" +
+	"\n- Always attempt tool calls before asking the user for clarification. You have tools — use them to resolve ambiguity." +
+	"\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call." +
+	"\n- For broad requests (find spending, organize files, check emails), start with reasonable search terms and iterate. Never ask the user what to search for." +
+	"\n- For reminders or alarms, use schedule_reminder exactly once then confirm." +
+	"\n- If a tool fails, try different parameters or alternative tools before giving up. Attempt at least 2-3 strategies." +
+	"\n- Avoid calling the same tool with identical arguments repeatedly." +
+	"\n- For relative-date calendar requests (today/tomorrow/this week/next weekday), call world_time first before calendar tools." +
+	"\n- Never ask the user to confirm the current date when world_time is available." +
+	"\n- Never end your turn without having completed the requested task or genuinely exhausting all tool-based approaches."
+
 type ContextBuilder struct {
 	registry     *tools.Registry
 	skills       *skills.Manager
@@ -51,7 +62,7 @@ func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, 
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
-	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly.\n- For relative-date calendar requests (today/tomorrow/this week/next weekday), call world_time first before calendar tools.\n- Never ask the user to confirm the current date when world_time is available."
+	basePrompt += executionPolicyAppendix
 	b.systemPrompt = basePrompt
 	return b
 }
@@ -155,7 +166,7 @@ func (b *ContextBuilder) ReloadSystemPrompt() string {
 	if basePrompt == "" {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
-	basePrompt += "\n\nExecution policy:\n- Chain multiple tool calls to complete the user's request fully. Do not stop after one tool call.\n- For reminders or alarms, use schedule_reminder exactly once then confirm.\n- If a tool fails, try an alternative approach before giving up.\n- Avoid calling the same tool with identical arguments repeatedly.\n- For relative-date calendar requests (today/tomorrow/this week/next weekday), call world_time first before calendar tools.\n- Never ask the user to confirm the current date when world_time is available."
+	basePrompt += executionPolicyAppendix
 
 	b.mu.Lock()
 	b.systemPrompt = basePrompt

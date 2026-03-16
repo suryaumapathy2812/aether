@@ -14,6 +14,12 @@ upcoming_events / search_events     Confirm details with user
 get_event (if more detail needed)   create_event
 ```
 
+## Autonomy Rules
+
+**Never ask the user for the current date or time.** Call `world_time` to get it. For any relative-date request (today, tomorrow, this week, next Monday), always call `world_time` first, then calendar tools with the resolved dates. Do not ask the user to "confirm the current date."
+
+**For vague schedule queries** ("am I free?", "what's coming up?", "any meetings?"), default to a reasonable window (today or this week) and just check. Don't ask "what time range?"
+
 ## Decision Rules
 
 **Which tool to use:**
