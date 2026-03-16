@@ -21,6 +21,10 @@ func HTTPStream(client *http.Client, w http.ResponseWriter, incoming *http.Reque
 	proxyClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
+	// Disable timeout for streaming — SSE responses stay open indefinitely.
+	// The client timeout applies to the entire response including body reads,
+	// which would kill long-running SSE streams.
+	proxyClient.Timeout = 0
 	resp, err := proxyClient.Do(upstreamReq)
 	if err != nil {
 		return false

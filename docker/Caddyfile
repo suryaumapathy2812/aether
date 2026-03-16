@@ -5,13 +5,18 @@ aether.suryaumapathy.in {
     }
 
     # Next.js orchestrator proxy — must go to the dashboard
+    # flush_interval -1 disables response buffering for SSE streaming
     handle /api/go/* {
-        reverse_proxy localhost:3000
+        reverse_proxy localhost:3000 {
+            flush_interval -1
+        }
     }
 
     # All other API routes go to the orchestrator
     handle /api/* {
-        reverse_proxy localhost:4000
+        reverse_proxy localhost:4000 {
+            flush_interval -1
+        }
     }
 
     # Everything else to dashboard
