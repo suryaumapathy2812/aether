@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import PushOptIn from "@/components/PushOptIn";
 import ModelPreference from "@/components/ModelPreference";
 import { useSession, signOut } from "@/lib/auth-client";
-import { ChevronRight, LogOut } from "lucide-react";
+import { IconChevronRight, IconLogout } from "@tabler/icons-react";
 
 export default function AccountPage() {
   const router = useRouter();
@@ -67,7 +67,7 @@ export default function AccountPage() {
           onClick={handleLogout}
           className="text-muted-foreground hover:text-red-400 hover:bg-red-500/5 h-8 px-2.5 text-[12px] font-normal shrink-0"
         >
-          <LogOut className="size-3.5 mr-1.5" />
+          <IconLogout className="size-3.5 mr-1.5" />
           Log out
         </Button>
       </div>
@@ -98,7 +98,7 @@ export default function AccountPage() {
               Manage Gmail, Calendar, and other integrations
             </p>
           </div>
-          <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+          <IconChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
         </button>
 
         <button
@@ -111,7 +111,7 @@ export default function AccountPage() {
               Facts, conversations, and decisions
             </p>
           </div>
-          <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+          <IconChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
         </button>
       </div>
     </ContentShell>

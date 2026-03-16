@@ -36,7 +36,7 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { CopyIcon, Sparkles } from "lucide-react";
+import { IconCopy, IconSparkles } from "@tabler/icons-react";
 import type { UIMessage } from "ai";
 
 export default function ChatPage() {
@@ -155,7 +155,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             </div>
           ) : messages.length === 0 ? (
             <ConversationEmptyState
-              icon={<Sparkles className="size-6 text-muted-foreground/30" />}
+              icon={<IconSparkles className="size-6 text-muted-foreground/30" />}
               title="What can I help you with?"
               description=""
             />
@@ -180,7 +180,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                                     }
                                     label="Copy"
                                   >
-                                    <CopyIcon className="size-3" />
+                                    <IconCopy className="size-3" />
                                   </MessageAction>
                                 </MessageActions>
                               )}

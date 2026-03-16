@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Bell } from "lucide-react";
+import { IconBell } from "@tabler/icons-react";
 import Link from "next/link";
 import { useNotifications } from "@/components/NotificationProvider";
 
@@ -37,7 +37,7 @@ export default function NotificationBell() {
         className="relative w-8 h-8 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
         aria-label="Notifications"
       >
-        <Bell className="size-[18px]" strokeWidth={1.5} />
+        <IconBell className="size-[18px]" strokeWidth={1.5} />
         {badgeCount > 0 && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-red-500 text-white text-[9px] font-medium flex items-center justify-center px-1">
             {badgeCount > 99 ? "99+" : badgeCount}

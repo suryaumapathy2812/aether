@@ -9,13 +9,13 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import {
-  CheckIcon,
-  CopyIcon,
-  FileIcon,
-  GitCommitIcon,
-  MinusIcon,
-  PlusIcon,
-} from "lucide-react";
+  IconCheck,
+  IconCopy,
+  IconFile,
+  IconGitCommit,
+  IconMinus,
+  IconPlus,
+} from "@tabler/icons-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -57,7 +57,7 @@ export const CommitHash = ({
   ...props
 }: CommitHashProps) => (
   <span className={cn("font-mono text-xs", className)} {...props}>
-    <GitCommitIcon className="mr-1 inline-block size-3" />
+    <IconGitCommit className="mr-1 inline-block size-3" />
     {children}
   </span>
 );
@@ -252,7 +252,7 @@ export const CommitCopyButton = ({
     []
   );
 
-  const Icon = isCopied ? CheckIcon : CopyIcon;
+  const Icon = isCopied ? IconCheck : IconCopy;
 
   return (
     <Button
@@ -357,13 +357,13 @@ export const CommitFileStatus = ({
   </span>
 );
 
-export type CommitFileIconProps = ComponentProps<typeof FileIcon>;
+export type CommitIconFileProps = ComponentProps<typeof IconFile>;
 
-export const CommitFileIcon = ({
+export const CommitIconFile = ({
   className,
   ...props
-}: CommitFileIconProps) => (
-  <FileIcon
+}: CommitIconFileProps) => (
+  <IconFile
     className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
     {...props}
   />
@@ -420,7 +420,7 @@ export const CommitFileAdditions = ({
     >
       {children ?? (
         <>
-          <PlusIcon className="inline-block size-3" />
+          <IconPlus className="inline-block size-3" />
           {count}
         </>
       )}
@@ -449,7 +449,7 @@ export const CommitFileDeletions = ({
     >
       {children ?? (
         <>
-          <MinusIcon className="inline-block size-3" />
+          <IconMinus className="inline-block size-3" />
           {count}
         </>
       )}

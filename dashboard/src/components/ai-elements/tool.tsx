@@ -8,12 +8,12 @@ import {
 import { cn } from "@/lib/utils";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
-  CheckCircleIcon,
-  ChevronDownIcon,
-  CircleIcon,
-  Loader2Icon,
-  XCircleIcon,
-} from "lucide-react";
+  IconCircleCheck,
+  IconChevronDown,
+  IconCircle,
+  IconLoader2,
+  IconCircleX,
+} from "@tabler/icons-react";
 import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
 
@@ -43,13 +43,13 @@ export type ToolHeaderProps = {
 );
 
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
-  "approval-requested": <Loader2Icon className="size-3 text-muted-foreground animate-spin" />,
-  "approval-responded": <CheckCircleIcon className="size-3 text-muted-foreground" />,
-  "input-available": <Loader2Icon className="size-3 text-muted-foreground animate-spin" />,
-  "input-streaming": <CircleIcon className="size-3 text-muted-foreground/50" />,
-  "output-available": <CheckCircleIcon className="size-3 text-emerald-500/70" />,
-  "output-denied": <XCircleIcon className="size-3 text-amber-500/70" />,
-  "output-error": <XCircleIcon className="size-3 text-red-400/70" />,
+  "approval-requested": <IconLoader2 className="size-3 text-muted-foreground animate-spin" />,
+  "approval-responded": <IconCircleCheck className="size-3 text-muted-foreground" />,
+  "input-available": <IconLoader2 className="size-3 text-muted-foreground animate-spin" />,
+  "input-streaming": <IconCircle className="size-3 text-muted-foreground/50" />,
+  "output-available": <IconCircleCheck className="size-3 text-emerald-500/70" />,
+  "output-denied": <IconCircleX className="size-3 text-amber-500/70" />,
+  "output-error": <IconCircleX className="size-3 text-red-400/70" />,
 };
 
 const statusLabels: Record<ToolPart["state"], string> = {
@@ -88,7 +88,7 @@ export const ToolHeader = ({
     >
       <span className="font-mono text-foreground/70">{title ?? derivedName}</span>
       {getStatusBadge(state)}
-      <ChevronDownIcon className="ml-auto size-3 text-muted-foreground/50 transition-transform group-data-[state=open]:rotate-180" />
+      <IconChevronDown className="ml-auto size-3 text-muted-foreground/50 transition-transform group-data-[state=open]:rotate-180" />
     </CollapsibleTrigger>
   );
 };

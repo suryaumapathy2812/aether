@@ -7,7 +7,7 @@ import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth-client";
 import { listPlugins, PluginInfo } from "@/lib/api";
-import { Search, ChevronRight } from "lucide-react";
+import { IconSearch, IconChevronRight } from "@tabler/icons-react";
 
 export default function PluginsPage() {
   return (
@@ -129,7 +129,7 @@ function PluginsContent() {
 
       {/* Search */}
       <div className="relative mb-6">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/40" />
+        <IconSearch className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/40" />
         <input
           type="text"
           value={search}
@@ -248,7 +248,7 @@ function PluginRow({
         </span>
       )}
 
-      <ChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
+      <IconChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
     </Link>
   );
 }

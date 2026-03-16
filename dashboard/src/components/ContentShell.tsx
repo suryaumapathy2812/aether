@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
+import { IconChevronLeft } from "@tabler/icons-react";
 
 /**
  * ContentShell — simple content wrapper for non-chat pages.
@@ -28,7 +28,7 @@ export default function ContentShell({
               onClick={() => router.push(back)}
               className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors"
             >
-              <ChevronLeft className="size-4" />
+              <IconChevronLeft className="size-4" />
             </button>
           )}
           <h1 className="text-[13px] font-medium text-foreground/80">{title}</h1>

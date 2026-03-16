@@ -16,7 +16,7 @@ import {
   getOAuthStartUrl,
   PluginInfo,
 } from "@/lib/api";
-import { ExternalLink, AlertCircle } from "lucide-react";
+import { IconExternalLink, IconAlertCircle } from "@tabler/icons-react";
 
 export default function PluginDetailPage() {
   const router = useRouter();
@@ -263,7 +263,7 @@ export default function PluginDetailPage() {
                 onClick={handleOAuthConnect}
                 className="text-[12px] h-8 px-3 text-muted-foreground"
               >
-                <ExternalLink className="size-3 mr-1.5" />
+                <IconExternalLink className="size-3 mr-1.5" />
                 {plugin.connected ? "Reconnect" : "Connect"}
               </Button>
             </div>
@@ -274,7 +274,7 @@ export default function PluginDetailPage() {
             plugin.installed &&
             !hasRequiredConfig() && (
               <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-amber-500/[0.06] border border-amber-500/10">
-                <AlertCircle className="size-3.5 text-amber-400/70 shrink-0" />
+                <IconAlertCircle className="size-3.5 text-amber-400/70 shrink-0" />
                 <p className="text-[12px] text-amber-400/70">
                   Add your API key below to activate
                 </p>
