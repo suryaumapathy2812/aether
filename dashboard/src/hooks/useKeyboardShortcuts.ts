@@ -26,7 +26,7 @@ function isInputFocused(): boolean {
  * /  — focus chat input (when not typing)
  * ?  — shortcuts help (when not typing)
  * Escape — blur input
- * G then C/S/P/M — navigation sequences (when not typing)
+ * G then C/S/P/D/M — navigation sequences (when not typing)
  */
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   const router = useRouter();
@@ -108,6 +108,9 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
             break;
           case "p":
             router.push("/plugins");
+            break;
+          case "d":
+            router.push("/devices");
             break;
           case "m":
             router.push("/memory");

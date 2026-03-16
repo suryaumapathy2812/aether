@@ -11,6 +11,7 @@ import {
   MessageCircle,
   Brain,
   Zap,
+  Smartphone,
   Settings,
   PanelLeftClose,
   PanelLeft,
@@ -59,6 +60,7 @@ export default function Sidebar() {
 
   const navItems = [
     { href: "/plugins", label: "Plugins", icon: Zap },
+    { href: "/devices", label: "Devices", icon: Smartphone },
     { href: "/memory", label: "Memory", icon: Brain },
     { href: "/account", label: "Settings", icon: Settings },
   ];

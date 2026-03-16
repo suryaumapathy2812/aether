@@ -16,6 +16,7 @@ import {
   Settings,
   Zap,
   Brain,
+  Smartphone,
   Plus,
   PanelLeftClose,
   Keyboard,
@@ -89,6 +90,11 @@ export default function CommandPalette({
             <Zap className="size-4 mr-2 text-muted-foreground" />
             Connections
             <span className="ml-auto text-[11px] text-muted-foreground/60">G P</span>
+          </CommandItem>
+          <CommandItem onSelect={() => runAction(() => router.push("/devices"))}>
+            <Smartphone className="size-4 mr-2 text-muted-foreground" />
+            Devices
+            <span className="ml-auto text-[11px] text-muted-foreground/60">G D</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/memory"))}>
             <Brain className="size-4 mr-2 text-muted-foreground" />

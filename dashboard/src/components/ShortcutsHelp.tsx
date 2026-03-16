@@ -31,6 +31,7 @@ const sections = [
       { keys: "G → C", label: "Go to Chat" },
       { keys: "G → S", label: "Go to Settings" },
       { keys: "G → P", label: "Go to Plugins" },
+      { keys: "G → D", label: "Go to Devices" },
       { keys: "G → M", label: "Go to Memory" },
     ],
   },
