@@ -6,19 +6,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * Aether — always dark, Light Phone aesthetic.
- * Shadcn CSS variables in :root are the source of truth.
- * Only font-sans is kept here for Tailwind's font-sans utility.
- */
 @theme {
   --font-sans: "Plus Jakarta Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-/*
- * Shadcn CSS variable bridge — maps shadcn's semantic tokens
- * to our dark palette. No .dark class needed (always dark).
- */
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -60,59 +51,50 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/*
- * Map shadcn variables to our dark palette.
- * Always dark — no light mode, no .dark class.
- */
 :root {
   --radius: 0.625rem;
-  --glass-blur: 10px;
-  --glass-bg: rgba(8, 11, 10, 0.26);
-  --glass-border: rgba(26, 32, 29, 0.72);
-  --glass-highlight: rgba(20, 26, 23, 0.55);
-  --glass-shadow: 0 20px 52px rgba(0, 0, 0, 0.42);
-  /* bg / fg */
-  --background: #0f1512;
-  --foreground: #f2f2ea;
+  /* bg / fg — Linear-style near-black */
+  --background: #0a0a0a;
+  --foreground: #ececec;
   /* card */
-  --card: rgba(31, 36, 34, 0.65);
-  --card-foreground: #e8e8e8;
+  --card: #141414;
+  --card-foreground: #ececec;
   /* popover */
-  --popover: rgba(24, 29, 27, 0.94);
-  --popover-foreground: #e8e8e8;
-  /* primary — white-on-dark for this minimal aesthetic */
-  --primary: #f5f4ea;
-  --primary-foreground: #121612;
+  --popover: #141414;
+  --popover-foreground: #ececec;
+  /* primary */
+  --primary: #ececec;
+  --primary-foreground: #0a0a0a;
   /* secondary */
-  --secondary: rgba(37, 43, 40, 0.72);
-  --secondary-foreground: #cfcdc0;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #a0a0a0;
   /* muted */
-  --muted: rgba(34, 39, 36, 0.75);
-  --muted-foreground: #a7a497;
+  --muted: #1a1a1a;
+  --muted-foreground: #737373;
   /* accent */
-  --accent: rgba(43, 49, 45, 0.8);
-  --accent-foreground: #eceadf;
+  --accent: #1f1f1f;
+  --accent-foreground: #ececec;
   /* destructive */
-  --destructive: #dc2626;
+  --destructive: #ef4444;
   /* border / input / ring */
-  --border: rgba(255, 255, 255, 0.18);
-  --input: rgba(255, 255, 255, 0.16);
-  --ring: rgba(255, 255, 255, 0.38);
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: rgba(255, 255, 255, 0.2);
   /* charts */
-  --chart-1: #f5f4ea;
-  --chart-2: #cfcdc0;
-  --chart-3: #a7a497;
-  --chart-4: #646b67;
-  --chart-5: #404642;
-  /* sidebar (unused but required by shadcn) */
-  --sidebar: rgba(24, 29, 27, 0.92);
-  --sidebar-foreground: #eceadf;
-  --sidebar-primary: #f5f4ea;
-  --sidebar-primary-foreground: #131713;
-  --sidebar-accent: rgba(43, 49, 45, 0.8);
-  --sidebar-accent-foreground: #eceadf;
-  --sidebar-border: rgba(255, 255, 255, 0.14);
-  --sidebar-ring: rgba(255, 255, 255, 0.34);
+  --chart-1: #ececec;
+  --chart-2: #a0a0a0;
+  --chart-3: #737373;
+  --chart-4: #525252;
+  --chart-5: #333333;
+  /* sidebar */
+  --sidebar: #111111;
+  --sidebar-foreground: #ececec;
+  --sidebar-primary: #ececec;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #1a1a1a;
+  --sidebar-accent-foreground: #ececec;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-ring: rgba(255, 255, 255, 0.2);
 }
 
 /* ── Base ── */
@@ -143,149 +125,22 @@ textarea {
   letter-spacing: 0.32em;
 }
 
-.app-scene {
-  position: relative;
-  min-height: 100dvh;
+/* ── App layout — full viewport, no glass shell ── */
+.app-layout {
+  height: 100dvh;
   width: 100%;
-  overflow: hidden;
+  display: flex;
   background: var(--background);
 }
 
-.app-scene-bg {
-  position: absolute;
-  inset: 0;
-  background-image: url("/bg-asset.jpg");
-  background-image: image-set(
-    url("/bg-asset.avif") type("image/avif"),
-    url("/bg-asset.webp") type("image/webp"),
-    url("/bg-asset.jpg") type("image/jpeg")
-  );
-  background-size: cover;
-  background-position: center;
-  transform: scale(1.03);
-}
-
-.app-scene-bg-animate {
-  animation: scene-bg-in 1200ms cubic-bezier(0.16, 0.84, 0.28, 1) both;
-}
-
-.app-scene-vignette {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 50% 20%, rgba(255, 245, 220, 0.14), transparent 56%),
-    linear-gradient(to bottom, rgba(6, 8, 7, 0.28), rgba(6, 8, 7, 0.46));
-}
-
-.app-scene-vignette-animate {
-  animation: scene-vignette-in 950ms ease-out both;
-}
-
-.app-scene-content {
-  position: relative;
-  min-height: 100dvh;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-}
-
-.app-glass-shell {
-  width: min(100%, 1180px);
-  height: min(920px, calc(100dvh - 2rem));
-  border-radius: 2.2rem;
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  background:
-    linear-gradient(120deg, rgba(22, 28, 25, 0.6), rgba(10, 13, 12, 0.24) 44%),
-    linear-gradient(180deg, rgba(8, 10, 9, 0.34), rgba(8, 10, 9, 0.18)),
-    var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(115%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(115%);
-  overflow: hidden;
-}
-
-.app-glass-shell-animate {
-  animation: glass-shell-in 980ms cubic-bezier(0.18, 0.88, 0.26, 1) 220ms both;
-}
-
-.app-shell-content {
-  height: 100%;
-  width: 100%;
-  animation: app-content-in 760ms cubic-bezier(0.22, 0.84, 0.3, 1) 520ms both;
-}
-
-@media (max-width: 900px) {
-  .app-glass-shell {
-    height: calc(100dvh - 1.25rem);
-    /* Respect iPhone notch / Dynamic Island at top and home indicator at bottom */
-    height: calc(100dvh - 1.25rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-    border-radius: 1.7rem;
-  }
-
-  .app-scene-content {
-    padding: 0.625rem;
-    /* Push content away from notch / home indicator */
-    padding-top: max(0.625rem, env(safe-area-inset-top));
-    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
-    padding-left: max(0.625rem, env(safe-area-inset-left));
-    padding-right: max(0.625rem, env(safe-area-inset-right));
-  }
-}
-
-/* ── Safe-area bottom utility — used by chat input bar ── */
+/* ── Safe-area bottom utility ── */
 .pb-safe {
   padding-bottom: max(1.75rem, env(safe-area-inset-bottom));
 }
 
-@keyframes scene-bg-in {
-  from {
-    opacity: 0;
-    transform: scale(1.06);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1.03);
-  }
-}
-
-@keyframes scene-vignette-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes glass-shell-in {
-  from {
-    opacity: 0;
-    transform: translateY(18px) scale(0.988);
-    filter: blur(7px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
-  }
-}
-
-@keyframes app-content-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-scene-bg-animate,
-  .app-scene-vignette-animate,
-  .app-glass-shell-animate,
-  .app-shell-content {
-    animation: none;
-  }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Scrollbar — minimal ── */
@@ -296,30 +151,14 @@ textarea {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--ring);
+  background: rgba(255, 255, 255, 0.16);
 }
 
-/* ── Orb animation keyframes (large — iOS-style) ── */
-@keyframes orb-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.04); opacity: 0.9; }
-}
-
-@keyframes orb-breathe {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(255,255,255,0.03); }
-  50% { transform: scale(1.02); box-shadow: 0 0 60px rgba(255,255,255,0.06); }
-}
-
-@keyframes orb-glow {
-  0%, 100% { box-shadow: 0 0 40px rgba(255,255,255,0.05); }
-  50% { box-shadow: 0 0 80px rgba(255,255,255,0.12); }
-}
-
-/* ── Status orb keyframes (small — header indicator) ── */
+/* ── Status orb keyframes ── */
 @keyframes status-orb-breathe {
   0%, 100% { opacity: 0.7; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.1); }
@@ -333,11 +172,6 @@ textarea {
 @keyframes status-orb-think {
   0%, 100% { opacity: 0.7; transform: scale(0.9); }
   50% { opacity: 1; transform: scale(1.25); }
-}
-
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Selection ── */

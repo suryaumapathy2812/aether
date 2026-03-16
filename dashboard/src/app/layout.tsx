@@ -35,7 +35,7 @@ export default function RootLayout({
     <html lang="en" className={jakarta.variable}>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-        <meta name="theme-color" content="#0f1512" />
+        <meta name="theme-color" content="#0a0a0a" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
         <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
@@ -46,20 +46,12 @@ export default function RootLayout({
             <SessionSync />
             <ServiceWorkerRegistrar />
             <NotificationProvider>
-            <main className="app-scene">
-              <div className="app-scene-bg app-scene-bg-animate" />
-              <div className="app-scene-vignette app-scene-vignette-animate" />
-              <div className="app-scene-content">
-                <div className="app-glass-shell app-glass-shell-animate">
-                  <div className="app-shell-content flex">
-                    <Sidebar />
-                    <div className="flex-1 min-w-0 h-full overflow-hidden">
-                      {children}
-                    </div>
-                  </div>
-                </div>
+              <div className="app-layout">
+                <Sidebar />
+                <main className="flex-1 min-w-0 h-full overflow-hidden">
+                  {children}
+                </main>
               </div>
-            </main>
             </NotificationProvider>
             <Toaster />
           </TooltipProvider>

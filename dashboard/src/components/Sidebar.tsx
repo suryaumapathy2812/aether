@@ -161,7 +161,7 @@ export default function Sidebar() {
           "hidden md:block",
           collapsed ? "w-[60px]" : "w-[240px]",
           // Mobile
-          mobileOpen && "!block fixed inset-y-0 left-0 z-50 w-[260px] bg-[#0f1512]/95 backdrop-blur-xl"
+          mobileOpen && "!block fixed inset-y-0 left-0 z-50 w-[260px] bg-[#111111]"
         )}
       >
         {sidebarContent}
