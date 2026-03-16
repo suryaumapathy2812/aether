@@ -57,17 +57,14 @@ export default function PushOptIn() {
   const denied = permissionState === "denied";
 
   return (
-    <div className="flex items-center justify-between gap-4 py-3">
-      <div>
-        <p className="text-[13px] text-foreground">Push notifications</p>
-        <p className="text-[11px] text-muted-foreground mt-0.5">
-          {denied
-            ? "Blocked by browser \u2014 enable in site settings"
-            : subscribed
-            ? "You\u2019ll receive notifications even when the app is closed"
-            : "Get notified about task updates and messages"}
-        </p>
-      </div>
+    <div className="flex items-center justify-between gap-4">
+      <p className="text-[12px] text-muted-foreground">
+        {denied
+          ? "Blocked by browser \u2014 enable in site settings"
+          : subscribed
+          ? "Enabled \u2014 you\u2019ll receive notifications when the app is closed"
+          : "Disabled"}
+      </p>
       <Switch
         checked={subscribed}
         onCheckedChange={handleToggle}

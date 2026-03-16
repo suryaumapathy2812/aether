@@ -59,46 +59,38 @@ export default function ModelPreference() {
   if (loading) return null;
 
   return (
-    <div className="py-3">
-      <p className="text-[13px] text-foreground">Model</p>
-      <p className="text-[11px] text-muted-foreground mt-0.5 mb-2">
-        Override the default model for AI tasks
-      </p>
+    <div>
       <div className="flex gap-2">
         <input
           type="text"
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder={DEFAULT_MODEL}
-          className="flex-1 h-8 px-2 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/50"
         />
-      </div>
-      <div className="flex gap-2 mt-2">
         <Button
-          variant="aether"
-          size="aether"
+          variant="ghost"
+          size="sm"
           onClick={handleSave}
           disabled={saving}
-          className="text-[12px] h-7"
+          className="h-8 px-3 text-[12px] text-foreground/70 hover:text-foreground"
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? "..." : "Save"}
         </Button>
-        <Button
-          variant="aether-link"
-          size="aether-link"
-          onClick={handleReset}
-          disabled={saving || model === ""}
-          className="text-[12px] h-7"
-        >
-          Reset
-        </Button>
+        {model && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleReset}
+            disabled={saving}
+            className="h-8 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+          >
+            Reset
+          </Button>
+        )}
       </div>
       {message && (
-        <p
-          className={`text-[11px] mt-2 ${
-            message.type === "success" ? "text-green-500" : "text-red-500"
-          }`}
-        >
+        <p className={`text-[11px] mt-2 ${message.type === "success" ? "text-emerald-400/80" : "text-red-400/80"}`}>
           {message.text}
         </p>
       )}

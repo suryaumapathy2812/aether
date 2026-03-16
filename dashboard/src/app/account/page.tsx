@@ -4,11 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import PushOptIn from "@/components/PushOptIn";
 import ModelPreference from "@/components/ModelPreference";
 import { useSession, signOut } from "@/lib/auth-client";
-import { LogOut, User, Bell, Cpu } from "lucide-react";
+import { ChevronRight, LogOut } from "lucide-react";
 
 export default function AccountPage() {
   const router = useRouter();
@@ -37,67 +36,114 @@ export default function AccountPage() {
 
   return (
     <ContentShell title="Settings">
-      <div className="space-y-1">
-        {/* Profile */}
-        <section className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center shrink-0">
-              <User className="size-4 text-muted-foreground" />
-            </div>
-            <div className="min-w-0">
-              {editingName ? (
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onBlur={() => setEditingName(false)}
-                  onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
-                  autoFocus
-                  className="bg-transparent border-b border-border text-sm text-foreground outline-none pb-0.5 w-full"
-                />
-              ) : (
-                <p
-                  className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground/80 transition-colors"
-                  onClick={() => setEditingName(true)}
-                >
-                  {name || "Set name"}
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">{email}</p>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleLogout}
-            className="text-red-400 hover:text-red-300 hover:bg-red-500/10 h-8 px-3 text-xs"
-          >
-            <LogOut className="size-3 mr-1.5" />
-            Log out
-          </Button>
-        </section>
+      {/* Profile row */}
+      <div className="flex items-center gap-4 pb-6 mb-6 border-b border-border">
+        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-foreground/10 to-foreground/5 flex items-center justify-center text-sm font-medium text-foreground/60 shrink-0">
+          {(name || email).charAt(0).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          {editingName ? (
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => setEditingName(false)}
+              onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
+              autoFocus
+              className="bg-transparent text-[14px] font-medium text-foreground outline-none border-b border-foreground/20 pb-0.5 w-full"
+            />
+          ) : (
+            <button
+              className="text-[14px] font-medium text-foreground hover:text-foreground/70 transition-colors text-left"
+              onClick={() => setEditingName(true)}
+            >
+              {name || "Add name"}
+            </button>
+          )}
+          <p className="text-[12px] text-muted-foreground mt-0.5">{email}</p>
+        </div>
+        <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
+      </div>
 
-        <Separator className="opacity-0" />
-
+      {/* Settings list */}
+      <div className="space-y-0">
         {/* Model */}
-        <section className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Cpu className="size-3.5 text-muted-foreground" />
-            <h3 className="text-xs font-medium text-foreground">Model</h3>
-          </div>
+        <SettingsRow
+          label="Model"
+          description="Override the default model for AI tasks"
+        >
           <ModelPreference />
-        </section>
-
-        <Separator className="opacity-0" />
+        </SettingsRow>
 
         {/* Notifications */}
-        <section className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Bell className="size-3.5 text-muted-foreground" />
-            <h3 className="text-xs font-medium text-foreground">Notifications</h3>
-          </div>
+        <SettingsRow
+          label="Notifications"
+          description="Push notifications for updates"
+        >
           <PushOptIn />
-        </section>
+        </SettingsRow>
+
+        {/* Connections */}
+        <button
+          onClick={() => router.push("/plugins")}
+          className="w-full flex items-center justify-between py-4 border-b border-border group"
+        >
+          <div>
+            <p className="text-[13px] text-foreground text-left">Connections</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5 text-left">
+              Manage Gmail, Calendar, and other integrations
+            </p>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+        </button>
+
+        {/* Memory */}
+        <button
+          onClick={() => router.push("/memory")}
+          className="w-full flex items-center justify-between py-4 border-b border-border group"
+        >
+          <div>
+            <p className="text-[13px] text-foreground text-left">Memory</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5 text-left">
+              Facts, conversations, and decisions
+            </p>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+        </button>
+      </div>
+
+      {/* Logout */}
+      <div className="mt-10">
+        <Button
+          variant="ghost"
+          onClick={handleLogout}
+          className="text-red-400/80 hover:text-red-300 hover:bg-red-500/5 h-9 px-0 text-[13px] font-normal"
+        >
+          <LogOut className="size-3.5 mr-2" />
+          Log out
+        </Button>
       </div>
     </ContentShell>
+  );
+}
+
+function SettingsRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="py-4 border-b border-border">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[13px] text-foreground">{label}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
+        </div>
+      </div>
+      <div className="mt-3">{children}</div>
+    </div>
   );
 }
