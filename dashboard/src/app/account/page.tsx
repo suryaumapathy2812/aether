@@ -36,8 +36,8 @@ export default function AccountPage() {
 
   return (
     <ContentShell title="Settings">
-      {/* Profile row */}
-      <div className="flex items-center gap-4 pb-6 mb-6 border-b border-border">
+      {/* Profile */}
+      <div className="flex items-center gap-4 pb-8 mb-8 border-b border-border">
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-foreground/10 to-foreground/5 flex items-center justify-center text-sm font-medium text-foreground/60 shrink-0">
           {(name || email).charAt(0).toUpperCase()}
         </div>
@@ -61,12 +61,19 @@ export default function AccountPage() {
           )}
           <p className="text-[12px] text-muted-foreground mt-0.5">{email}</p>
         </div>
-        <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleLogout}
+          className="text-muted-foreground hover:text-red-400 hover:bg-red-500/5 h-8 px-2.5 text-[12px] font-normal shrink-0"
+        >
+          <LogOut className="size-3.5 mr-1.5" />
+          Log out
+        </Button>
       </div>
 
-      {/* Settings list */}
-      <div className="space-y-0">
-        {/* Model */}
+      {/* Settings */}
+      <div className="space-y-8">
         <SettingsRow
           label="Model"
           description="Override the default model for AI tasks"
@@ -74,7 +81,6 @@ export default function AccountPage() {
           <ModelPreference />
         </SettingsRow>
 
-        {/* Notifications */}
         <SettingsRow
           label="Notifications"
           description="Push notifications for updates"
@@ -82,10 +88,9 @@ export default function AccountPage() {
           <PushOptIn />
         </SettingsRow>
 
-        {/* Connections */}
         <button
           onClick={() => router.push("/plugins")}
-          className="w-full flex items-center justify-between py-4 border-b border-border group"
+          className="w-full flex items-center justify-between group"
         >
           <div>
             <p className="text-[13px] text-foreground text-left">Connections</p>
@@ -96,10 +101,9 @@ export default function AccountPage() {
           <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
         </button>
 
-        {/* Memory */}
         <button
           onClick={() => router.push("/memory")}
-          className="w-full flex items-center justify-between py-4 border-b border-border group"
+          className="w-full flex items-center justify-between group"
         >
           <div>
             <p className="text-[13px] text-foreground text-left">Memory</p>
@@ -109,18 +113,6 @@ export default function AccountPage() {
           </div>
           <ChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
         </button>
-      </div>
-
-      {/* Logout */}
-      <div className="mt-10">
-        <Button
-          variant="ghost"
-          onClick={handleLogout}
-          className="text-red-400/80 hover:text-red-300 hover:bg-red-500/5 h-9 px-0 text-[13px] font-normal"
-        >
-          <LogOut className="size-3.5 mr-2" />
-          Log out
-        </Button>
       </div>
     </ContentShell>
   );
@@ -136,13 +128,9 @@ function SettingsRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="py-4 border-b border-border">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-[13px] text-foreground">{label}</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
-        </div>
-      </div>
+    <div>
+      <p className="text-[13px] text-foreground">{label}</p>
+      <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
       <div className="mt-3">{children}</div>
     </div>
   );
