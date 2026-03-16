@@ -199,16 +199,21 @@ function ChatView({ session }: { session: { user: { id: string; name?: string | 
                         if (part.type.startsWith("tool-")) {
                           const toolPart = part as { type: string; state: string; toolCallId: string; input?: unknown; output?: unknown; errorText?: string };
                           const toolName = toolPart.type.replace("tool-", "");
+                          // Extract a meaningful subtitle from the input
+                          const inputObj = toolPart.input as Record<string, unknown> | undefined;
+                          const subtitle = inputObj
+                            ? (inputObj.query || inputObj.message_id || inputObj.name || inputObj.summary || "") as string
+                            : "";
                           return (
                             <Tool key={key}>
                               <ToolHeader
                                 type={toolPart.type as "tool-invocation"}
                                 state={toolPart.state as "input-available"}
-                                title={toolName}
+                                title={subtitle ? `${toolName} ${subtitle}` : toolName}
                               />
                               <ToolContent>
                                 <ToolInput input={toolPart.input} />
-                                {toolPart.state === "output-available" && (
+                                {(toolPart.state === "output-available" || toolPart.state === "output-error") && (
                                   <ToolOutput
                                     output={toolPart.output}
                                     errorText={toolPart.errorText}
