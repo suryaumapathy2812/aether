@@ -22,14 +22,15 @@ import (
 )
 
 type Handler struct {
-	runtime *conversation.Runtime
-	builder *llm.ContextBuilder
-	memory  *memory.Service
-	media   *media.Service
-	store   *db.Store
-	limits  agentcfg.MediaLimitsConfig
-	notify  func(userID, eventType string, payload map[string]any)
-	status  *sessionStatusTracker
+	runtime   *conversation.Runtime
+	builder   *llm.ContextBuilder
+	memory    *memory.Service
+	media     *media.Service
+	store     *db.Store
+	limits    agentcfg.MediaLimitsConfig
+	notify    func(userID, eventType string, payload map[string]any)
+	status    *sessionStatusTracker
+	questions *questionManager
 }
 
 type Options struct {
@@ -43,7 +44,17 @@ type Options struct {
 }
 
 func New(opts Options) *Handler {
-	return &Handler{runtime: opts.Runtime, builder: opts.Builder, memory: opts.Memory, media: opts.Media, store: opts.Store, limits: opts.Limits, notify: opts.Notify, status: newSessionStatusTracker()}
+	return &Handler{
+		runtime:   opts.Runtime,
+		builder:   opts.Builder,
+		memory:    opts.Memory,
+		media:     opts.Media,
+		store:     opts.Store,
+		limits:    opts.Limits,
+		notify:    opts.Notify,
+		status:    newSessionStatusTracker(),
+		questions: newQuestionManager(),
+	}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -51,6 +62,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/sessions/status", h.handleSessionStatus)
 	mux.HandleFunc("/v1/sessions", h.handleSessions)
 	mux.HandleFunc("/v1/sessions/", h.handleSessionByID)
+	mux.HandleFunc("/v1/questions/", h.handleQuestions)
+	mux.HandleFunc("/v1/questions", h.handleQuestionsList)
+}
+
+// QuestionManager returns the handler's question manager so it can be
+// wired into the tools.ExecContext as a QuestionAsker implementation.
+func (h *Handler) QuestionManager() *questionManager {
+	return h.questions
 }
 
 type sessionStatusTracker struct {

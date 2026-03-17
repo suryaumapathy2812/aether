@@ -4,7 +4,7 @@ import { getChatSession, getChatSessionStatuses, getSessionToken } from "@/lib/a
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
-type SessionState = {
+export type SessionState = {
   messages: UIMessage[];
   status: SessionStatus;
   error: string | null;
@@ -12,6 +12,14 @@ type SessionState = {
   loading: boolean;
   loopState: string | null;
   loopReason: string | null;
+  questionRequest: {
+    id: string;
+    sessionId: string;
+    question: string;
+    header: string;
+    options: Array<{ label: string; description?: string }>;
+    allowCustom: boolean;
+  } | null;
 };
 
 type NormalizedGlobalEvent =
@@ -30,7 +38,14 @@ type NormalizedGlobalEvent =
       text?: string;
       version: number;
     }
-  | { kind: "part-removed"; sessionID: string; messageID: string; partID: string; version: number };
+  | { kind: "part-removed"; sessionID: string; messageID: string; partID: string; version: number }
+  | {
+      kind: "question-asked";
+      sessionID: string;
+      version: number;
+      request: NonNullable<SessionState["questionRequest"]>;
+    }
+  | { kind: "question-cleared"; sessionID: string; version: number };
 
 type SessionSnapshot = SessionState;
 
@@ -67,7 +82,9 @@ type SessionAction =
   | { type: "message-upsert-from-event"; messageID: string; role: "assistant" | "user"; text?: string }
   | { type: "message-remove"; messageID: string }
   | { type: "part-upsert-delta"; messageID: string; partID: string; delta?: string; text?: string }
-  | { type: "part-remove"; messageID: string; partID: string };
+  | { type: "part-remove"; messageID: string; partID: string }
+  | { type: "question-asked"; request: SessionState["questionRequest"] }
+  | { type: "question-answered" };
 
 const RUNNING_SESSIONS_KEY = "aether.chat.runtime.running.v1";
 
@@ -196,6 +213,31 @@ function normalizeGlobalEvent(eventType: string, payload: Record<string, unknown
     const partID = typeof payload.partID === "string" ? payload.partID : "";
     if (!messageID || !partID) return null;
     return { kind: "part-removed", sessionID, messageID, partID, version };
+  }
+  if (normalizedType === "question.asked") {
+    const input = isRecord(payload.input) ? (payload.input as Record<string, unknown>) : payload;
+    const toolCallID = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
+    return {
+      kind: "question-asked",
+      sessionID,
+      version,
+      request: {
+        id: typeof input.question_id === "string" ? input.question_id : toolCallID,
+        sessionId: sessionID,
+        question: typeof input.question === "string" ? input.question : "",
+        header: typeof input.header === "string" ? input.header : "Question",
+        options: Array.isArray(input.options)
+          ? (input.options as unknown[]).filter(isRecord).map((o) => ({
+              label: String(o.label || ""),
+              description: typeof o.description === "string" ? o.description : undefined,
+            }))
+          : [],
+        allowCustom: input.allow_custom !== false,
+      },
+    };
+  }
+  if (normalizedType === "question.replied" || normalizedType === "question.rejected") {
+    return { kind: "question-cleared", sessionID, version };
   }
   return null;
 }
@@ -357,6 +399,10 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
       });
       return { ...current, messages };
     }
+    case "question-asked":
+      return { ...current, questionRequest: action.request };
+    case "question-answered":
+      return { ...current, questionRequest: null };
     default:
       return current;
   }
@@ -404,6 +450,7 @@ class ChatRuntimeStore {
       loading: false,
       loopState: null,
       loopReason: null,
+      questionRequest: null,
     };
     this.sessions.set(sessionId, created);
     this.statusMapDirty = true;
@@ -426,6 +473,7 @@ class ChatRuntimeStore {
     loading: false,
     loopState: null,
     loopReason: null,
+    questionRequest: null,
   };
 
   getSnapshot = (sessionId: string): SessionSnapshot => {
@@ -561,6 +609,29 @@ class ChatRuntimeStore {
     if (eventType === "tool-input-available") {
       const toolName = typeof event.toolName === "string" ? event.toolName : "tool";
       const toolCallID = typeof event.toolCallId === "string" ? event.toolCallId : "";
+
+      // Special handling for ask_user tool — surface as a QuestionDock request
+      if (toolName === "ask_user" && isRecord(event.input)) {
+        const input = event.input as Record<string, unknown>;
+        this.dispatch(sessionId, {
+          type: "question-asked",
+          request: {
+            id: typeof input.question_id === "string" ? input.question_id : toolCallID,
+            sessionId,
+            question: typeof input.question === "string" ? input.question : "",
+            header: typeof input.header === "string" ? input.header : "Question",
+            options: Array.isArray(input.options)
+              ? input.options.filter(isRecord).map((o) => ({
+                  label: String(o.label || ""),
+                  description: typeof o.description === "string" ? o.description : undefined,
+                }))
+              : [],
+            allowCustom: input.allow_custom !== false,
+          },
+        });
+      }
+
+      // Still dispatch the tool-input action for the message parts
       this.dispatch(sessionId, {
         type: "assistant-tool-input",
         messageID: assistantMessageID,
@@ -731,6 +802,17 @@ class ChatRuntimeStore {
           messageID: normalized.messageID,
           partID: normalized.partID,
         });
+        return;
+
+      case "question-asked":
+        this.dispatch(normalized.sessionID, {
+          type: "question-asked",
+          request: normalized.request,
+        });
+        return;
+
+      case "question-cleared":
+        this.dispatch(normalized.sessionID, { type: "question-answered" });
         return;
 
       default:

@@ -23,6 +23,7 @@ func RegisterCore(reg *tools.Registry) error {
 		&GetEntityDetailsTool{},
 		&WebSearchTool{},
 		&WebFetchTool{},
+		&QuestionTool{},
 	}
 	for _, t := range core {
 		if err := reg.Register(t, ""); err != nil {

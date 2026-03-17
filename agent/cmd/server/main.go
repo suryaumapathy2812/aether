@@ -140,12 +140,25 @@ func main() {
 		log.Fatalf("failed to create workspace dir: %v", err)
 	}
 	pushDeliverer := ws.NewPushDeliverer(store, pushSender, wsHub)
+
+	// ── Question system & WS notify ────────────────────────────────
+	// Shared WS notify callback used by both the conversation handler and
+	// the question asker bridge.
+	wsNotify := func(userID, eventType string, payload map[string]any) {
+		wsHub.Broadcast(userID, ws.Message{Type: eventType, Payload: payload})
+	}
+	// Lazy wrapper: the orchestrator needs a QuestionAsker at creation time,
+	// but the conversation handler (which owns the questionManager) is created
+	// later. The inner implementation is wired after the handler is created.
+	questionAskerHolder := &lazyQuestionAsker{}
+
 	toolOrchestrator := tools.NewOrchestrator(toolRegistry, tools.ExecContext{
 		WorkingDir:    workspaceDir,
 		Store:         store,
 		Skills:        skillsManager,
 		Plugins:       pluginsManager,
 		PushDeliverer: pushDeliverer,
+		QuestionAsker: questionAskerHolder,
 	})
 
 	// ── LLM & Media ────────────────────────────────────────────────
@@ -172,6 +185,7 @@ func main() {
 		Skills:            skillsManager,
 		Plugins:           pluginsManager,
 		PushDeliverer:     pushDeliverer,
+		QuestionAsker:     questionAskerHolder,
 		VectorDB:          vectorDB,
 		EmbeddingProvider: embeddingProvider,
 	})
@@ -212,9 +226,9 @@ func main() {
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
-	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: func(userID, eventType string, payload map[string]any) {
-		wsHub.Broadcast(userID, ws.Message{Type: eventType, Payload: payload})
-	}})
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: wsNotify})
+	// Wire the question asker bridge now that the handler (and its question manager) exist.
+	questionAskerHolder.inner = convhttp.NewQuestionAskerBridge(convHandler.QuestionManager(), wsNotify)
 	convHandler.RegisterRoutes(mux)
 	dataHandler := dataapi.New(store, mediaService)
 	dataHandler.RegisterRoutes(mux)
@@ -423,6 +437,21 @@ func loadDotEnvIfPresent() {
 		}
 		_ = os.Setenv(key, value)
 	}
+}
+
+// lazyQuestionAsker is a tools.QuestionAsker wrapper that delegates to an
+// inner implementation once it's set. This solves the chicken-and-egg problem
+// where the orchestrator (which needs a QuestionAsker) is created before the
+// conversation handler (which provides the QuestionAsker implementation).
+type lazyQuestionAsker struct {
+	inner tools.QuestionAsker
+}
+
+func (l *lazyQuestionAsker) AskQuestion(ctx context.Context, sessionID string, question string, header string, options []map[string]any, allowCustom bool) ([]string, error) {
+	if l.inner == nil {
+		return nil, fmt.Errorf("question system not initialized")
+	}
+	return l.inner.AskQuestion(ctx, sessionID, question, header, options, allowCustom)
 }
 
 func anyToString(v any) string {

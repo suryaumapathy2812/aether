@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState, Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
-import { createChatSession } from "@/lib/api";
+import { createChatSession, replyToQuestion, rejectQuestion } from "@/lib/api";
 import { chatRuntime, useChatSessionRuntime } from "@/lib/chat-runtime";
 import StatusOrb from "@/components/StatusOrb";
 import {
@@ -26,6 +26,7 @@ import {
   ToolInput,
   ToolOutput,
 } from "@/components/ai-elements/tool";
+import { QuestionDock } from "@/components/ai-elements/question-dock";
 import {
   PromptInput,
   PromptInputTextarea,
@@ -68,7 +69,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
   const creatingSessionRef = useRef(false);
 
   const userId = session.user.id;
-  const { messages, status, error, loading, loopState } = useChatSessionRuntime(sessionId);
+  const { messages, status, error, loading, loopState, questionRequest } = useChatSessionRuntime(sessionId);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -219,23 +220,40 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
       )}
 
       <div className="max-w-[720px] mx-auto w-full px-6 pb-5 pt-2">
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputBody>
-            <PromptInputTextarea
-              value={input}
-              onChange={(e) => setInput(e.currentTarget.value)}
-              placeholder="Message aether..."
-              className="min-h-[44px]"
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools />
-            <PromptInputSubmit
-              status={isStreaming ? "streaming" : "ready"}
-              disabled={!input.trim() && !isStreaming}
-            />
-          </PromptInputFooter>
-        </PromptInput>
+        {/* Question dock replaces input when a question is pending */}
+        {questionRequest ? (
+          <QuestionDock
+            request={questionRequest}
+            onSubmit={async (answers) => {
+              try {
+                await replyToQuestion(questionRequest.id, answers);
+              } catch { /* ignore */ }
+            }}
+            onDismiss={async () => {
+              try {
+                await rejectQuestion(questionRequest.id);
+              } catch { /* ignore */ }
+            }}
+          />
+        ) : (
+          <PromptInput onSubmit={handleSubmit}>
+            <PromptInputBody>
+              <PromptInputTextarea
+                value={input}
+                onChange={(e) => setInput(e.currentTarget.value)}
+                placeholder="Message aether..."
+                className="min-h-[44px]"
+              />
+            </PromptInputBody>
+            <PromptInputFooter>
+              <PromptInputTools />
+              <PromptInputSubmit
+                status={isStreaming ? "streaming" : "ready"}
+                disabled={!input.trim() && !isStreaming}
+              />
+            </PromptInputFooter>
+          </PromptInput>
+        )}
       </div>
     </div>
   );

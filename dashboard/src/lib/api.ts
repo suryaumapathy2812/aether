@@ -871,3 +871,18 @@ export async function claimPairingCode(code: string): Promise<{ status: string }
     body: JSON.stringify({ code }),
   });
 }
+
+// ── Questions (ask_user tool) ──
+
+export async function replyToQuestion(questionId: string, answers: string[]) {
+  return api<{ ok: boolean }>(`/v1/questions/${encodeURIComponent(questionId)}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ answers }),
+  });
+}
+
+export async function rejectQuestion(questionId: string) {
+  return api<{ ok: boolean }>(`/v1/questions/${encodeURIComponent(questionId)}/reject`, {
+    method: "POST",
+  });
+}
