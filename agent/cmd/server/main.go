@@ -22,6 +22,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
+	convws "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/wsapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/dataapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -230,6 +231,8 @@ func main() {
 	// Wire the question asker bridge now that the handler (and its question manager) exist.
 	questionAskerHolder.inner = convhttp.NewQuestionAskerBridge(convHandler.QuestionManager(), wsNotify)
 	convHandler.RegisterRoutes(mux)
+	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Store: store, Limits: cfg.Media, Notify: wsNotify})
+	convWSHandler.RegisterRoutes(mux)
 	dataHandler := dataapi.New(store, mediaService)
 	dataHandler.RegisterRoutes(mux)
 

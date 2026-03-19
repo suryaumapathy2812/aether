@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
-import { getChatSession, getChatSessionStatuses, getSessionToken } from "@/lib/api";
+import {
+  getChatSession,
+  getChatSessionStatuses,
+  getSessionToken,
+  orchestratorWs,
+} from "@/lib/api";
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
@@ -49,7 +54,57 @@ type NormalizedGlobalEvent =
 
 type SessionSnapshot = SessionState;
 
-type StreamEvent = Record<string, unknown> & { type?: string };
+type TurnMode = "text" | "voice";
+
+type ConversationEventType =
+  | "session.start"
+  | "session.ready"
+  | "session.stop"
+  | "turn.start"
+  | "turn.accepted"
+  | "turn.input.text"
+  | "turn.input.audio.chunk"
+  | "turn.commit"
+  | "turn.cancel"
+  | "turn.cancelled"
+  | "assistant.text.delta"
+  | "assistant.done"
+  | "error"
+  | "ack";
+
+type ConversationEnvelope = {
+  v: number;
+  type: ConversationEventType;
+  event_id: string;
+  session_id: string;
+  turn_id: string;
+  seq: number;
+  ts: number;
+  payload?: Record<string, unknown>;
+};
+
+type PendingTurn = {
+  sessionId: string;
+  turnId: string;
+  assistantMessageId: string;
+  mode: TurnMode;
+  done: Promise<void>;
+  completed: boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+type SessionReadyWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+type VoiceChunkInput = {
+  sessionId: string;
+  turnId: string;
+  chunkBase64: string;
+  mimeType?: string;
+};
 
 type SessionAction =
   | { type: "history-loading" }
@@ -87,6 +142,11 @@ type SessionAction =
   | { type: "question-answered" };
 
 const RUNNING_SESSIONS_KEY = "aether.chat.runtime.running.v1";
+const WS_CONVERSATION_PATH = "/api/ws/conversation";
+const WS_CONVERSATION_VERSION = 1;
+const SESSION_CONTROL_TURN_ID = "session";
+const SESSION_READY_TIMEOUT_MS = 10_000;
+const DEFAULT_VOICE_USER_TEXT = "[voice instruction]";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -133,17 +193,31 @@ function buildHistoryMessages(
   return restored;
 }
 
-function toTurnPayload(messages: UIMessage[]): Array<{ role: string; content: string }> {
-  return messages.map((message) => {
-    const text = message.parts
-      .filter(
-        (part): part is Extract<(typeof message.parts)[number], { type: "text" }> =>
-          part.type === "text"
-      )
-      .map((part) => part.text)
-      .join("");
-    return { role: message.role, content: text };
-  });
+function randomID(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function envelopeFromUnknown(value: unknown): ConversationEnvelope | null {
+  if (!isRecord(value)) return null;
+  const type = String(value.type || "") as ConversationEventType;
+  const eventID = typeof value.event_id === "string" ? value.event_id : "";
+  const sessionID = typeof value.session_id === "string" ? value.session_id : "";
+  const turnID = typeof value.turn_id === "string" ? value.turn_id : "";
+  const seq = typeof value.seq === "number" && Number.isFinite(value.seq) ? value.seq : 0;
+  const ts = typeof value.ts === "number" && Number.isFinite(value.ts) ? value.ts : Date.now();
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+
+  if (!type || !eventID || !sessionID) return null;
+  return {
+    v: typeof value.v === "number" && Number.isFinite(value.v) ? value.v : WS_CONVERSATION_VERSION,
+    type,
+    event_id: eventID,
+    session_id: sessionID,
+    turn_id: turnID,
+    seq,
+    ts,
+    payload,
+  };
 }
 
 function parseEventVersion(payload: Record<string, unknown>): number {
@@ -411,14 +485,23 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
 class ChatRuntimeStore {
   private sessions = new Map<string, SessionState>();
   private eventVersions = new Map<string, number>();
-  private inflight = new Map<string, AbortController>();
+  private inflight = new Map<string, PendingTurn>();
   private listeners = new Set<() => void>();
   private bootstrappedUsers = new Set<string>();
   private statusMapCache: Record<string, SessionStatus> = {};
   private statusMapDirty = true;
-  private ws: WebSocket | null = null;
-  private wsReconnectTimer: number | null = null;
-  private wsBackoffMs = 500;
+  private globalWS: WebSocket | null = null;
+  private globalWSReconnectTimer: number | null = null;
+  private globalWSBackoffMs = 500;
+  private conversationWS: WebSocket | null = null;
+  private conversationWSConnectPromise: Promise<void> | null = null;
+  private conversationWSReconnectTimer: number | null = null;
+  private conversationWSBackoffMs = 500;
+  private conversationSeqByTurn = new Map<string, number>();
+  private pendingAckEventIDs = new Set<string>();
+  private processedServerEventIDs = new Set<string>();
+  private pendingSessionReady = new Map<string, SessionReadyWaiter>();
+  private readySessions = new Set<string>();
 
   constructor() {
     this.recoverPersistedRunningSessions();
@@ -531,197 +614,479 @@ class ChatRuntimeStore {
     const sessionId = input.sessionId.trim();
     const text = input.text.trim();
     if (!sessionId || !text) return;
+    await this.sendTextTurn({ sessionId, userId: input.userId.trim(), text });
+  }
 
-    const userMessageID = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const assistantMessageID = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  async startVoiceTurn(input: { sessionId: string; userId: string; textHint?: string }): Promise<{ turnId: string }> {
+    const sessionId = input.sessionId.trim();
+    const userId = input.userId.trim();
+    if (!sessionId || !userId) {
+      throw new Error("sessionId and userId are required");
+    }
+    const turn = await this.beginTurn({
+      sessionId,
+      userId,
+      mode: "voice",
+      userText: input.textHint?.trim() || DEFAULT_VOICE_USER_TEXT,
+    });
+    turn.done.catch(() => {
+      // Voice flow may be controlled by external commit/cancel handlers.
+    });
+    return { turnId: turn.turnId };
+  }
 
-    const session = this.ensureSession(sessionId);
-    const requestMessages = [...session.messages, { id: userMessageID, role: "user", parts: [{ type: "text", text }] } as UIMessage];
+  async sendVoiceChunk(input: VoiceChunkInput): Promise<void> {
+    const sessionId = input.sessionId.trim();
+    const turnId = input.turnId.trim();
+    const chunkBase64 = input.chunkBase64.trim();
+    if (!sessionId || !turnId || !chunkBase64) return;
+    const inflight = this.inflight.get(sessionId);
+    if (!inflight || inflight.turnId !== turnId || inflight.mode !== "voice") {
+      throw new Error("No active voice turn for session");
+    }
+    this.sendConversationEnvelope({
+      type: "turn.input.audio.chunk",
+      sessionId,
+      turnId,
+      payload: {
+        audio: chunkBase64,
+        mime_type: input.mimeType || "audio/webm",
+      },
+    });
+  }
 
-    this.dispatch(sessionId, { type: "append-user", text, messageID: userMessageID });
+  async commitVoiceTurn(input: { sessionId: string; turnId: string }): Promise<void> {
+    const sessionId = input.sessionId.trim();
+    const turnId = input.turnId.trim();
+    if (!sessionId || !turnId) return;
+    const inflight = this.inflight.get(sessionId);
+    if (!inflight || inflight.turnId !== turnId || inflight.mode !== "voice") {
+      throw new Error("No active voice turn for session");
+    }
+    this.sendConversationEnvelope({
+      type: "turn.commit",
+      sessionId,
+      turnId,
+    });
+    const current = this.inflight.get(sessionId);
+    if (!current || current.turnId !== turnId) return;
+    await current.done;
+  }
+
+  async cancelTurn(sessionId: string): Promise<void> {
+    const normalized = sessionId.trim();
+    if (!normalized) return;
+    const inflight = this.inflight.get(normalized);
+    if (!inflight) return;
+
+    try {
+      this.sendConversationEnvelope({
+        type: "turn.cancel",
+        sessionId: normalized,
+        turnId: inflight.turnId,
+      });
+    } catch {
+      // Ignore send failures during cancellation.
+    }
+
+    this.finishTurn(normalized);
+  }
+
+  private async sendTextTurn(input: { sessionId: string; userId: string; text: string }): Promise<void> {
+    const turn = await this.beginTurn({
+      sessionId: input.sessionId,
+      userId: input.userId,
+      mode: "text",
+      userText: input.text,
+    });
+
+    try {
+      this.sendConversationEnvelope({
+        type: "turn.input.text",
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        payload: { text: input.text },
+      });
+      this.sendConversationEnvelope({
+        type: "turn.commit",
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+      });
+
+      await turn.done;
+    } catch (error) {
+      const pending = this.inflight.get(turn.sessionId);
+      if (pending && pending.turnId === turn.turnId) {
+        this.failTurn(turn.sessionId, error instanceof Error ? error : new Error("Failed to stream response"));
+      }
+      throw error;
+    }
+  }
+
+  private async beginTurn(input: {
+    sessionId: string;
+    userId: string;
+    mode: TurnMode;
+    userText: string;
+  }): Promise<{ sessionId: string; turnId: string; done: Promise<void> }> {
+    const sessionId = input.sessionId.trim();
+    if (!sessionId) {
+      throw new Error("sessionId is required");
+    }
+    if (this.inflight.has(sessionId)) {
+      throw new Error("A turn is already in progress for this session");
+    }
+
+    const userMessageID = randomID("user");
+    const assistantMessageID = randomID("assistant");
+    const turnId = randomID("turn");
+
+    this.dispatch(sessionId, { type: "append-user", text: input.userText, messageID: userMessageID });
     this.dispatch(sessionId, { type: "append-assistant", messageID: assistantMessageID });
     this.dispatch(sessionId, { type: "stream-start" });
     this.markSessionRunning(sessionId, true);
 
-    const controller = new AbortController();
-    this.inflight.set(sessionId, controller);
+    let resolveTurn: () => void = () => {};
+    let rejectTurn: (error: Error) => void = () => {};
+    const done = new Promise<void>((resolve, reject) => {
+      resolveTurn = resolve;
+      rejectTurn = reject;
+    });
+
+    this.inflight.set(sessionId, {
+      sessionId,
+      turnId,
+      assistantMessageId: assistantMessageID,
+      mode: input.mode,
+      done,
+      completed: false,
+      resolve: resolveTurn,
+      reject: rejectTurn,
+    });
 
     try {
-      const token = getSessionToken();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const response = await fetch("/api/go/v1/conversations/turn", {
-        method: "POST",
-        credentials: "include",
-        headers,
-        body: JSON.stringify({
-          messages: toTurnPayload(requestMessages),
-          user: input.userId,
-          session: sessionId,
-        }),
-        signal: controller.signal,
+      await this.ensureConversationConnection();
+      await this.ensureConversationSessionReady(sessionId, input.userId);
+      this.sendConversationEnvelope({
+        type: "turn.start",
+        sessionId,
+        turnId,
+        payload: { mode: input.mode },
       });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Stream request failed (${response.status})`);
-      }
-
-      await this.consumeSSE(response.body, (event) => {
-        this.reduceStreamEvent(sessionId, assistantMessageID, event);
-      });
-
-      const next = this.ensureSession(sessionId);
-      if (next.status !== "error") {
-        this.dispatch(sessionId, { type: "stream-end" });
-      }
     } catch (error) {
-      if (controller.signal.aborted) {
-        this.dispatch(sessionId, { type: "stream-end" });
-      } else {
-        this.dispatch(sessionId, {
-          type: "stream-error",
-          error: error instanceof Error ? error.message : "Failed to stream response",
-        });
-      }
-    } finally {
+      this.failTurn(
+        sessionId,
+        error instanceof Error ? error : new Error("Failed to connect to conversation service")
+      );
+      throw error;
+    }
+
+    return { sessionId, turnId, done };
+  }
+
+  private finishTurn(sessionId: string) {
+    const inflight = this.inflight.get(sessionId);
+    if (!inflight || inflight.completed) return;
+    inflight.completed = true;
+    this.inflight.delete(sessionId);
+    this.markSessionRunning(sessionId, false);
+    const current = this.ensureSession(sessionId);
+    if (current.status === "streaming") {
+      this.dispatch(sessionId, { type: "stream-end" });
+    }
+    inflight.resolve();
+  }
+
+  private failTurn(sessionId: string, error: Error) {
+    const inflight = this.inflight.get(sessionId);
+    if (inflight && !inflight.completed) {
+      inflight.completed = true;
       this.inflight.delete(sessionId);
       this.markSessionRunning(sessionId, false);
-      const current = this.ensureSession(sessionId);
-      if (current.status === "streaming") {
-        this.dispatch(sessionId, { type: "stream-end" });
-      }
-    }
-  }
-
-  private reduceStreamEvent(sessionId: string, assistantMessageID: string, event: StreamEvent) {
-    const eventType = String(event.type || "");
-    if (eventType === "text-delta") {
-      const delta = typeof event.delta === "string" ? event.delta : "";
-      if (delta) this.dispatch(sessionId, { type: "assistant-text-delta", messageID: assistantMessageID, delta });
-      return;
-    }
-    if (eventType === "reasoning-delta") {
-      const delta = typeof event.delta === "string" ? event.delta : "";
-      if (delta) this.dispatch(sessionId, { type: "assistant-reasoning-delta", messageID: assistantMessageID, delta });
-      return;
-    }
-    if (eventType === "tool-input-available") {
-      const toolName = typeof event.toolName === "string" ? event.toolName : "tool";
-      const toolCallID = typeof event.toolCallId === "string" ? event.toolCallId : "";
-
-      // Special handling for ask_user tool — surface as a QuestionDock request
-      if (toolName === "ask_user" && isRecord(event.input)) {
-        const input = event.input as Record<string, unknown>;
-        this.dispatch(sessionId, {
-          type: "question-asked",
-          request: {
-            id: typeof input.question_id === "string" ? input.question_id : toolCallID,
-            sessionId,
-            question: typeof input.question === "string" ? input.question : "",
-            header: typeof input.header === "string" ? input.header : "Question",
-            options: Array.isArray(input.options)
-              ? input.options.filter(isRecord).map((o) => ({
-                  label: String(o.label || ""),
-                  description: typeof o.description === "string" ? o.description : undefined,
-                }))
-              : [],
-            allowCustom: input.allow_custom !== false,
-          },
-        });
-      }
-
-      // Still dispatch the tool-input action for the message parts
-      this.dispatch(sessionId, {
-        type: "assistant-tool-input",
-        messageID: assistantMessageID,
-        toolName,
-        toolCallID,
-        input: event.input,
-      });
-      return;
-    }
-    if (eventType === "tool-output-available" || eventType === "tool-output-error") {
-      const toolCallID = typeof event.toolCallId === "string" ? event.toolCallId : "";
-      this.dispatch(sessionId, {
-        type: "assistant-tool-output",
-        messageID: assistantMessageID,
-        toolCallID,
-        output: event.output,
-        errorText: typeof event.errorText === "string" ? event.errorText : undefined,
-        failed: eventType === "tool-output-error",
-      });
-      return;
-    }
-    if (eventType === "loop-state") {
-      const loopState = typeof event.state === "string" ? event.state : "";
-      const loopReason = typeof event.reason === "string" ? event.reason : "";
-      if (loopState) {
-        this.dispatch(sessionId, { type: "loop-state-update", loopState, loopReason });
-      }
-      return;
-    }
-    if (eventType === "error") {
       this.dispatch(sessionId, {
         type: "stream-error",
-        error: typeof event.errorText === "string" ? event.errorText : "Stream error",
+        error: error.message || "Failed to stream response",
       });
+      inflight.reject(error);
+      return;
+    }
+
+    this.markSessionRunning(sessionId, false);
+    this.dispatch(sessionId, {
+      type: "stream-error",
+      error: error.message || "Failed to stream response",
+    });
+  }
+
+  private nextSeq(turnId: string): number {
+    const next = (this.conversationSeqByTurn.get(turnId) || 0) + 1;
+    this.conversationSeqByTurn.set(turnId, next);
+    return next;
+  }
+
+  private sendConversationEnvelope(input: {
+    type: ConversationEventType;
+    sessionId: string;
+    turnId: string;
+    payload?: Record<string, unknown>;
+  }) {
+    const socket = this.conversationWS;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("Conversation websocket is not connected");
+    }
+    const envelope: ConversationEnvelope = {
+      v: WS_CONVERSATION_VERSION,
+      type: input.type,
+      event_id: randomID("evt"),
+      session_id: input.sessionId,
+      turn_id: input.turnId,
+      seq: this.nextSeq(input.turnId),
+      ts: Date.now(),
+      payload: input.payload,
+    };
+    socket.send(JSON.stringify(envelope));
+    if (input.type !== "ack") {
+      this.pendingAckEventIDs.add(envelope.event_id);
     }
   }
 
-  private async consumeSSE(body: ReadableStream<Uint8Array>, onEvent: (event: StreamEvent) => void) {
-    const decoder = new TextDecoder();
-    const reader = body.getReader();
-    let buffered = "";
+  private async ensureConversationConnection(): Promise<void> {
+    if (typeof window === "undefined") {
+      throw new Error("Conversation websocket requires browser runtime");
+    }
+    if (this.conversationWS && this.conversationWS.readyState === WebSocket.OPEN) {
+      return;
+    }
+    if (this.conversationWSConnectPromise) {
+      return this.conversationWSConnectPromise;
+    }
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
-
-      let splitIndex = buffered.indexOf("\n\n");
-      while (splitIndex !== -1) {
-        const rawEvent = buffered.slice(0, splitIndex);
-        buffered = buffered.slice(splitIndex + 2);
-
-        const payload = rawEvent
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-
-        if (payload && payload !== "[DONE]") {
-          try {
-            onEvent(JSON.parse(payload) as StreamEvent);
-          } catch {
-            // Ignore malformed payload.
-          }
-        }
-
-        splitIndex = buffered.indexOf("\n\n");
+    this.conversationWSConnectPromise = new Promise<void>((resolve, reject) => {
+      const token = getSessionToken() || undefined;
+      let socket: WebSocket;
+      let settled = false;
+      const resolveOnce = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      try {
+        socket = orchestratorWs(WS_CONVERSATION_PATH, token);
+      } catch {
+        this.conversationWSConnectPromise = null;
+        rejectOnce(new Error("Failed to create conversation websocket"));
+        return;
       }
+
+      this.conversationWS = socket;
+
+      socket.onopen = () => {
+        this.conversationWSBackoffMs = 500;
+        this.conversationWSConnectPromise = null;
+        resolveOnce();
+      };
+
+      socket.onmessage = (message) => {
+        this.handleConversationSocketMessage(message.data);
+      };
+
+      socket.onclose = () => {
+        this.conversationWS = null;
+        this.conversationWSConnectPromise = null;
+        this.readySessions.clear();
+        this.conversationSeqByTurn.clear();
+        this.rejectSessionReadyWaiters(new Error("Conversation websocket closed"));
+        this.failAllTurns(new Error("Conversation disconnected"));
+        rejectOnce(new Error("Conversation websocket closed"));
+        this.scheduleConversationReconnect();
+      };
+
+      socket.onerror = () => {
+        rejectOnce(new Error("Conversation websocket error"));
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      };
+    });
+
+    return this.conversationWSConnectPromise;
+  }
+
+  private scheduleConversationReconnect() {
+    if (typeof window === "undefined") return;
+    if (this.conversationWSReconnectTimer !== null) return;
+    if (this.inflight.size === 0 && this.listeners.size === 0) return;
+
+    const delay = this.conversationWSBackoffMs;
+    this.conversationWSBackoffMs = Math.min(this.conversationWSBackoffMs * 2, 5000);
+    this.conversationWSReconnectTimer = window.setTimeout(() => {
+      this.conversationWSReconnectTimer = null;
+      void this.ensureConversationConnection().catch(() => {
+        this.scheduleConversationReconnect();
+      });
+    }, delay);
+  }
+
+  private async ensureConversationSessionReady(sessionId: string, userId: string): Promise<void> {
+    if (this.readySessions.has(sessionId)) return;
+
+    const pending = new Promise<void>((resolve, reject) => {
+      this.pendingSessionReady.set(sessionId, { resolve, reject });
+      window.setTimeout(() => {
+        const waiter = this.pendingSessionReady.get(sessionId);
+        if (waiter) {
+          this.pendingSessionReady.delete(sessionId);
+          waiter.reject(new Error("Timed out waiting for conversation session.ready"));
+        }
+      }, SESSION_READY_TIMEOUT_MS);
+    });
+
+    this.sendConversationEnvelope({
+      type: "session.start",
+      sessionId,
+      turnId: SESSION_CONTROL_TURN_ID,
+      payload: { user_id: userId },
+    });
+
+    await pending;
+  }
+
+  private rejectSessionReadyWaiters(error: Error) {
+    for (const [, waiter] of this.pendingSessionReady.entries()) {
+      waiter.reject(error);
+    }
+    this.pendingSessionReady.clear();
+  }
+
+  private failAllTurns(error: Error) {
+    const sessionIds = Array.from(this.inflight.keys());
+    for (const sessionId of sessionIds) {
+      this.failTurn(sessionId, error);
+    }
+  }
+
+  private handleConversationSocketMessage(raw: unknown) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(raw || "{}"));
+    } catch {
+      return;
+    }
+
+    const envelope = envelopeFromUnknown(parsed);
+    if (!envelope) return;
+
+    if (this.processedServerEventIDs.has(envelope.event_id)) {
+      return;
+    }
+    this.processedServerEventIDs.add(envelope.event_id);
+    if (this.processedServerEventIDs.size > 1000) {
+      const [first] = this.processedServerEventIDs;
+      if (first) this.processedServerEventIDs.delete(first);
+    }
+
+    if (envelope.type !== "ack") {
+      try {
+        this.sendConversationEnvelope({
+          type: "ack",
+          sessionId: envelope.session_id,
+          turnId: envelope.turn_id || SESSION_CONTROL_TURN_ID,
+          payload: { event_id: envelope.event_id },
+        });
+      } catch {
+        // Ignore ack send failures.
+      }
+    }
+
+    this.reduceConversationEvent(envelope);
+  }
+
+  private reduceConversationEvent(envelope: ConversationEnvelope) {
+    const sessionId = envelope.session_id;
+    const inflight = this.inflight.get(sessionId);
+
+    switch (envelope.type) {
+      case "ack": {
+        const ackEventID = typeof envelope.payload?.event_id === "string"
+          ? envelope.payload.event_id
+          : "";
+        if (ackEventID) {
+          this.pendingAckEventIDs.delete(ackEventID);
+        }
+        return;
+      }
+      case "session.ready": {
+        this.readySessions.add(sessionId);
+        const waiter = this.pendingSessionReady.get(sessionId);
+        if (waiter) {
+          this.pendingSessionReady.delete(sessionId);
+          waiter.resolve();
+        }
+        return;
+      }
+      case "turn.accepted":
+        return;
+      case "assistant.text.delta": {
+        if (!inflight) return;
+        const delta = typeof envelope.payload?.delta === "string"
+          ? envelope.payload.delta
+          : typeof envelope.payload?.text === "string"
+            ? envelope.payload.text
+            : "";
+        if (!delta) return;
+        this.dispatch(sessionId, {
+          type: "assistant-text-delta",
+          messageID: inflight.assistantMessageId,
+          delta,
+        });
+        return;
+      }
+      case "assistant.done": {
+        this.finishTurn(sessionId);
+        return;
+      }
+      case "turn.cancelled": {
+        this.finishTurn(sessionId);
+        return;
+      }
+      case "error": {
+        const message = typeof envelope.payload?.message === "string"
+          ? envelope.payload.message
+          : typeof envelope.payload?.error === "string"
+            ? envelope.payload.error
+            : "Conversation error";
+        this.failTurn(sessionId, new Error(message));
+        return;
+      }
+      default:
+        return;
     }
   }
 
   private ensureGlobalSubscription() {
     if (typeof window === "undefined") return;
-    if (this.ws) return;
+    if (this.globalWS) return;
     if (this.listeners.size === 0) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsURL = `${protocol}//${window.location.host}/api/ws/notifications`;
     try {
-      this.ws = new WebSocket(wsURL);
+      this.globalWS = new WebSocket(wsURL);
     } catch {
-      this.scheduleReconnect();
+      this.scheduleGlobalReconnect();
       return;
     }
 
-    this.ws.onopen = () => {
-      this.wsBackoffMs = 500;
+    this.globalWS.onopen = () => {
+      this.globalWSBackoffMs = 500;
     };
 
-    this.ws.onmessage = (message) => {
+    this.globalWS.onmessage = (message) => {
       try {
         const envelope = JSON.parse(String(message.data || "{}")) as {
           type?: string;
@@ -733,13 +1098,13 @@ class ChatRuntimeStore {
       }
     };
 
-    this.ws.onclose = () => {
-      this.ws = null;
-      this.scheduleReconnect();
+    this.globalWS.onclose = () => {
+      this.globalWS = null;
+      this.scheduleGlobalReconnect();
     };
 
-    this.ws.onerror = () => {
-      if (this.ws) this.ws.close();
+    this.globalWS.onerror = () => {
+      if (this.globalWS) this.globalWS.close();
     };
   }
 
@@ -830,13 +1195,13 @@ class ChatRuntimeStore {
   }
 
   private teardownGlobalSubscription() {
-    if (this.wsReconnectTimer !== null && typeof window !== "undefined") {
-      window.clearTimeout(this.wsReconnectTimer);
-      this.wsReconnectTimer = null;
+    if (this.globalWSReconnectTimer !== null && typeof window !== "undefined") {
+      window.clearTimeout(this.globalWSReconnectTimer);
+      this.globalWSReconnectTimer = null;
     }
-    if (this.ws) {
-      const ws = this.ws;
-      this.ws = null;
+    if (this.globalWS) {
+      const ws = this.globalWS;
+      this.globalWS = null;
       ws.onopen = null;
       ws.onmessage = null;
       ws.onerror = null;
@@ -845,17 +1210,38 @@ class ChatRuntimeStore {
         ws.close();
       }
     }
+
+    if (this.conversationWSReconnectTimer !== null && typeof window !== "undefined") {
+      window.clearTimeout(this.conversationWSReconnectTimer);
+      this.conversationWSReconnectTimer = null;
+    }
+    if (this.conversationWS) {
+      const ws = this.conversationWS;
+      this.conversationWS = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    }
+    this.readySessions.clear();
+    this.conversationSeqByTurn.clear();
+    this.pendingAckEventIDs.clear();
+    this.processedServerEventIDs.clear();
+    this.rejectSessionReadyWaiters(new Error("Conversation websocket closed"));
   }
 
-  private scheduleReconnect() {
+  private scheduleGlobalReconnect() {
     if (typeof window === "undefined") return;
     if (this.listeners.size === 0) return;
-    if (this.wsReconnectTimer !== null) return;
+    if (this.globalWSReconnectTimer !== null) return;
 
-    const delay = this.wsBackoffMs;
-    this.wsBackoffMs = Math.min(this.wsBackoffMs * 2, 5000);
-    this.wsReconnectTimer = window.setTimeout(() => {
-      this.wsReconnectTimer = null;
+    const delay = this.globalWSBackoffMs;
+    this.globalWSBackoffMs = Math.min(this.globalWSBackoffMs * 2, 5000);
+    this.globalWSReconnectTimer = window.setTimeout(() => {
+      this.globalWSReconnectTimer = null;
       this.ensureGlobalSubscription();
     }, delay);
   }
@@ -929,4 +1315,9 @@ export const chatRuntime = {
   loadHistory: (sessionId: string) => runtimeStore.loadHistory(sessionId),
   sendMessage: (input: { sessionId: string; userId: string; text: string }) =>
     runtimeStore.sendMessage(input),
+  startVoiceTurn: (input: { sessionId: string; userId: string; textHint?: string }) =>
+    runtimeStore.startVoiceTurn(input),
+  sendVoiceChunk: (input: VoiceChunkInput) => runtimeStore.sendVoiceChunk(input),
+  commitVoiceTurn: (input: { sessionId: string; turnId: string }) => runtimeStore.commitVoiceTurn(input),
+  cancelTurn: (sessionId: string) => runtimeStore.cancelTurn(sessionId),
 };

@@ -38,6 +38,12 @@ type authErr struct {
 	msg    string
 }
 
+const (
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = 25 * time.Second
+	wsWriteWait  = 5 * time.Second
+)
+
 func New(cfg config.Config, db *pgxpool.Pool, mgr *agent.Manager) *Server {
 	return &Server{
 		cfg:      cfg,
@@ -74,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/webrtc/offer", s.requireIdentity(s.handleWebRTCOffer))
 	mux.HandleFunc("/api/webrtc/ice", s.requireIdentity(s.handleWebRTCIce))
 	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
+	mux.HandleFunc("/api/ws/conversation", s.requireIdentity(s.handleConversationWS))
 	mux.HandleFunc("/api/ws", s.requireIdentity(s.handleNotificationsWS))
 	mux.HandleFunc("/api/pair/request", s.handlePairRequest)
 	mux.HandleFunc("/api/pair/status/", s.handlePairStatus)
@@ -548,45 +555,62 @@ func (s *Server) proxyToAgentSamePath(w http.ResponseWriter, r *http.Request, id
 }
 
 func (s *Server) handleNotificationsWS(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+	s.handleAgentWSProxy(w, r, id, "/ws/notifications")
+}
+
+func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+	s.handleAgentWSProxy(w, r, id, "/ws/conversation")
+}
+
+func (s *Server) handleAgentWSProxy(w http.ResponseWriter, r *http.Request, id auth.Identity, upstreamPath string) {
 	if !websocket.IsWebSocketUpgrade(r) {
 		writeError(w, http.StatusBadRequest, "websocket upgrade required")
 		return
 	}
+
 	target, err := s.resolveAgent(r.Context(), id.UserID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "No agent assigned")
 		return
 	}
+
 	clientConn, err := s.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer clientConn.Close()
 
-	upstreamURL := url.URL{Scheme: "ws", Host: fmt.Sprintf("%s:%d", target.Host, target.Port), Path: "/ws/notifications"}
-	q := upstreamURL.Query()
-	q.Set("user_id", id.UserID)
-	if id.Token != "" {
-		q.Set("token", id.Token)
-	}
-	upstreamURL.RawQuery = q.Encode()
-
-	agentConn, _, err := websocket.DefaultDialer.Dial(upstreamURL.String(), nil)
+	agentConn, _, err := websocket.DefaultDialer.Dial(buildAgentWSURL(target, upstreamPath, r.URL.Query(), id), nil)
 	if err != nil {
+		_ = clientConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "agent unavailable"), time.Now().Add(wsWriteWait))
 		return
 	}
 	defer agentConn.Close()
 
+	prepareWSConn(clientConn)
+	prepareWSConn(agentConn)
+
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	closeDone := func() {
+		doneOnce.Do(func() { close(done) })
+	}
+
+	go heartbeatWS(clientConn, done)
+	go heartbeatWS(agentConn, done)
+
 	var wg sync.WaitGroup
 	forward := func(dst, src *websocket.Conn) {
 		defer wg.Done()
+		defer closeDone()
 		for {
 			mt, msg, err := src.ReadMessage()
 			if err != nil {
-				_ = dst.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(2*time.Second))
+				closeWithMappedCode(dst, err)
 				return
 			}
 			if err := dst.WriteMessage(mt, msg); err != nil {
+				closeWithMappedCode(src, err)
 				return
 			}
 		}
@@ -595,6 +619,63 @@ func (s *Server) handleNotificationsWS(w http.ResponseWriter, r *http.Request, i
 	go forward(agentConn, clientConn)
 	go forward(clientConn, agentConn)
 	wg.Wait()
+}
+
+func buildAgentWSURL(target agent.Target, upstreamPath string, incomingQuery url.Values, id auth.Identity) string {
+	u := url.URL{
+		Scheme: "ws",
+		Host:   fmt.Sprintf("%s:%d", target.Host, target.Port),
+		Path:   upstreamPath,
+	}
+	q := cloneQuery(incomingQuery)
+	q.Set("user_id", id.UserID)
+	if id.Token != "" {
+		q.Set("token", id.Token)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func cloneQuery(in url.Values) url.Values {
+	out := make(url.Values, len(in))
+	for k, values := range in {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		out[k] = copied
+	}
+	return out
+}
+
+func prepareWSConn(conn *websocket.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+}
+
+func heartbeatWS(conn *websocket.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(wsPingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait)); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func closeWithMappedCode(conn *websocket.Conn, readErr error) {
+	code := websocket.CloseNormalClosure
+	text := ""
+	if ce, ok := readErr.(*websocket.CloseError); ok {
+		code = ce.Code
+		text = ce.Text
+	}
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(wsWriteWait))
 }
 
 func (s *Server) resolveAgent(ctx context.Context, userID string) (agent.Target, error) {

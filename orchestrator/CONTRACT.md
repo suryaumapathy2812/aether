@@ -27,3 +27,5 @@ dashboard + agent features.
 
 - `/api/ws/notifications` (or `/api/ws`) authenticated endpoint that proxies
   user-scoped notification stream to the assigned agent.
+- `/api/ws/conversation` authenticated endpoint that proxies user-scoped
+  conversation runtime traffic to the assigned agent.

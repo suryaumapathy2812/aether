@@ -4,11 +4,13 @@
 #   Browser → Caddy:80 → routes to services
 #
 # Routing:
-#   /api/channels/telegram/webhook → Agent:8000  (Telegram webhook, direct)
-#   /api/channels/*                → Agent:8000  (Channel management API)
-#   Everything else                → Dashboard:3000 (Next.js handles all other routes)
+#   /api/channels/telegram/webhook → Agent:8000         (Telegram webhook, direct)
+#   /api/channels/*                → Agent:8000         (Channel management API)
+#   /api/ws/notifications          → Orchestrator:4000  (Realtime notifications)
+#   /api/ws/conversation           → Orchestrator:4000  (Realtime conversation)
+#   Everything else                → Dashboard:3000     (Next.js handles all other routes)
 #     - /api/auth/*   → Better Auth (runs inside Next.js)
-#     - /api/go/*     → Next.js proxy → strips prefix → Agent:8000
+#     - /api/go/*     → Next.js proxy → strips prefix → Orchestrator:4000
 #     - /*            → Next.js pages
 
 :80 {
@@ -24,7 +26,13 @@
     }
     reverse_proxy @channel_api localhost:8000
 
-    # 3. Everything else → Dashboard (Next.js)
+    # 3. Realtime websocket APIs -> Orchestrator
+    @orchestrator_ws {
+        path /api/ws/notifications /api/ws/conversation
+    }
+    reverse_proxy @orchestrator_ws localhost:4000
+
+    # 4. Everything else -> Dashboard (Next.js)
     #    Next.js handles: /api/auth/*, /api/go/* (proxy), and all pages
     reverse_proxy localhost:3000
 
