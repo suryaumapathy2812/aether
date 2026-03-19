@@ -16,8 +16,7 @@ import {
   Message,
   MessageContent,
   MessageResponse,
-  MessageActions,
-  MessageAction,
+
 } from "@/components/ai-elements/message";
 import {
   Tool,
@@ -37,7 +36,7 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { IconCopy, IconSparkles, IconX, IconPlayerPause } from "@tabler/icons-react";
+import { IconSparkles, IconX, IconPlayerPause } from "@tabler/icons-react";
 import { AudioLines } from "lucide-react";
 
 export default function ChatPage() {
@@ -259,7 +258,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                   {[0, 1, 2, 3, 4].map((i) => (
                     <div
                       key={i}
-                      className="w-[7px] rounded-full bg-white/80"
+                      className="w-[7px] rounded-full bg-white"
                       style={{
                         height: "44px",
                         animation: "aether-vbar 1s ease-in-out infinite",
@@ -274,15 +273,15 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                   className={[
                     "h-20 w-20 rounded-full transition-all duration-700",
                     voiceState === "thinking"
-                      ? "bg-white/20 animate-pulse"
-                      : "bg-white/[0.08]",
+                      ? "bg-white/30 animate-pulse"
+                      : "bg-white/75",
                   ].join(" ")}
                 />
               )}
             </div>
 
             {/* Status label */}
-            <p className="text-[13px] text-white/40 tracking-wide select-none">
+            <p className="text-[13px] text-white/70 tracking-wide select-none">
               {voiceState === "recording"
                 ? `Listening · ${recordingSeconds}s`
                 : voiceState === "thinking"
@@ -294,10 +293,10 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             {(latestAssistantText || (latestUserText && latestUserText !== "[voice instruction]")) && (
               <div className="max-w-md w-full text-center space-y-2 overflow-y-auto max-h-[40vh] px-2">
                 {latestUserText && latestUserText !== "[voice instruction]" && (
-                  <p className="text-white/30 text-sm leading-relaxed line-clamp-2">{latestUserText}</p>
+                  <p className="text-white/50 text-sm leading-relaxed line-clamp-2">{latestUserText}</p>
                 )}
                 {latestAssistantText && (
-                  <div className="text-white/70 text-left">
+                  <div className="text-white/90 text-left">
                     <MessageResponse>{latestAssistantText}</MessageResponse>
                   </div>
                 )}
@@ -311,7 +310,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             <button
               type="button"
               onClick={closeVoiceMode}
-              className="h-14 w-14 rounded-full bg-white/[0.07] flex items-center justify-center text-white/50 hover:bg-white/10 hover:text-white/70 transition-colors"
+              className="h-14 w-14 rounded-full bg-red-500/15 flex items-center justify-center text-red-400 hover:bg-red-500/25 hover:text-red-300 transition-colors"
             >
               <IconX className="size-6" />
             </button>
@@ -321,7 +320,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
               <button
                 type="button"
                 onClick={stopVoiceRecording}
-                className="h-14 w-14 rounded-full bg-white/[0.12] flex items-center justify-center text-white hover:bg-white/[0.18] transition-colors"
+                className="h-14 w-14 rounded-full bg-white/15 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
               >
                 <IconPlayerPause className="size-6" />
               </button>
@@ -330,7 +329,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                 type="button"
                 onClick={() => { void startVoiceRecording(); }}
                 disabled={isStreaming}
-                className="h-14 w-14 rounded-full bg-white/[0.12] flex items-center justify-center text-white hover:bg-white/[0.18] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="h-14 w-14 rounded-full bg-white/15 flex items-center justify-center text-white hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <AudioLines className="size-6" />
               </button>
@@ -380,25 +379,13 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                           return (
                             <Fragment key={key}>
                               {isVoiceMsg ? (
-                                <div className="flex items-center gap-1.5 text-muted-foreground/50">
+                                <div className="flex items-center gap-1.5 text-muted-foreground">
                                   <AudioLines className="size-3.5" />
                                   <span className="text-sm">Voice message</span>
                                 </div>
                               ) : (
                                 <MessageResponse>{part.text}</MessageResponse>
                               )}
-                              {message.role === "assistant" &&
-                                messageIndex === messages.length - 1 &&
-                                !isStreaming && (
-                                  <MessageActions>
-                                    <MessageAction
-                                      onClick={() => navigator.clipboard.writeText(part.text)}
-                                      label="Copy"
-                                    >
-                                      <IconCopy className="size-3" />
-                                    </MessageAction>
-                                  </MessageActions>
-                                )}
                             </Fragment>
                           );
                         }

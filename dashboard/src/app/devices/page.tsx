@@ -263,7 +263,7 @@ function IOSSetup({ onDone }: { onDone: () => void }) {
           maxLength={9}
           className="flex-1 h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40 font-mono tracking-wider"
         />
-        <Button variant="ghost" size="sm" type="submit" disabled={claiming} className="h-8 px-3 text-[12px]">
+        <Button variant="aether" size="sm" type="submit" disabled={claiming} className="h-8 px-3 text-[12px]">
           {claiming ? "..." : "Pair"}
         </Button>
       </form>
@@ -336,7 +336,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
             className="w-full h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40"
           />
         </div>
-        <Button variant="ghost" size="sm" type="submit" disabled={registering} className="h-8 px-3 text-[12px]">
+        <Button variant="aether" size="sm" type="submit" disabled={registering} className="h-8 px-3 text-[12px]">
           {registering ? "..." : "Connect"}
         </Button>
       </form>

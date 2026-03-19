@@ -26,7 +26,7 @@ function PluginsContent() {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"installed" | "browse">("installed");
+  const [tab, setTab] = useState<"installed" | "browse">("browse");
   const [search, setSearch] = useState("");
 
   const oauthError = searchParams.get("error");
@@ -92,6 +92,19 @@ function PluginsContent() {
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-6">
         <button
+          onClick={() => setTab("browse")}
+          className={`
+            px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            ${
+              tab === "browse"
+                ? "bg-white/[0.08] text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+            }
+          `}
+        >
+          Browse
+        </button>
+        <button
           onClick={() => setTab("installed")}
           className={`
             flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
@@ -111,19 +124,6 @@ function PluginsContent() {
           >
             {active.length}
           </span>
-        </button>
-        <button
-          onClick={() => setTab("browse")}
-          className={`
-            px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
-            ${
-              tab === "browse"
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
-            }
-          `}
-        >
-          Browse
         </button>
       </div>
 
@@ -148,7 +148,7 @@ function PluginsContent() {
             {error || "Could not finish that connection. Please try again."}
           </p>
           <Button
-            variant="ghost"
+            variant="aether"
             size="sm"
             onClick={loadPlugins}
             className="text-xs"
@@ -206,17 +206,6 @@ function PluginRow({
       href={`/plugins/${plugin.name}`}
       className="group flex items-center gap-3 px-3 py-3 -mx-3 rounded-xl hover:bg-white/[0.03] transition-colors"
     >
-      {/* Status dot */}
-      <span
-        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-          status === "active"
-            ? "bg-emerald-400"
-            : status === "attention"
-              ? "bg-amber-400"
-              : "bg-white/[0.15]"
-        }`}
-      />
-
       {/* Info */}
       <div className="flex-1 min-w-0">
         <span className="text-[13px] font-medium text-foreground">
@@ -231,20 +220,6 @@ function PluginRow({
       {tab === "browse" && !plugin.installed && (
         <span className="shrink-0 text-[11px] font-medium text-foreground/70 bg-white/[0.08] px-3 py-1 rounded-full">
           Get
-        </span>
-      )}
-
-      {/* Browse tab: needs setup indicator */}
-      {tab === "browse" && plugin.installed && status === "attention" && (
-        <span className="shrink-0 text-[10px] text-amber-400/70">
-          Needs setup
-        </span>
-      )}
-
-      {/* Browse tab: disabled indicator */}
-      {tab === "browse" && plugin.installed && status === "disabled" && (
-        <span className="shrink-0 text-[10px] text-muted-foreground/40">
-          Disabled
         </span>
       )}
 

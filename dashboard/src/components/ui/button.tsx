@@ -20,7 +20,7 @@ const buttonVariants = cva(
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
         aether:
-          "bg-white/8 text-foreground border border-border/70 hover:bg-white/12 transition-colors",
+          "bg-white text-black font-medium hover:bg-white/90 transition-colors",
         "aether-ghost":
           "text-foreground/70 hover:text-foreground hover:bg-white/8 transition-colors",
         "aether-link":

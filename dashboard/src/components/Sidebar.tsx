@@ -69,6 +69,18 @@ function SidebarInner() {
 
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
 
+  // Hide main content when mobile sidebar is open
+  useEffect(() => {
+    const main = document.getElementById("app-main");
+    if (!main) return;
+    if (mobileOpen) {
+      main.style.display = "none";
+    } else {
+      main.style.display = "";
+    }
+    return () => { main.style.display = ""; };
+  }, [mobileOpen]);
+
   useEffect(() => {
     setSidebarToggle(toggle);
   }, [toggle, setSidebarToggle]);
@@ -189,7 +201,7 @@ function SidebarInner() {
               setMobileOpen(false);
             }}
             onDoubleClick={() => startRename(s)}
-            className="flex-1 min-w-0 text-left px-3 py-1.5 text-[13px] text-muted-foreground truncate"
+            className="flex-1 min-w-0 text-left px-3 py-2.5 text-[13px] text-foreground/60 truncate"
           >
             {s.title || "New chat"}
           </button>
@@ -202,7 +214,7 @@ function SidebarInner() {
         {!isEditing && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="shrink-0 w-6 h-6 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground">
+              <button className="shrink-0 w-6 h-6 flex items-center justify-center rounded opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground">
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -266,7 +278,7 @@ function SidebarInner() {
     if (items.length === 0) return null;
     return (
       <div className="mb-3">
-        <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/50 font-medium">
+        <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-foreground/40 font-medium">
           {label}
         </p>
         <div className="space-y-0.5">{items.map(renderSession)}</div>
@@ -274,42 +286,111 @@ function SidebarInner() {
     );
   };
 
-  return (
+    return (
     <>
-      <button
-        onClick={() => setMobileOpen(true)}
-        className="md:hidden fixed top-5 left-5 z-50 w-8 h-8 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-sm border border-white/[0.08] text-muted-foreground"
-        style={{ display: pathname === "/" ? "none" : undefined }}
-      >
-        <MessageCircle className="size-3.5" />
-      </button>
-
-      {mobileOpen && (
-        <div
-          className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-          onClick={() => setMobileOpen(false)}
-        />
+      {/* ── Mobile: header + full-screen sidebar ── */}
+      {pathname !== "/" && (
+        <div className="md:hidden shrink-0 h-12 flex items-center justify-between px-4 bg-[#0a0a0a] border-b border-white/[0.06]">
+          <span className="logo-wordmark text-[11px] text-foreground/70 font-medium">aether</span>
+          <button
+            onClick={() => setMobileOpen((o) => !o)}
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-foreground/70"
+          >
+            {mobileOpen ? <PanelLeftClose className="size-4" /> : <PanelLeft className="size-4" />}
+          </button>
+        </div>
       )}
 
+      {mobileOpen && (
+        <aside className="md:hidden flex-1 min-h-0 overflow-y-auto bg-[#0a0a0a]">
+          <div className="flex flex-col h-full">
+            {/* New Chat */}
+            <div className="px-3 pt-3 pb-2">
+              <button
+                onClick={handleNewChat}
+                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium text-foreground hover:bg-white/[0.06] transition-colors"
+                aria-label="New Chat"
+              >
+                <Plus className="size-4 shrink-0" />
+                New Chat
+              </button>
+            </div>
+
+            {/* Top Nav */}
+            <div className="px-3 pb-2 space-y-0.5">
+              {topNavItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMobileOpen(false)}
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
+                    pathname.startsWith(item.href)
+                      ? "text-foreground bg-white/[0.06]"
+                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]"
+                  )}
+                >
+                  <item.icon className="size-4 shrink-0" />
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+
+            {/* Sessions */}
+            {sessions.length > 0 && (
+              <div className="flex-1 overflow-y-auto px-3 pt-2">
+                {renderGroup("Today", todaySessions)}
+                {renderGroup("Yesterday", yesterdaySessions)}
+                {renderGroup("Previous", olderSessions)}
+              </div>
+            )}
+
+            {/* Profile */}
+            <div className="mt-auto border-t border-white/[0.06] px-3 py-3">
+              <Link
+                href="/account"
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
+                  pathname.startsWith("/account")
+                    ? "text-foreground bg-white/[0.06]"
+                    : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]"
+                )}
+              >
+                <Avatar size="sm">
+                  {session?.user?.image && (
+                    <AvatarImage src={session.user.image} alt={session?.user?.name || ""} />
+                  )}
+                  <AvatarFallback>
+                    {(session?.user?.name || session?.user?.email || "U").charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="truncate">{session?.user?.name || "Profile"}</span>
+              </Link>
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {/* ── Desktop: standard sidebar ── */}
       <aside
         className={cn(
           "h-full shrink-0 bg-white/[0.02] border-r border-white/[0.06] transition-all duration-200",
           "hidden md:block",
-          collapsed ? "w-[60px]" : "w-[240px]",
-          mobileOpen && "!block fixed inset-y-0 left-0 z-50 w-[260px] bg-[#111111]"
+          collapsed ? "w-[60px]" : "w-[240px]"
         )}
       >
         <div className="flex flex-col h-full">
-          {/* Header */}
-          <div className={cn("flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
+          {/* Header — hidden on mobile since the fixed top bar handles it */}
+          <div className={cn("hidden md:flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
             {!collapsed && (
-              <span className="logo-wordmark text-[11px] text-muted-foreground font-medium truncate">
+              <span className="logo-wordmark text-[11px] text-foreground/70 font-medium truncate">
                 aether
               </span>
             )}
             <button
               onClick={toggle}
-              className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/[0.04] transition-colors"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-foreground/40 hover:text-foreground/70 hover:bg-white/[0.04] transition-colors"
             >
               {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
             </button>
@@ -322,8 +403,8 @@ function SidebarInner() {
                 <button
                   onClick={handleNewChat}
                   className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
-                    "text-foreground/80 hover:bg-white/[0.06]",
+                    "w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors",
+                    "text-foreground hover:bg-white/[0.06]",
                     collapsed && "justify-center px-0"
                   )}
                   aria-label="New Chat"
@@ -345,10 +426,10 @@ function SidebarInner() {
                     href={item.href}
                     onClick={() => setMobileOpen(false)}
                     className={cn(
-                      "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
-                      pathname.startsWith(item.href)
-                        ? "text-foreground/90 bg-white/[0.06]"
-                        : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
+                    pathname.startsWith(item.href)
+                      ? "text-foreground bg-white/[0.06]"
+                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]",
                       collapsed && "justify-center px-0"
                     )}
                     aria-label={item.label}
@@ -386,10 +467,10 @@ function SidebarInner() {
                   href="/account"
                   onClick={() => setMobileOpen(false)}
                   className={cn(
-                    "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors",
+                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
                     pathname.startsWith("/account")
-                      ? "text-foreground/90 bg-white/[0.06]"
-                      : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]",
+                      ? "text-foreground bg-white/[0.06]"
+                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]",
                     collapsed && "justify-center px-0"
                   )}
                   aria-label="Profile"

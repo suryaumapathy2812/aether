@@ -258,10 +258,10 @@ export default function PluginDetailPage() {
                 </p>
               </div>
               <Button
-                variant="ghost"
+                variant="aether"
                 size="sm"
                 onClick={handleOAuthConnect}
-                className="text-[12px] h-8 px-3 text-muted-foreground"
+                className="text-[12px] h-8 px-3"
               >
                 <IconExternalLink className="size-3 mr-1.5" />
                 {plugin.connected ? "Reconnect" : "Connect"}

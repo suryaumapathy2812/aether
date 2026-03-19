@@ -49,11 +49,11 @@ export default function RootLayout({
             <ServiceWorkerRegistrar />
             <NotificationProvider>
               <KeyboardShortcutsProvider>
-              <div className="app-layout">
+               <div className="app-layout">
                 <Suspense>
                   <Sidebar />
                 </Suspense>
-                <main className="flex-1 min-w-0 h-full overflow-hidden">
+                <main id="app-main" className="flex-1 min-w-0 min-h-0 overflow-hidden">
                     {children}
                   </main>
                 </div>
