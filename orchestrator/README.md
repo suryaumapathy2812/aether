@@ -27,9 +27,8 @@ Go rewrite of the orchestration layer.
   - `/api/push/subscribe`
 - Realtime-support endpoints:
   - `GET /api/agent/ready`
-  - `POST /api/webrtc/offer`
-  - `PATCH /api/webrtc/ice`
   - `WS /api/ws/notifications` (and `WS /api/ws` alias)
+  - `WS /api/ws/conversation`
 - `GET /api/metrics/latency` (proxy if available, otherwise degraded payload)
 
 ## Behavior guarantees

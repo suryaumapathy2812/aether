@@ -14,7 +14,7 @@ Multi-tenant voice agent platform with a web dashboard, orchestrator control pla
 1. User interacts with `dashboard`.
 2. `dashboard` calls `orchestrator` APIs.
 3. `orchestrator` provisions or reuses a per-user `app` agent container.
-4. Voice traffic flows directly to agent endpoints (WebRTC / voice pipeline).
+4. Conversation and voice traffic flow through orchestrator WebSocket endpoints.
 5. Shared model assets are mounted from `.cache/models` into orchestrator and agents.
 
 ## Repository layout

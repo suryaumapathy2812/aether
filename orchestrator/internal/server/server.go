@@ -77,8 +77,6 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/agent/ready", s.requireIdentity(s.handleAgentReady))
 	mux.HandleFunc("/api/metrics/latency", s.requireIdentity(s.handleLatency))
-	mux.HandleFunc("/api/webrtc/offer", s.requireIdentity(s.handleWebRTCOffer))
-	mux.HandleFunc("/api/webrtc/ice", s.requireIdentity(s.handleWebRTCIce))
 	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
 	mux.HandleFunc("/api/ws/conversation", s.requireIdentity(s.handleConversationWS))
 	mux.HandleFunc("/api/ws", s.requireIdentity(s.handleNotificationsWS))
@@ -386,32 +384,6 @@ func (s *Server) handleAgentReady(w http.ResponseWriter, r *http.Request, id aut
 	}
 	defer resp.Body.Close()
 	writeJSON(w, http.StatusOK, map[string]any{"ready": resp.StatusCode == http.StatusOK})
-}
-
-func (s *Server) handleWebRTCOffer(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	target, err := s.resolveAgent(r.Context(), id.UserID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "No agent assigned")
-		return
-	}
-	if !proxy.HTTPStream(s.httpClient, w, r, target.Host, target.Port, "/webrtc/offer", id.UserID, true) {
-		writeError(w, http.StatusBadGateway, "agent unavailable")
-	}
-}
-
-func (s *Server) handleWebRTCIce(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	target, err := s.resolveAgent(r.Context(), id.UserID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "No agent assigned")
-		return
-	}
-	if !proxy.HTTPStream(s.httpClient, w, r, target.Host, target.Port, "/webrtc/ice", id.UserID, true) {
-		writeError(w, http.StatusBadGateway, "agent unavailable")
-	}
 }
 
 func (s *Server) handleV1Proxy(w http.ResponseWriter, r *http.Request, id auth.Identity) {

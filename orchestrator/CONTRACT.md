@@ -20,7 +20,6 @@ dashboard + agent features.
 - `/api/push/vapid-key`, `/api/push/subscribe`
 - `/health`, `/api/health`
 - `/api/agent/ready`
-- `/api/webrtc/offer`, `/api/webrtc/ice`
 - `/api/metrics/latency`
 
 ## Required WebSocket group
