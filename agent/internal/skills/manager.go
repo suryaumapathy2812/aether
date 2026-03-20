@@ -2,9 +2,11 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +22,7 @@ type Manager struct {
 	externalDir string
 	httpClient  HTTPDoer
 	rawBaseURL  string
+	apiBaseURL  string
 }
 
 func NewManager(opts ManagerOptions) *Manager {
@@ -31,6 +34,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	if rawBase == "" {
 		rawBase = "https://raw.githubusercontent.com"
 	}
+	apiBase := strings.TrimRight(opts.SkillsAPI, "/")
+	if apiBase == "" {
+		apiBase = "https://skills.sh/api"
+	}
 
 	m := &Manager{
 		index:       map[string]SkillMeta{},
@@ -39,6 +46,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		externalDir: opts.ExternalDir,
 		httpClient:  httpClient,
 		rawBaseURL:  rawBase,
+		apiBaseURL:  apiBase,
 	}
 
 	for _, dir := range opts.BuiltinDirs {
@@ -52,6 +60,70 @@ func NewManager(opts ManagerOptions) *Manager {
 	}
 
 	return m
+}
+
+func (m *Manager) SearchMarketplace(ctx context.Context, query string, limit int) (MarketplaceSearchResult, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return MarketplaceSearchResult{}, fmt.Errorf("%w: query is required", ErrInvalidSource)
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+
+	requestURL := fmt.Sprintf("%s/search?q=%s&limit=%d", m.apiBaseURL, url.QueryEscape(q), limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return MarketplaceSearchResult{}, err
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return MarketplaceSearchResult{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return MarketplaceSearchResult{}, fmt.Errorf("marketplace search failed: status %d", resp.StatusCode)
+	}
+
+	var raw struct {
+		Query      string `json:"query"`
+		SearchType string `json:"searchType"`
+		Skills     []struct {
+			ID       string `json:"id"`
+			SkillID  string `json:"skillId"`
+			Name     string `json:"name"`
+			Installs int    `json:"installs"`
+			Source   string `json:"source"`
+		} `json:"skills"`
+		Count      int `json:"count"`
+		DurationMS int `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return MarketplaceSearchResult{}, err
+	}
+
+	out := MarketplaceSearchResult{
+		Query:      raw.Query,
+		SearchType: raw.SearchType,
+		Skills:     make([]MarketplaceSkill, 0, len(raw.Skills)),
+		Count:      raw.Count,
+		DurationMS: raw.DurationMS,
+	}
+	for _, s := range raw.Skills {
+		out.Skills = append(out.Skills, MarketplaceSkill{
+			ID:       strings.TrimSpace(s.ID),
+			SkillID:  strings.TrimSpace(s.SkillID),
+			Name:     strings.TrimSpace(s.Name),
+			Installs: s.Installs,
+			Source:   strings.TrimSpace(s.Source),
+		})
+	}
+	if out.Count == 0 {
+		out.Count = len(out.Skills)
+	}
+	return out, nil
 }
 
 func (m *Manager) AttachDirectory(path string, source SourceType) error {
@@ -240,27 +312,39 @@ func (m *Manager) InstallFromSource(ctx context.Context, source string) (Install
 		return InstallResult{}, fmt.Errorf("%w: external directory is not configured", ErrInvalidSource)
 	}
 
-	remoteURL := buildRawURL(m.rawBaseURL, owner, repo, skillName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
-	if err != nil {
-		return InstallResult{}, err
+	candidates := buildRawCandidates(m.rawBaseURL, owner, repo, skillName)
+	remoteURL := ""
+	var body []byte
+	var found bool
+	for _, candidate := range candidates {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
+		if err != nil {
+			return InstallResult{}, err
+		}
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			return InstallResult{}, err
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			_ = resp.Body.Close()
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return InstallResult{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+		payload, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return InstallResult{}, err
+		}
+		remoteURL = candidate
+		body = payload
+		found = true
+		break
 	}
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return InstallResult{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
+	if !found {
 		return InstallResult{}, ErrNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
-		return InstallResult{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return InstallResult{}, err
 	}
 
 	parsed, err := parseSkillMarkdown(string(body))

@@ -142,6 +142,60 @@ func TestAttachDirectory(t *testing.T) {
 	}
 }
 
+func TestInstallFromSourceSkillsSubdirFallback(t *testing.T) {
+	root := t.TempDir()
+	external := filepath.Join(root, "external")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/owner/repo/main/skills/find-skills/SKILL.md" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("---\nname: find-skills\ndescription: from skills dir\n---\n\ncontent"))
+	}))
+	defer server.Close()
+
+	m := NewManager(ManagerOptions{ExternalDir: external, RawBaseURL: server.URL})
+	if _, err := m.Discover(context.Background()); err != nil {
+		t.Fatalf("discover failed: %v", err)
+	}
+
+	result, err := m.InstallFromSource(context.Background(), "owner/repo@find-skills")
+	if err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+	if result.RemoteURL != server.URL+"/owner/repo/main/skills/find-skills/SKILL.md" {
+		t.Fatalf("unexpected remote url: %s", result.RemoteURL)
+	}
+}
+
+func TestSearchMarketplace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("q") != "find" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"query":"find","searchType":"fuzzy","skills":[{"id":"a/b/c","skillId":"c","name":"c","installs":10,"source":"a/b"}],"count":1,"duration_ms":10}`))
+	}))
+	defer server.Close()
+
+	m := NewManager(ManagerOptions{SkillsAPI: server.URL})
+	result, err := m.SearchMarketplace(context.Background(), "find", 5)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if result.Count != 1 || len(result.Skills) != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Skills[0].Source != "a/b" {
+		t.Fatalf("unexpected source: %#v", result.Skills[0])
+	}
+}
+
 func mustWriteSkill(t *testing.T, path, name, desc, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

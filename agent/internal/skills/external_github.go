@@ -37,3 +37,18 @@ func buildRawURL(baseURL, owner, repo, skillName string) string {
 	}
 	return base + "/" + skillName + "/SKILL.md"
 }
+
+func buildRawCandidates(baseURL, owner, repo, skillName string) []string {
+	base := strings.TrimRight(baseURL, "/") + "/" + owner + "/" + repo + "/main"
+	if strings.TrimSpace(skillName) == "" {
+		return []string{base + "/SKILL.md"}
+	}
+	name := strings.TrimSpace(skillName)
+	return []string{
+		base + "/" + name + "/SKILL.md",
+		base + "/skills/" + name + "/SKILL.md",
+		base + "/.agents/skills/" + name + "/SKILL.md",
+		base + "/.claude/skills/" + name + "/SKILL.md",
+		base + "/.opencode/skills/" + name + "/SKILL.md",
+	}
+}

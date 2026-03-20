@@ -28,3 +28,13 @@ func TestBuildRawURL(t *testing.T) {
 		t.Fatalf("unexpected url: %s", got)
 	}
 }
+
+func TestBuildRawCandidates(t *testing.T) {
+	candidates := buildRawCandidates("https://raw.githubusercontent.com", "o", "r", "find-skills")
+	if len(candidates) < 3 {
+		t.Fatalf("expected multiple candidates, got %d", len(candidates))
+	}
+	if candidates[1] != "https://raw.githubusercontent.com/o/r/main/skills/find-skills/SKILL.md" {
+		t.Fatalf("unexpected skills path candidate: %s", candidates[1])
+	}
+}

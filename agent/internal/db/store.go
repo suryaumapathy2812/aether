@@ -593,6 +593,11 @@ func (s *Store) ListSkills(ctx context.Context) ([]SkillRecord, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) DeleteSkill(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM skills WHERE name = ?`, strings.TrimSpace(name))
+	return err
+}
+
 func (s *Store) UpsertPlugin(ctx context.Context, r PluginRecord) error {
 	if r.Name == "" {
 		return fmt.Errorf("plugin name is required")

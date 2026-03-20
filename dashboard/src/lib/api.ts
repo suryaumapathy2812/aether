@@ -609,6 +609,47 @@ export async function uninstallPlugin(name: string) {
   return api(`/api/plugins/${name}`, { method: "DELETE" });
 }
 
+// ── Skills ──
+
+export interface MarketplaceSkill {
+  id: string;
+  skill_id: string;
+  name: string;
+  installs: number;
+  source: string;
+}
+
+export interface SkillMeta {
+  name: string;
+  description: string;
+  location: string;
+  source: "builtin" | "user" | "external";
+}
+
+export async function searchMarketplaceSkills(query: string, limit = 10) {
+  return api<{ query: string; search_type: string; skills: MarketplaceSkill[]; count: number }>(
+    `/api/skills/marketplace/search?q=${encodeURIComponent(query)}&limit=${limit}`
+  );
+}
+
+export async function listInstalledSkills() {
+  return api<{ skills: SkillMeta[]; count: number }>("/api/skills/installed");
+}
+
+export async function installSkill(source: string, skillName?: string) {
+  return api<{ installed: SkillMeta; remote_url: string }>("/api/skills/install", {
+    method: "POST",
+    body: JSON.stringify({ source, skill_name: skillName }),
+  });
+}
+
+export async function removeSkill(name: string) {
+  return api<{ removed: boolean; name: string }>("/api/skills/remove", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
 // ── Chat sessions ──
 
 export interface ChatSession {

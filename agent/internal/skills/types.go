@@ -11,10 +11,10 @@ const (
 )
 
 type SkillMeta struct {
-	Name        string
-	Description string
-	Location    string
-	Source      SourceType
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Location    string     `json:"location"`
+	Source      SourceType `json:"source"`
 }
 
 type Skill struct {
@@ -22,11 +22,27 @@ type Skill struct {
 	Content string
 }
 
+type MarketplaceSkill struct {
+	ID       string `json:"id"`
+	SkillID  string `json:"skill_id"`
+	Name     string `json:"name"`
+	Installs int    `json:"installs"`
+	Source   string `json:"source"`
+}
+
+type MarketplaceSearchResult struct {
+	Query      string             `json:"query"`
+	SearchType string             `json:"search_type"`
+	Skills     []MarketplaceSkill `json:"skills"`
+	Count      int                `json:"count"`
+	DurationMS int                `json:"duration_ms"`
+}
+
 type InstallResult struct {
-	Source     string
-	RemoteURL  string
-	Installed  SkillMeta
-	Downloaded bool
+	Source     string    `json:"source"`
+	RemoteURL  string    `json:"remote_url"`
+	Installed  SkillMeta `json:"installed"`
+	Downloaded bool      `json:"downloaded"`
 }
 
 type ManagerOptions struct {
@@ -35,6 +51,7 @@ type ManagerOptions struct {
 	ExternalDir string
 	HTTPClient  HTTPDoer
 	RawBaseURL  string
+	SkillsAPI   string
 }
 
 type HTTPDoer interface {

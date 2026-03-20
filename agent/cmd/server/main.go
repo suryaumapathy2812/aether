@@ -36,6 +36,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
+	skillshttp "github.com/suryaumapathy2812/core-ai/agent/internal/skills/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
 	toolhttp "github.com/suryaumapathy2812/core-ai/agent/internal/tools/httpapi"
@@ -235,6 +236,8 @@ func main() {
 	convWSHandler.RegisterRoutes(mux)
 	dataHandler := dataapi.New(store, mediaService)
 	dataHandler.RegisterRoutes(mux)
+	skillsHandler := skillshttp.New(skillshttp.Options{Manager: skillsManager, Store: store})
+	skillsHandler.RegisterRoutes(mux)
 
 	// WebSocket + Web Push endpoints
 	wsHandler := ws.NewHandler(wsHub)
