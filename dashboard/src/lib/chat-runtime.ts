@@ -68,6 +68,9 @@ type ConversationEventType =
   | "turn.cancel"
   | "turn.cancelled"
   | "assistant.text.delta"
+  | "assistant.tool-input-available"
+  | "assistant.tool-output-available"
+  | "assistant.tool-output-error"
   | "assistant.done"
   | "error"
   | "ack";
@@ -1043,6 +1046,44 @@ class ChatRuntimeStore {
           type: "assistant-text-delta",
           messageID: inflight.assistantMessageId,
           delta,
+        });
+        return;
+      }
+      case "assistant.tool-input-available": {
+        if (!inflight) return;
+        const toolName = typeof envelope.payload?.toolName === "string" ? envelope.payload.toolName : "tool";
+        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        this.dispatch(sessionId, {
+          type: "assistant-tool-input",
+          messageID: inflight.assistantMessageId,
+          toolName,
+          toolCallID,
+          input: envelope.payload?.input,
+        });
+        return;
+      }
+      case "assistant.tool-output-available": {
+        if (!inflight) return;
+        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        this.dispatch(sessionId, {
+          type: "assistant-tool-output",
+          messageID: inflight.assistantMessageId,
+          toolCallID,
+          output: envelope.payload?.output,
+          failed: false,
+        });
+        return;
+      }
+      case "assistant.tool-output-error": {
+        if (!inflight) return;
+        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        const errorText = typeof envelope.payload?.errorText === "string" ? envelope.payload.errorText : "Tool failed";
+        this.dispatch(sessionId, {
+          type: "assistant-tool-output",
+          messageID: inflight.assistantMessageId,
+          toolCallID,
+          failed: true,
+          errorText,
         });
         return;
       }

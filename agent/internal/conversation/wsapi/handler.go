@@ -494,6 +494,11 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			input := ev.Payload["input"]
+			h.emit(conn, writeMu, state, sessionID, turnID, "assistant.tool-input-available", map[string]any{
+				"toolName":   name,
+				"toolCallId": callID,
+				"input":      input,
+			})
 			argsJSON, _ := json.Marshal(input)
 			pendingToolCalls = append(pendingToolCalls, map[string]any{
 				"id":   callID,
@@ -509,6 +514,20 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 			assistantFlushedForToolBatch = false
 
 		case conversation.EventToolOutputAvailable, conversation.EventType("tool-output-error"):
+			callID, _ := ev.Payload["toolCallId"].(string)
+			output, _ := ev.Payload["output"].(string)
+			errorText, _ := ev.Payload["errorText"].(string)
+			if ev.EventType == conversation.EventType("tool-output-error") {
+				h.emit(conn, writeMu, state, sessionID, turnID, "assistant.tool-output-error", map[string]any{
+					"toolCallId": callID,
+					"errorText":  errorText,
+				})
+			} else {
+				h.emit(conn, writeMu, state, sessionID, turnID, "assistant.tool-output-available", map[string]any{
+					"toolCallId": callID,
+					"output":     output,
+				})
+			}
 			if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
 				_ = h.store.AppendChatMessage(ctx, state.userID, sessionID, map[string]any{
 					"role":       "assistant",
@@ -517,9 +536,6 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 				assistantFlushedForToolBatch = true
 			}
 			if h.store != nil {
-				callID, _ := ev.Payload["toolCallId"].(string)
-				output, _ := ev.Payload["output"].(string)
-				errorText, _ := ev.Payload["errorText"].(string)
 				content := output
 				if ev.EventType == conversation.EventType("tool-output-error") {
 					content = "[tool_error] " + errorText
