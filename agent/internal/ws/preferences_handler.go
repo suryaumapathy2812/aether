@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 var modelNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-./]+$`)
@@ -27,7 +28,7 @@ func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *PreferencesHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -38,22 +39,22 @@ func (h *PreferencesHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		userID = "default"
 	}
 	if key == "" {
-		writeError(w, http.StatusBadRequest, "key is required")
+		httputil.WriteError(w, http.StatusBadRequest, "key is required")
 		return
 	}
 
 	value, err := h.store.GetUserPreference(r.Context(), userID, key)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "preference not found")
+		httputil.WriteError(w, http.StatusNotFound, "preference not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"key": key, "value": value})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"key": key, "value": value})
 }
 
 func (h *PreferencesHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -63,7 +64,7 @@ func (h *PreferencesHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 		Value  string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 
@@ -75,29 +76,29 @@ func (h *PreferencesHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	value := strings.TrimSpace(req.Value)
 
 	if key == "" {
-		writeError(w, http.StatusBadRequest, "key is required")
+		httputil.WriteError(w, http.StatusBadRequest, "key is required")
 		return
 	}
 
 	if key == "model" {
 		if err := validateModelName(value); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
 
 	err := h.store.SaveUserPreference(r.Context(), userID, key, value)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": key, "value": value})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": key, "value": value})
 }
 
 func (h *PreferencesHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -106,7 +107,7 @@ func (h *PreferencesHandler) handleDelete(w http.ResponseWriter, r *http.Request
 		Key    string `json:"key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 
@@ -117,17 +118,17 @@ func (h *PreferencesHandler) handleDelete(w http.ResponseWriter, r *http.Request
 	key := strings.TrimSpace(req.Key)
 
 	if key == "" {
-		writeError(w, http.StatusBadRequest, "key is required")
+		httputil.WriteError(w, http.StatusBadRequest, "key is required")
 		return
 	}
 
 	err := h.store.DeleteUserPreference(r.Context(), userID, key)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "key": key})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted", "key": key})
 }
 
 func validateModelName(model string) error {

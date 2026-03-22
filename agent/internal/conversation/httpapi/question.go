@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 // questionRequest represents a pending question from the agent to the user.
@@ -248,7 +249,7 @@ func (h *Handler) handleQuestions(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(trimmed, "/", 2)
 
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		writeError(w, http.StatusBadRequest, "question id required")
+		httputil.WriteError(w, http.StatusBadRequest, "question id required")
 		return
 	}
 
@@ -266,26 +267,26 @@ func (h *Handler) handleQuestions(w http.ResponseWriter, r *http.Request) {
 	case action == "" && r.Method == http.MethodGet:
 		h.handleQuestionGet(w, r, questionID)
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
 // handleQuestionsList handles GET /v1/questions?session_id=xxx
 func (h *Handler) handleQuestionsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session_id query parameter is required")
+		httputil.WriteError(w, http.StatusBadRequest, "session_id query parameter is required")
 		return
 	}
 	pending := h.questions.listForSession(sessionID)
 	if pending == nil {
 		pending = []*questionRequest{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"questions": pending})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"questions": pending})
 }
 
 // handleQuestionReply resolves a pending question with user-provided answers.
@@ -294,35 +295,35 @@ func (h *Handler) handleQuestionReply(w http.ResponseWriter, r *http.Request, qu
 		Answers []string `json:"answers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if len(body.Answers) == 0 {
-		writeError(w, http.StatusBadRequest, "answers array is required and must not be empty")
+		httputil.WriteError(w, http.StatusBadRequest, "answers array is required and must not be empty")
 		return
 	}
 	if !h.questions.reply(questionID, body.Answers) {
-		writeError(w, http.StatusNotFound, "question not found or already answered")
+		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID})
 }
 
 // handleQuestionReject dismisses a pending question.
 func (h *Handler) handleQuestionReject(w http.ResponseWriter, r *http.Request, questionID string) {
 	if !h.questions.reject(questionID) {
-		writeError(w, http.StatusNotFound, "question not found or already answered")
+		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID, "rejected": true})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID, "rejected": true})
 }
 
 // handleQuestionGet returns a specific pending question.
 func (h *Handler) handleQuestionGet(w http.ResponseWriter, r *http.Request, questionID string) {
 	req, ok := h.questions.get(questionID)
 	if !ok {
-		writeError(w, http.StatusNotFound, "question not found")
+		httputil.WriteError(w, http.StatusNotFound, "question not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, req)
+	httputil.WriteJSON(w, http.StatusOK, req)
 }

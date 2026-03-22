@@ -48,13 +48,12 @@ func (h *telegramWebhookHandler) BuildTask(_ context.Context, req WebhookRequest
 
 	if updateID, ok := asInt64(payload["update_id"]); ok {
 		h.mu.Lock()
+		defer h.mu.Unlock()
 		last := h.lastUpdateBy[chatID]
 		if updateID <= last {
-			h.mu.Unlock()
 			return nil, nil
 		}
 		h.lastUpdateBy[chatID] = updateID
-		h.mu.Unlock()
 	}
 
 	text := strings.TrimSpace(stringify(message["text"]))

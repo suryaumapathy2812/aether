@@ -18,6 +18,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 type Handler struct {
@@ -82,10 +83,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
 		"data": []map[string]any{{
 			"id":       h.model,
@@ -98,11 +99,11 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.core == nil || h.builder == nil {
-		writeError(w, http.StatusInternalServerError, "llm runtime unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "llm runtime unavailable")
 		return
 	}
 	var req struct {
@@ -114,26 +115,26 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		User        string           `json:"user"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if len(req.Messages) == 0 {
-		writeError(w, http.StatusBadRequest, "messages is required")
+		httputil.WriteError(w, http.StatusBadRequest, "messages is required")
 		return
 	}
 	if err := h.validateMediaParts(req.Messages); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	userID := firstNonEmpty(strings.TrimSpace(req.User), "default")
 	resolvedMessages, err := h.resolveMediaRefs(r.Context(), userID, req.Messages)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	messages, err := llm.ParseChatMessages(resolvedMessages)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -167,30 +168,36 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	h.syncResponse(w, r, env, req.Messages, completionID, created, model)
 }
 
-func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestMessages []map[string]any, completionID string, created int64, model string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+// eventSink holds per-event callbacks for drainEvents callers.
+// All fields are optional; nil callbacks are ignored.
+type eventSink struct {
+	// onTextDelta is called for each text chunk emitted by the LLM.
+	onTextDelta func(chunk string)
+	// onToolInput is called when a tool call begins. argsJSON is args pre-marshalled to JSON.
+	onToolInput func(name, callID string, args map[string]any, argsJSON []byte)
+	// onToolOutput is called when a tool call completes.
+	onToolOutput func(callID, name, output string, errFlag bool)
+	// onError is called on EventError. Return true to abort the loop (response already written).
+	onError func(msg string) bool
+}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
+// eventResult holds the state accumulated by drainEvents.
+type eventResult struct {
+	parts            []string
+	finishReason     string
+	promptTokens     int
+	completionTokens int
+	totalTokens      int
+	aborted          bool // true if onError returned true and the loop was cut short
+}
 
-	writeSSE(w, map[string]any{
-		"id":      completionID,
-		"object":  "chat.completion.chunk",
-		"created": created,
-		"model":   model,
-		"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}},
-	})
-	flusher.Flush()
-
-	finish := "stop"
-	parts := []string{}
+// drainEvents drives a single LLM generation run, centralising tool-arg tracking
+// and memory recording. Output formatting is delegated to the sink callbacks so
+// callers only need to handle their specific wire format (SSE vs JSON, chat vs
+// responses API).
+func (h *Handler) drainEvents(r *http.Request, env llm.LLMRequestEnvelope, completionID string, sink eventSink) eventResult {
 	toolArgs := map[string]map[string]any{}
-	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	res := eventResult{finishReason: "stop"}
 	for ev := range h.core.GenerateWithTools(r.Context(), env) {
 		switch ev.EventType {
 		case llm.EventStartStep:
@@ -201,140 +208,136 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			args, _ := ev.Payload["input"].(map[string]any)
+			argsJSON, _ := json.Marshal(args)
 			if strings.TrimSpace(callID) != "" {
 				toolArgs[callID] = args
 			}
 			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
+			if sink.onToolInput != nil {
+				sink.onToolInput(name, callID, args, argsJSON)
+			}
 		case llm.EventToolOutputAvailable:
 			name, _ := ev.Payload["toolName"].(string)
 			errFlag, _ := ev.Payload["error"].(bool)
 			output, _ := ev.Payload["output"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			if h.memory != nil {
-				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
+				h.memory.RecordAction(r.Context(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
 			}
 			log.Printf("llm tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
+			if sink.onToolOutput != nil {
+				sink.onToolOutput(callID, name, output, errFlag)
+			}
 		case llm.EventTextDelta:
 			chunk, _ := ev.Payload["delta"].(string)
-			if strings.TrimSpace(chunk) == "" {
-				continue
+			res.parts = append(res.parts, chunk)
+			if sink.onTextDelta != nil {
+				sink.onTextDelta(chunk)
 			}
-			parts = append(parts, chunk)
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "chat.completion.chunk",
-				"created": created,
-				"model":   model,
+		case llm.EventFinish:
+			if fr, ok := ev.Payload["finishReason"].(string); ok && fr != "" {
+				res.finishReason = fr
+			}
+			res.promptTokens, res.completionTokens, res.totalTokens = extractUsage(ev.Payload)
+			log.Printf("llm stream_end: id=%s reason=%s", completionID, res.finishReason)
+		case llm.EventError:
+			msg, _ := ev.Payload["errorText"].(string)
+			if sink.onError != nil && sink.onError(msg) {
+				res.aborted = true
+				return res
+			}
+		}
+	}
+	return res
+}
+
+func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestMessages []map[string]any, completionID string, created int64, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	httputil.WriteSSE(w, map[string]any{
+		"id": completionID, "object": "chat.completion.chunk", "created": created, "model": model,
+		"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}},
+	})
+	flusher.Flush()
+
+	res := h.drainEvents(r, env, completionID, eventSink{
+		onTextDelta: func(chunk string) {
+			if strings.TrimSpace(chunk) == "" {
+				return
+			}
+			httputil.WriteSSE(w, map[string]any{
+				"id": completionID, "object": "chat.completion.chunk", "created": created, "model": model,
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": chunk}, "finish_reason": nil}},
 			})
 			flusher.Flush()
-		case llm.EventError:
-			msg, _ := ev.Payload["errorText"].(string)
+		},
+		onError: func(msg string) bool {
 			if msg == "" {
 				msg = "unknown error"
 			}
-			writeSSE(w, map[string]any{
-				"id":      completionID,
-				"object":  "chat.completion.chunk",
-				"created": created,
-				"model":   model,
+			httputil.WriteSSE(w, map[string]any{
+				"id": completionID, "object": "chat.completion.chunk", "created": created, "model": model,
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": "\n[error] " + msg}, "finish_reason": nil}},
 			})
 			flusher.Flush()
-		case llm.EventFinish:
-			fr, _ := ev.Payload["finishReason"].(string)
-			if fr != "" {
-				finish = fr
-			}
-			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
-			log.Printf("llm stream_end: id=%s reason=%s", completionID, finish)
-		}
-	}
+			return false
+		},
+	})
 
-	finalChunk := map[string]any{
-		"id":      completionID,
-		"object":  "chat.completion.chunk",
-		"created": created,
-		"model":   model,
-		"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finish}},
-		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
-	}
-	writeSSE(w, finalChunk)
+	httputil.WriteSSE(w, map[string]any{
+		"id": completionID, "object": "chat.completion.chunk", "created": created, "model": model,
+		"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": res.finishReason}},
+		"usage":   map[string]int{"prompt_tokens": res.promptTokens, "completion_tokens": res.completionTokens, "total_tokens": res.totalTokens},
+	})
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
+
 	if h.memory != nil {
-		content := strings.TrimSpace(strings.Join(parts, ""))
+		content := strings.TrimSpace(strings.Join(res.parts, ""))
 		if content != "" {
-			h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(requestMessages), llm.LatestUserMessageContent(requestMessages), content)
+			h.memory.RecordConversation(r.Context(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(requestMessages), llm.LatestUserMessageContent(requestMessages), content)
 		}
 	}
 }
 
 func (h *Handler) syncResponse(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestMessages []map[string]any, completionID string, created int64, model string) {
-	parts := []string{}
-	finish := "stop"
-	toolArgs := map[string]map[string]any{}
-	promptTokens, completionTokens, totalTokens := 0, 0, 0
-	for ev := range h.core.GenerateWithTools(r.Context(), env) {
-		switch ev.EventType {
-		case llm.EventStartStep:
-			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
-				log.Printf("llm status: id=%s %s", completionID, msg)
-			}
-		case llm.EventToolInputAvailable:
-			name, _ := ev.Payload["toolName"].(string)
-			callID, _ := ev.Payload["toolCallId"].(string)
-			args, _ := ev.Payload["input"].(map[string]any)
-			if strings.TrimSpace(callID) != "" {
-				toolArgs[callID] = args
-			}
-			log.Printf("llm tool_call: id=%s tool=%s", completionID, name)
-		case llm.EventToolOutputAvailable:
-			name, _ := ev.Payload["toolName"].(string)
-			errFlag, _ := ev.Payload["error"].(bool)
-			output, _ := ev.Payload["output"].(string)
-			callID, _ := ev.Payload["toolCallId"].(string)
-			if h.memory != nil {
-				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
-			}
-			log.Printf("llm tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
-		case llm.EventTextDelta:
-			chunk, _ := ev.Payload["delta"].(string)
-			parts = append(parts, chunk)
-		case llm.EventFinish:
-			if v, ok := ev.Payload["finishReason"].(string); ok && v != "" {
-				finish = v
-			}
-			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
-			log.Printf("llm stream_end: id=%s reason=%s", completionID, finish)
-		case llm.EventError:
-			msg, _ := ev.Payload["errorText"].(string)
+	res := h.drainEvents(r, env, completionID, eventSink{
+		onError: func(msg string) bool {
 			log.Printf("llm error: id=%s message=%s", completionID, msg)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error", "code": "internal_error"}})
-			return
-		}
+			httputil.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error", "code": "internal_error"}})
+			return true
+		},
+	})
+	if res.aborted {
+		return
 	}
-	content := strings.Join(parts, "")
+	content := strings.Join(res.parts, "")
 	if h.memory != nil && strings.TrimSpace(content) != "" {
-		h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(requestMessages), llm.LatestUserMessageContent(requestMessages), content)
+		h.memory.RecordConversation(r.Context(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(requestMessages), llm.LatestUserMessageContent(requestMessages), content)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":      completionID,
 		"object":  "chat.completion",
 		"created": created,
 		"model":   model,
-		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": finish}},
-		"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": totalTokens},
+		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": res.finishReason}},
+		"usage":   map[string]int{"prompt_tokens": res.promptTokens, "completion_tokens": res.completionTokens, "total_tokens": res.totalTokens},
 	})
 }
 
 func (h *Handler) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.core == nil {
-		writeError(w, http.StatusInternalServerError, "llm runtime unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "llm runtime unavailable")
 		return
 	}
 
@@ -351,12 +354,12 @@ func (h *Handler) handleResponses(w http.ResponseWriter, r *http.Request) {
 		User               string           `json:"user"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 
 	if len(req.Input) == 0 {
-		writeError(w, http.StatusBadRequest, "input is required")
+		httputil.WriteError(w, http.StatusBadRequest, "input is required")
 		return
 	}
 
@@ -395,232 +398,135 @@ func (h *Handler) streamResponses(w http.ResponseWriter, r *http.Request, env ll
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-
-	writeSSE(w, map[string]any{
+	httputil.WriteSSE(w, map[string]any{
 		"type":     "response.created",
 		"response": map[string]any{"id": completionID, "created": created, "model": model},
 	})
 	flusher.Flush()
 
-	finish := "stop"
-	parts := []string{}
 	toolCalls := []map[string]any{}
-	toolArgs := map[string]map[string]any{}
-	promptTokens, completionTokens, totalTokens := 0, 0, 0
-	for ev := range h.core.GenerateWithTools(r.Context(), env) {
-		switch ev.EventType {
-		case llm.EventStartStep:
-			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
-				log.Printf("responses status: id=%s %s", completionID, msg)
-			}
-		case llm.EventToolInputAvailable:
-			name, _ := ev.Payload["toolName"].(string)
-			callID, _ := ev.Payload["toolCallId"].(string)
-			args, _ := ev.Payload["input"].(map[string]any)
-			argsJSON, _ := json.Marshal(args)
-			if strings.TrimSpace(callID) != "" {
-				toolArgs[callID] = args
-			}
+	res := h.drainEvents(r, env, completionID, eventSink{
+		onToolInput: func(name, callID string, _ map[string]any, argsJSON []byte) {
 			toolCalls = append(toolCalls, map[string]any{
-				"type":      "function_call",
-				"id":        callID,
-				"name":      name,
-				"arguments": string(argsJSON),
+				"type": "function_call", "id": callID, "name": name, "arguments": string(argsJSON),
 			})
-			writeSSE(w, map[string]any{
-				"type": "response.function_call.begin",
-				"id":   callID,
-				"name": name,
-			})
+			httputil.WriteSSE(w, map[string]any{"type": "response.function_call.begin", "id": callID, "name": name})
 			flusher.Flush()
-		case llm.EventToolOutputAvailable:
-			callID, _ := ev.Payload["toolCallId"].(string)
-			name, _ := ev.Payload["toolName"].(string)
-			output, _ := ev.Payload["output"].(string)
-			errFlag, _ := ev.Payload["error"].(bool)
-			// Record tool action in memory
-			if h.memory != nil {
-				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
-			}
+		},
+		onToolOutput: func(callID, _, output string, errFlag bool) {
 			if errFlag {
 				output = "[error] " + output
 			}
-			writeSSE(w, map[string]any{
-				"type":    "response.function_call_output",
-				"call_id": callID,
-				"output":  output,
-			})
+			httputil.WriteSSE(w, map[string]any{"type": "response.function_call_output", "call_id": callID, "output": output})
 			flusher.Flush()
-		case llm.EventTextDelta:
-			chunk, _ := ev.Payload["delta"].(string)
+		},
+		onTextDelta: func(chunk string) {
 			if strings.TrimSpace(chunk) == "" {
-				continue
+				return
 			}
-			parts = append(parts, chunk)
-			writeSSE(w, map[string]any{
-				"type":  "response.output_text.delta",
-				"delta": chunk,
-			})
+			httputil.WriteSSE(w, map[string]any{"type": "response.output_text.delta", "delta": chunk})
 			flusher.Flush()
-		case llm.EventError:
-			msg, _ := ev.Payload["errorText"].(string)
+		},
+		onError: func(msg string) bool {
 			if msg == "" {
 				msg = "unknown error"
 			}
-			writeSSE(w, map[string]any{
-				"type":    "error",
-				"message": msg,
-			})
+			httputil.WriteSSE(w, map[string]any{"type": "error", "message": msg})
 			flusher.Flush()
-		case llm.EventFinish:
-			fr, _ := ev.Payload["finishReason"].(string)
-			if fr != "" {
-				finish = fr
-			}
-			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
-			log.Printf("responses stream_end: id=%s reason=%s", completionID, finish)
-		}
-	}
+			return false
+		},
+	})
 
 	for _, tc := range toolCalls {
-		writeSSE(w, map[string]any{
-			"type":      "response.function_call.done",
-			"id":        tc["id"],
-			"name":      tc["name"],
-			"arguments": tc["arguments"],
+		httputil.WriteSSE(w, map[string]any{
+			"type": "response.function_call.done", "id": tc["id"], "name": tc["name"], "arguments": tc["arguments"],
 		})
 		flusher.Flush()
 	}
-
-	writeSSE(w, map[string]any{
+	httputil.WriteSSE(w, map[string]any{
 		"type": "response.completed",
 		"response": map[string]any{
 			"id":            completionID,
 			"created":       created,
 			"model":         model,
-			"finish_reason": finish,
-			"usage":         map[string]int{"input_tokens": promptTokens, "output_tokens": completionTokens, "total_tokens": totalTokens},
+			"finish_reason": res.finishReason,
+			"usage":         map[string]int{"input_tokens": res.promptTokens, "output_tokens": res.completionTokens, "total_tokens": res.totalTokens},
 		},
 	})
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
 
-	// Record conversation in memory (convert Responses API input to chat format for summary)
 	if h.memory != nil {
-		content := strings.TrimSpace(strings.Join(parts, ""))
+		content := strings.TrimSpace(strings.Join(res.parts, ""))
 		if content != "" {
 			chatMessages := normalizeResponsesInput(requestInput)
-			h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
+			h.memory.RecordConversation(r.Context(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
 		}
 	}
 }
 
 func (h *Handler) syncResponses(w http.ResponseWriter, r *http.Request, env llm.LLMRequestEnvelope, requestInput []map[string]any, completionID string, created int64, model string) {
-	parts := []string{}
-	finish := "stop"
 	toolCalls := []map[string]any{}
 	toolResults := []map[string]any{}
-	toolArgs := map[string]map[string]any{}
-	promptTokens, completionTokens, totalTokens := 0, 0, 0
-	for ev := range h.core.GenerateWithTools(r.Context(), env) {
-		switch ev.EventType {
-		case llm.EventStartStep:
-			if msg, ok := ev.Payload["errorText"].(string); ok && msg != "" {
-				log.Printf("responses status: id=%s %s", completionID, msg)
-			}
-		case llm.EventToolInputAvailable:
-			name, _ := ev.Payload["toolName"].(string)
-			callID, _ := ev.Payload["toolCallId"].(string)
-			args, _ := ev.Payload["input"].(map[string]any)
-			argsJSON, _ := json.Marshal(args)
-			if strings.TrimSpace(callID) != "" {
-				toolArgs[callID] = args
-			}
-			// Collect tool calls — do NOT write JSON mid-response
+	res := h.drainEvents(r, env, completionID, eventSink{
+		onToolInput: func(name, callID string, _ map[string]any, argsJSON []byte) {
 			toolCalls = append(toolCalls, map[string]any{
-				"type":      "function_call",
-				"id":        callID,
-				"name":      name,
-				"arguments": string(argsJSON),
+				"type": "function_call", "id": callID, "name": name, "arguments": string(argsJSON),
 			})
-			log.Printf("responses tool_call: id=%s tool=%s", completionID, name)
-		case llm.EventToolOutputAvailable:
-			callID, _ := ev.Payload["toolCallId"].(string)
-			name, _ := ev.Payload["toolName"].(string)
-			output, _ := ev.Payload["output"].(string)
-			errFlag, _ := ev.Payload["error"].(bool)
-			// Record tool action in memory
-			if h.memory != nil {
-				h.memory.RecordAction(context.Background(), env.UserID, env.SessionID, name, toolArgs[callID], output, errFlag)
-			}
+		},
+		onToolOutput: func(callID, _, output string, errFlag bool) {
 			if errFlag {
 				output = "[error] " + output
 			}
 			toolResults = append(toolResults, map[string]any{
-				"type":    "function_call_output",
-				"call_id": callID,
-				"output":  output,
+				"type": "function_call_output", "call_id": callID, "output": output,
 			})
-			log.Printf("responses tool_result: id=%s tool=%s error=%t", completionID, name, errFlag)
-		case llm.EventTextDelta:
-			chunk, _ := ev.Payload["delta"].(string)
-			parts = append(parts, chunk)
-		case llm.EventFinish:
-			if v, ok := ev.Payload["finishReason"].(string); ok && v != "" {
-				finish = v
-			}
-			promptTokens, completionTokens, totalTokens = extractUsage(ev.Payload)
-			log.Printf("responses stream_end: id=%s reason=%s", completionID, finish)
-		case llm.EventError:
-			msg, _ := ev.Payload["errorText"].(string)
+		},
+		onError: func(msg string) bool {
 			log.Printf("responses error: id=%s message=%s", completionID, msg)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
-			return
-		}
+			httputil.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
+			return true
+		},
+	})
+	if res.aborted {
+		return
 	}
 
 	// Build output items: function_calls, function_call_outputs, then text
-	outputItems := []map[string]any{}
-	outputItems = append(outputItems, toolCalls...)
-	outputItems = append(outputItems, toolResults...)
-	content := strings.Join(parts, "")
+	outputItems := append(append([]map[string]any{}, toolCalls...), toolResults...)
+	content := strings.Join(res.parts, "")
 	if strings.TrimSpace(content) != "" {
-		outputItems = append(outputItems, map[string]any{
-			"type":    "output_text",
-			"content": content,
-		})
+		outputItems = append(outputItems, map[string]any{"type": "output_text", "content": content})
 	}
 
-	// Record conversation in memory
 	if h.memory != nil && strings.TrimSpace(content) != "" {
 		chatMessages := normalizeResponsesInput(requestInput)
-		h.memory.RecordConversation(context.Background(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
+		h.memory.RecordConversation(r.Context(), env.UserID, env.SessionID, llm.LatestUserTurnSummary(chatMessages), llm.LatestUserMessageContent(chatMessages), content)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":            completionID,
 		"object":        "response",
 		"created":       created,
 		"model":         model,
 		"output":        outputItems,
-		"finish_reason": finish,
-		"usage":         map[string]int{"input_tokens": promptTokens, "output_tokens": completionTokens, "total_tokens": totalTokens},
+		"finish_reason": res.finishReason,
+		"usage":         map[string]int{"input_tokens": res.promptTokens, "output_tokens": res.completionTokens, "total_tokens": res.totalTokens},
 	})
 }
 
 func (h *Handler) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.core == nil {
-		writeError(w, http.StatusInternalServerError, "llm runtime unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "llm runtime unavailable")
 		return
 	}
 
@@ -633,12 +539,12 @@ func (h *Handler) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		User        string   `json:"user"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 
 	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+		httputil.WriteError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
 
@@ -680,7 +586,7 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
 
@@ -693,7 +599,7 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 			if strings.TrimSpace(chunk) == "" {
 				continue
 			}
-			writeSSE(w, map[string]any{
+			httputil.WriteSSE(w, map[string]any{
 				"id":      completionID,
 				"object":  "completion",
 				"created": created,
@@ -712,7 +618,7 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 			if msg == "" {
 				msg = "unknown error"
 			}
-			writeSSE(w, map[string]any{
+			httputil.WriteSSE(w, map[string]any{
 				"id":      completionID,
 				"object":  "completion",
 				"created": created,
@@ -723,7 +629,7 @@ func (h *Handler) streamCompletions(w http.ResponseWriter, r *http.Request, env 
 		}
 	}
 
-	writeSSE(w, map[string]any{
+	httputil.WriteSSE(w, map[string]any{
 		"id":      completionID,
 		"object":  "completion",
 		"created": created,
@@ -752,12 +658,12 @@ func (h *Handler) syncCompletions(w http.ResponseWriter, r *http.Request, env ll
 		case llm.EventError:
 			msg, _ := ev.Payload["errorText"].(string)
 			log.Printf("completions error: id=%s message=%s", completionID, msg)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
+			httputil.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":      completionID,
 		"object":  "completion",
 		"created": created,
@@ -810,11 +716,11 @@ func normalizeResponsesInput(input []map[string]any) []map[string]any {
 
 func (h *Handler) handleMediaUploadInit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.media == nil || !h.media.Enabled() {
-		writeError(w, http.StatusBadRequest, "media storage is not configured (set S3_BUCKET or S3_BUCKET_TEMPLATE)")
+		httputil.WriteError(w, http.StatusBadRequest, "media storage is not configured (set S3_BUCKET or S3_BUCKET_TEMPLATE)")
 		return
 	}
 	var req struct {
@@ -826,30 +732,30 @@ func (h *Handler) handleMediaUploadInit(w http.ResponseWriter, r *http.Request) 
 		Kind        string `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if err := h.validateUploadIntent(req.Kind, req.ContentType, req.Size); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	userID := firstNonEmpty(strings.TrimSpace(req.UserID), "default")
 	bucket := h.media.BucketForUser(userID)
 	if strings.TrimSpace(bucket) == "" {
-		writeError(w, http.StatusBadRequest, "media bucket is not configured")
+		httputil.WriteError(w, http.StatusBadRequest, "media bucket is not configured")
 		return
 	}
 	if err := h.media.EnsureBucket(r.Context(), bucket); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to prepare media bucket")
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to prepare media bucket")
 		return
 	}
 	objectKey := h.media.BuildObjectKey(userID, firstNonEmpty(strings.TrimSpace(req.SessionID), "chat"), req.FileName)
 	put, err := h.media.PresignUpload(r.Context(), bucket, objectKey, req.ContentType)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"bucket":     bucket,
 		"object_key": put.ObjectKey,
 		"upload_url": put.UploadURL,
@@ -860,11 +766,11 @@ func (h *Handler) handleMediaUploadInit(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handleMediaUploadComplete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.media == nil || !h.media.Enabled() {
-		writeError(w, http.StatusBadRequest, "media storage is not configured (set S3_BUCKET or S3_BUCKET_TEMPLATE)")
+		httputil.WriteError(w, http.StatusBadRequest, "media storage is not configured (set S3_BUCKET or S3_BUCKET_TEMPLATE)")
 		return
 	}
 	var req struct {
@@ -877,41 +783,41 @@ func (h *Handler) handleMediaUploadComplete(w http.ResponseWriter, r *http.Reque
 		FileName    string `json:"file_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	req.ObjectKey = strings.TrimSpace(req.ObjectKey)
 	if req.ObjectKey == "" {
-		writeError(w, http.StatusBadRequest, "object_key is required")
+		httputil.WriteError(w, http.StatusBadRequest, "object_key is required")
 		return
 	}
 	userID := firstNonEmpty(strings.TrimSpace(req.UserID), "default")
 	bucket := firstNonEmpty(strings.TrimSpace(req.Bucket), h.media.BucketForUser(userID))
 	if strings.TrimSpace(bucket) == "" {
-		writeError(w, http.StatusBadRequest, "bucket is required")
+		httputil.WriteError(w, http.StatusBadRequest, "bucket is required")
 		return
 	}
 	expectedBucket := h.media.BucketForUser(userID)
 	if expectedBucket != "" && bucket != expectedBucket {
-		writeError(w, http.StatusBadRequest, "bucket does not match user")
+		httputil.WriteError(w, http.StatusBadRequest, "bucket does not match user")
 		return
 	}
 	info, err := h.media.HeadObject(r.Context(), bucket, req.ObjectKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "media object not found")
+		httputil.WriteError(w, http.StatusBadRequest, "media object not found")
 		return
 	}
 	ct := firstNonEmpty(strings.TrimSpace(req.ContentType), strings.TrimSpace(info.ContentType), mimeFromPath(req.ObjectKey))
 	if err := h.validateUploadIntent(req.Kind, ct, info.Size); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	url, err := h.media.PresignGet(r.Context(), bucket, req.ObjectKey)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"media": map[string]any{
 			"bucket":    bucket,
 			"key":       req.ObjectKey,
@@ -1055,20 +961,8 @@ func toInt(v any) int {
 	}
 }
 
-func writeSSE(w http.ResponseWriter, payload map[string]any) {
-	b, _ := json.Marshal(payload)
-	_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
-}
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
-}
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {

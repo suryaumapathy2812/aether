@@ -19,6 +19,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 const maskedSecretValue = "__configured__"
@@ -72,17 +73,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "store unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 
 	pluginName := strings.Trim(strings.TrimPrefix(r.URL.Path, "/internal/hooks/"), "/")
 	if pluginName == "" {
-		writeError(w, http.StatusBadRequest, "plugin name is required")
+		httputil.WriteError(w, http.StatusBadRequest, "plugin name is required")
 		return
 	}
 	userID := strings.TrimSpace(r.Header.Get("X-Aether-User-ID"))
@@ -90,19 +91,19 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 		userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
 	}
 	if userID == "" {
-		writeError(w, http.StatusBadRequest, "missing user id")
+		httputil.WriteError(w, http.StatusBadRequest, "missing user id")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 2*1024*1024))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read request body")
+		httputil.WriteError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
 	if rec, recErr := h.store.GetPlugin(r.Context(), pluginName); recErr == nil {
 		if !rec.Enabled {
-			writeError(w, http.StatusConflict, "plugin is disabled")
+			httputil.WriteError(w, http.StatusConflict, "plugin is disabled")
 			return
 		}
 	}
@@ -116,11 +117,11 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 	}
 	task, err := plugins.DefaultWebhookRegistry().BuildTask(r.Context(), webhookReq)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if task == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
 		return
 	}
 
@@ -131,14 +132,14 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 		task.Title = "Process " + pluginName + " webhook"
 	}
 	if strings.TrimSpace(task.Goal) == "" {
-		writeError(w, http.StatusBadRequest, "webhook task goal is empty")
+		httputil.WriteError(w, http.StatusBadRequest, "webhook task goal is empty")
 		return
 	}
 
 	// Webhook events are acknowledged and logged. When the agent system
 	// is rebuilt, these will be routed to the LLM for processing.
 	log.Printf("webhook received: plugin=%s title=%s user=%s", pluginName, task.Title, userID)
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{
 		"status": "acknowledged",
 		"plugin": pluginName,
 		"title":  task.Title,
@@ -163,43 +164,43 @@ func firstNonEmptyString(v any, fallback string) string {
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (h *Handler) handleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.registry == nil {
-		writeError(w, http.StatusInternalServerError, "tool registry unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "tool registry unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.Definitions()})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"tools": h.registry.Definitions()})
 }
 
 func (h *Handler) handleOpenAISchemas(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.registry == nil {
-		writeError(w, http.StatusInternalServerError, "tool registry unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "tool registry unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.OpenAISchemas()})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"tools": h.registry.OpenAISchemas()})
 }
 
 func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.orchestrator == nil {
-		writeError(w, http.StatusInternalServerError, "tool orchestrator unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "tool orchestrator unavailable")
 		return
 	}
 	var req struct {
@@ -208,11 +209,11 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 		CallID string         `json:"call_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	result := h.orchestrator.Execute(r.Context(), req.Name, req.Args, req.CallID)
@@ -220,16 +221,16 @@ func (h *Handler) handleExecute(w http.ResponseWriter, r *http.Request) {
 	if result.Error {
 		status = http.StatusBadRequest
 	}
-	writeJSON(w, status, map[string]any{"result": result})
+	httputil.WriteJSON(w, status, map[string]any{"result": result})
 }
 
 func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.plugins == nil || h.store == nil {
-		writeError(w, http.StatusInternalServerError, "plugins status unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "plugins status unavailable")
 		return
 	}
 	ctx := r.Context()
@@ -238,7 +239,7 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 	pluginMetas := h.plugins.List()
 	storeRecords, err := h.store.ListPlugins(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	byName := map[string]db.PluginRecord{}
@@ -279,12 +280,12 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
 }
 
 func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 	if h.plugins == nil || h.store == nil {
-		writeError(w, http.StatusInternalServerError, "plugins api unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "plugins api unavailable")
 		return
 	}
 	ctx := r.Context()
@@ -292,7 +293,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/api/plugins" {
 		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		h.listPluginsCompat(w, r)
@@ -303,7 +304,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	name := parts[0]
@@ -312,16 +313,16 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if err := h.store.SetPluginEnabled(ctx, name, false); err != nil {
 				if err == db.ErrNotFound {
-					writeError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"status": "disabled"})
+			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "disabled"})
 			return
 		}
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -329,48 +330,48 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "install":
 		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		h.handlePluginInstallCompat(w, r, name)
 		return
 	case "enable":
 		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		manifest, manifestErr := h.plugins.ReadManifest(name)
 		if manifestErr != nil {
-			writeError(w, http.StatusNotFound, "plugin not found")
+			httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 			return
 		}
 		if err := h.store.SetPluginEnabled(ctx, name, true); err != nil {
 			if err == db.ErrNotFound {
-				writeError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if rec, err := h.store.GetPlugin(ctx, name); err == nil {
 			_ = h.ensurePluginCronJobs(ctx, manifest, rec.Config)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "enabled"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "enabled"})
 		return
 	case "disable":
 		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		if err := h.store.SetPluginEnabled(ctx, name, false); err != nil {
 			if err == db.ErrNotFound {
-				writeError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "disabled"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "disabled"})
 		return
 	case "config":
 		switch r.Method {
@@ -378,25 +379,25 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			rec, err := h.store.GetPlugin(ctx, name)
 			if err != nil {
 				if err == db.ErrNotFound {
-					writeError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			manifest, err := h.plugins.ReadManifest(name)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 				return
 			}
-			writeJSON(w, http.StatusOK, scrubSecretConfig(rec.Config, secretConfigKeys(manifest)))
+			httputil.WriteJSON(w, http.StatusOK, scrubSecretConfig(rec.Config, secretConfigKeys(manifest)))
 			return
 		case http.MethodPost:
 			var req struct {
 				Config map[string]string `json:"config"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid json body")
+				httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 				return
 			}
 			if req.Config == nil {
@@ -405,24 +406,24 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			rec, err := h.store.GetPlugin(ctx, name)
 			if err != nil {
 				if err == db.ErrNotFound {
-					writeError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			manifest, err := h.plugins.ReadManifest(name)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 				return
 			}
 			merged := mergePluginConfig(rec.Config, req.Config, secretConfigKeys(manifest))
 			if err := h.store.SetPluginConfig(ctx, name, encryptSecretConfig(merged, h.store, secretConfigKeys(manifest))); err != nil {
 				if err == db.ErrNotFound {
-					writeError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 
@@ -443,10 +444,10 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "auto_enabled": autoEnabled})
+			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "updated", "auto_enabled": autoEnabled})
 			return
 		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 	case "oauth":
@@ -458,10 +459,10 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			h.handlePluginOAuthCallback(w, r, name)
 			return
 		}
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	default:
-		writeError(w, http.StatusNotFound, "not found")
+		httputil.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 }
@@ -471,7 +472,7 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 	plugs := h.plugins.List()
 	recs, err := h.store.ListPlugins(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	byName := map[string]db.PluginRecord{}
@@ -527,14 +528,14 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, out)
+	httputil.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) handlePluginInstallCompat(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
 	manifest, err := h.plugins.ReadManifest(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 		return
 	}
 	base := db.PluginRecord{
@@ -549,32 +550,32 @@ func (h *Handler) handlePluginInstallCompat(w http.ResponseWriter, r *http.Reque
 		Config:      map[string]string{},
 	}
 	if err := h.store.UpsertPlugin(ctx, base); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plugin_id": name, "status": "installed"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"plugin_id": name, "status": "installed"})
 }
 
 func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
 	manifest, err := h.plugins.ReadManifest(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 		return
 	}
 	authType, provider, _ := pluginAuthDetails(manifest)
 	if authType != "oauth2" {
-		writeError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		httputil.WriteError(w, http.StatusBadRequest, "plugin does not use oauth2")
 		return
 	}
 
 	if err := h.ensurePluginInstalled(ctx, manifest); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	rec, err := h.store.GetPlugin(ctx, name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	cfg := cloneConfig(rec.Config)
@@ -582,7 +583,7 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 	clientID := strings.TrimSpace(cfg["client_id"])
 	clientSecret, err := maybeDecryptStoredSecret(cfg["client_secret"], h.store)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid oauth client_secret")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid oauth client_secret")
 		return
 	}
 	envClientID, envClientSecret := oauthProviderEnvCredentials(provider)
@@ -599,29 +600,29 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 	}
 	if updated {
 		if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
 	if clientID == "" {
-		writeError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
+		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
 		return
 	}
 	if strings.TrimSpace(clientSecret) == "" {
-		writeError(w, http.StatusBadRequest, "missing oauth client_secret in plugin config")
+		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_secret in plugin config")
 		return
 	}
 
 	state, err := generateOAuthState()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create oauth state")
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to create oauth state")
 		return
 	}
 	redirectURI := oauthRedirectURI(r, name)
 	oauthCfg := oauthProviderConfig(provider)
 	if oauthCfg.AuthURL == "" || oauthCfg.TokenURL == "" {
-		writeError(w, http.StatusBadRequest, "unsupported oauth provider")
+		httputil.WriteError(w, http.StatusBadRequest, "unsupported oauth provider")
 		return
 	}
 
@@ -631,7 +632,7 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 	cfg["oauth_redirect_uri"] = redirectURI
 	cfg["oauth_token_url"] = oauthCfg.TokenURL
 	if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -655,12 +656,12 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	manifest, err := h.plugins.ReadManifest(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 		return
 	}
 	authType, provider, _ := pluginAuthDetails(manifest)
 	if authType != "oauth2" {
-		writeError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		httputil.WriteError(w, http.StatusBadRequest, "plugin does not use oauth2")
 		return
 	}
 
@@ -669,26 +670,26 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 		State string `json:"state"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if strings.TrimSpace(req.Code) == "" {
-		writeError(w, http.StatusBadRequest, "missing oauth code")
+		httputil.WriteError(w, http.StatusBadRequest, "missing oauth code")
 		return
 	}
 
 	rec, err := h.store.GetPlugin(ctx, name)
 	if err != nil {
 		if err == db.ErrNotFound {
-			writeError(w, http.StatusNotFound, "plugin not found")
+			httputil.WriteError(w, http.StatusNotFound, "plugin not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	cfg := cloneConfig(rec.Config)
 	if !validOAuthState(cfg, req.State) {
-		writeError(w, http.StatusBadRequest, "invalid or expired oauth state")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid or expired oauth state")
 		return
 	}
 
@@ -698,17 +699,17 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 	clientID := strings.TrimSpace(cfg["client_id"])
 	clientSecret, err := maybeDecryptStoredSecret(cfg["client_secret"], h.store)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid oauth client_secret")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid oauth client_secret")
 		return
 	}
 	if tokenURL == "" || clientID == "" || strings.TrimSpace(clientSecret) == "" {
-		writeError(w, http.StatusBadRequest, "oauth plugin config missing token endpoint or client credentials")
+		httputil.WriteError(w, http.StatusBadRequest, "oauth plugin config missing token endpoint or client credentials")
 		return
 	}
 
 	tokenResp, err := exchangeOAuthCode(ctx, tokenURL, clientID, clientSecret, redirectURI, strings.TrimSpace(req.Code), provider == "spotify")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -744,16 +745,16 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := h.store.SetPluginEnabled(ctx, name, true); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	_ = h.ensurePluginCronJobs(ctx, manifest, cfg)
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "connected", "plugin": name})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "connected", "plugin": name})
 }
 
 type oauthProvider struct {
@@ -1169,12 +1170,4 @@ func pluginAuthDetails(manifest plugins.PluginManifest) (string, string, []map[s
 	return authType, authProvider, fields
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
-}

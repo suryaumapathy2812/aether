@@ -71,7 +71,7 @@ func (c *Core) Generate(ctx context.Context, envelope LLMRequestEnvelope) <-chan
 			Tools:       env.Tools,
 			Model:       policyString(env.Policy, "model"),
 			MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
-			Temperature: policyFloat(env.Policy, "temperature", 0.2),
+			Temperature: policyFloat(env.Policy, "temperature", 0.7),
 		}
 		attempt := 0
 		for {
@@ -197,7 +197,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				Tools:       env.Tools,
 				Model:       policyString(env.Policy, "model"),
 				MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
-				Temperature: policyFloat(env.Policy, "temperature", 0.2),
+				Temperature: policyFloat(env.Policy, "temperature", 0.7),
 			}
 			assistantText := strings.Builder{}
 			pendingToolCalls := make([]providers.LLMToolCall, 0)
@@ -324,20 +324,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			}
 
 			// Execute all tool calls concurrently.
-			type toolResult struct {
-				tc     providers.LLMToolCall
-				result tools.Result
-			}
-			results := make([]toolResult, len(pendingToolCalls))
-			var wg sync.WaitGroup
-			for i, tc := range pendingToolCalls {
-				wg.Add(1)
-				go func(idx int, call providers.LLMToolCall) {
-					defer wg.Done()
-					results[idx] = toolResult{tc: call, result: c.executeToolWithRetry(ctx, call, toolRetryAttempts, time.Duration(toolRetryBaseDelayMs)*time.Millisecond)}
-				}(i, tc)
-			}
-			wg.Wait()
+			results := c.executeToolsConcurrently(ctx, pendingToolCalls, toolRetryAttempts, time.Duration(toolRetryBaseDelayMs)*time.Millisecond)
 
 			// Emit results and append to messages.
 			iterationRecoverableToolError := false
@@ -391,7 +378,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			Tools:       []map[string]any{}, // no tools available
 			Model:       policyString(env.Policy, "model"),
 			MaxTokens:   policyInt(env.Policy, "max_tokens", 8192),
-			Temperature: policyFloat(env.Policy, "temperature", 0.2),
+			Temperature: policyFloat(env.Policy, "temperature", 0.7),
 		}
 		summaryStream, summaryErr := c.provider.StreamWithTools(ctx, summaryOpts)
 		if summaryErr != nil {
@@ -773,11 +760,9 @@ func isRetryableProviderError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") || strings.Contains(msg, "timeout") || strings.Contains(msg, "temporar") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "503") || strings.Contains(msg, "502") || strings.Contains(msg, "504") || strings.Contains(msg, "overloaded") {
-		return true
-	}
-	return false
+	return hasAnyMarker(strings.ToLower(err.Error()), []string{
+		"429", "rate limit", "timeout", "temporar", "connection reset", "503", "502", "504", "overloaded",
+	})
 }
 
 func classifyToolError(text string) toolErrorClass {
@@ -826,6 +811,27 @@ func hasAnyMarker(text string, markers []string) bool {
 		}
 	}
 	return false
+}
+
+// toolOutcome holds the input call and execution result from executeToolsConcurrently.
+type toolOutcome struct {
+	tc     providers.LLMToolCall
+	result tools.Result
+}
+
+// executeToolsConcurrently runs all tool calls in parallel and waits for completion.
+func (c *Core) executeToolsConcurrently(ctx context.Context, calls []providers.LLMToolCall, retryAttempts int, baseDelay time.Duration) []toolOutcome {
+	outcomes := make([]toolOutcome, len(calls))
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(idx int, call providers.LLMToolCall) {
+			defer wg.Done()
+			outcomes[idx] = toolOutcome{tc: call, result: c.executeToolWithRetry(ctx, call, retryAttempts, baseDelay)}
+		}(i, tc)
+	}
+	wg.Wait()
+	return outcomes
 }
 
 func (c *Core) executeToolWithRetry(ctx context.Context, call providers.LLMToolCall, maxRetries int, baseDelay time.Duration) tools.Result {
@@ -896,7 +902,7 @@ func NewBasicEnvelope(messages []map[string]any, tools []map[string]any) LLMRequ
 		ToolChoice: "auto",
 		Policy: map[string]any{
 			"max_tokens":  8192,
-			"temperature": 0.2,
+			"temperature": 0.7,
 		},
 	}
 }

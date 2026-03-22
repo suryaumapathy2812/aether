@@ -1,12 +1,12 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
@@ -42,14 +42,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if err := h.requireAdminAuth(r); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"version":    buildinfo.Version,
 		"commit":     buildinfo.Commit,
 		"build_time": buildinfo.BuildTime,
@@ -58,23 +58,23 @@ func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if err := h.requireAdminAuth(r); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if h.updater == nil {
-		writeError(w, http.StatusServiceUnavailable, "updater unavailable")
+		httputil.WriteError(w, http.StatusServiceUnavailable, "updater unavailable")
 		return
 	}
 	release, available, err := h.updater.Check(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		httputil.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"current_version": h.updater.CurrentVersion(),
 		"available":       available,
 		"latest":          release,
@@ -83,21 +83,21 @@ func (h *Handler) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if err := h.requireAdminAuth(r); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if h.updater == nil {
-		writeError(w, http.StatusServiceUnavailable, "updater unavailable")
+		httputil.WriteError(w, http.StatusServiceUnavailable, "updater unavailable")
 		return
 	}
 
 	release, err := h.updater.ApplyLatest(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		httputil.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	if h.builder != nil {
@@ -110,7 +110,7 @@ func (h *Handler) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		_, _ = h.plugins.Discover(r.Context())
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{
 		"status":            "updated",
 		"version":           release.Version,
 		"restart_scheduled": true,
@@ -124,11 +124,11 @@ func (h *Handler) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if err := h.requireAdminAuth(r); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -149,7 +149,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":        "reloaded",
 		"prompt_length": promptLen,
 		"skills":        skillCount,
@@ -177,12 +177,4 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
-}

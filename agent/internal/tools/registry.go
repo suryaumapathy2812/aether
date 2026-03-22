@@ -26,11 +26,11 @@ func (r *Registry) Register(tool Tool, pluginName string) error {
 		return fmt.Errorf("tool name is required")
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[def.Name] = tool
 	if pluginName != "" {
 		r.toolPlugin[def.Name] = pluginName
 	}
-	r.mu.Unlock()
 	return nil
 }
 

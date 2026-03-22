@@ -469,52 +469,53 @@ func (s *Server) handleChannelWebhookProxy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Production: try agent_id first (fast path), then fall back to user_id resolution.
-	var host string
-	var port int
+	host, port, found := s.resolveChannelWebhookAgent(r.Context(), userID, agentID)
+	if !found {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if !proxy.HTTPStream(s.httpClient, w, r, host, port, upstreamPath, "", false) {
+		w.WriteHeader(http.StatusOK) // 200 to Telegram even on failure
+	}
+}
 
+// resolveChannelWebhookAgent finds the agent host/port for an inbound channel webhook.
+// It tries: agentID direct lookup → user_id resolution → any running agent.
+func (s *Server) resolveChannelWebhookAgent(ctx context.Context, userID, agentID string) (host string, port int, ok bool) {
+	// Fast path: by agentID.
 	if agentID != "" {
-		err := s.db.QueryRow(r.Context(), `
+		err := s.db.QueryRow(ctx, `
 			SELECT host, port FROM agents
 			WHERE id = $1 AND status = 'running'
 			LIMIT 1
 		`, agentID).Scan(&host, &port)
 		if err == nil {
-			goto forward
+			return host, port, true
 		}
 		log.Printf("channel webhook: agent_id=%s not found, falling back to user_id=%s", agentID, userID)
 	}
 
-	// Fallback: resolve agent by user_id (same path as authenticated requests).
+	// Resolve via user_id (same logic as authenticated requests).
 	if userID != "" {
-		target, err := s.resolveAgent(r.Context(), userID)
+		target, err := s.resolveAgent(ctx, userID)
 		if err == nil {
-			host = target.Host
-			port = target.Port
-			goto forward
+			return target.Host, target.Port, true
 		}
 		log.Printf("channel webhook: resolveAgent failed for user_id=%s: %v", userID, err)
 	}
 
 	// Last resort: any running agent.
-	{
-		err := s.db.QueryRow(r.Context(), `
-			SELECT host, port FROM agents
-			WHERE status = 'running'
-			ORDER BY last_health DESC NULLS LAST
-			LIMIT 1
-		`).Scan(&host, &port)
-		if err != nil {
-			log.Printf("channel webhook: no running agent found: %v", err)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	err := s.db.QueryRow(ctx, `
+		SELECT host, port FROM agents
+		WHERE status = 'running'
+		ORDER BY last_health DESC NULLS LAST
+		LIMIT 1
+	`).Scan(&host, &port)
+	if err != nil {
+		log.Printf("channel webhook: no running agent found: %v", err)
+		return "", 0, false
 	}
-
-forward:
-	if !proxy.HTTPStream(s.httpClient, w, r, host, port, upstreamPath, "", false) {
-		w.WriteHeader(http.StatusOK) // 200 to Telegram even on failure
-	}
+	return host, port, true
 }
 
 func (s *Server) proxyToAgentSamePath(w http.ResponseWriter, r *http.Request, id auth.Identity) {
@@ -652,68 +653,102 @@ func closeWithMappedCode(conn *websocket.Conn, readErr error) {
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(wsWriteWait))
 }
 
+// resolveAgent finds the agent Target for a given user, trying strategies in order:
+// local override → manager provision → DB by user_id → default agent → auto-assign first.
 func (s *Server) resolveAgent(ctx context.Context, userID string) (agent.Target, error) {
-	if local := strings.TrimSpace(s.cfg.LocalAgentURL); local != "" {
-		u, err := url.Parse(local)
-		if err != nil || u.Hostname() == "" {
-			return agent.Target{}, fmt.Errorf("invalid AETHER_LOCAL_AGENT_URL")
-		}
-		port := u.Port()
-		if port == "" {
-			if strings.EqualFold(u.Scheme, "https") {
-				port = "443"
-			} else {
-				port = "80"
-			}
-		}
-		n, _ := strconv.Atoi(port)
-		return agent.Target{Host: u.Hostname(), Port: n}, nil
+	if t, ok := s.resolveLocalAgent(); ok {
+		return t, nil
 	}
+	if t, ok := s.resolveViaManager(ctx, userID); ok {
+		return t, nil
+	}
+	if t, ok := s.resolveByUserDB(ctx, userID); ok {
+		return t, nil
+	}
+	if t, ok := s.resolveByDefaultID(ctx, userID); ok {
+		return t, nil
+	}
+	if t, ok := s.resolveAutoAssignFirst(ctx, userID); ok {
+		return t, nil
+	}
+	return agent.Target{}, fmt.Errorf("no running agent found for user %s", userID)
+}
 
-	if s.agentMgr != nil {
-		t, err := s.agentMgr.Provision(ctx, userID)
-		if err == nil {
-			s.agentMgr.RecordActivity(userID)
-			return t, nil
+func (s *Server) resolveLocalAgent() (agent.Target, bool) {
+	local := strings.TrimSpace(s.cfg.LocalAgentURL)
+	if local == "" {
+		return agent.Target{}, false
+	}
+	u, err := url.Parse(local)
+	if err != nil || u.Hostname() == "" {
+		return agent.Target{}, false
+	}
+	port := u.Port()
+	if port == "" {
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		} else {
+			port = "80"
 		}
+	}
+	n, _ := strconv.Atoi(port)
+	return agent.Target{Host: u.Hostname(), Port: n}, true
+}
+
+func (s *Server) resolveViaManager(ctx context.Context, userID string) (agent.Target, bool) {
+	if s.agentMgr == nil {
+		return agent.Target{}, false
+	}
+	t, err := s.agentMgr.Provision(ctx, userID)
+	if err != nil {
 		log.Printf("agent provision failed for user %s: %v", userID, err)
+		return agent.Target{}, false
 	}
+	s.agentMgr.RecordActivity(userID)
+	return t, true
+}
 
+func (s *Server) resolveByUserDB(ctx context.Context, userID string) (agent.Target, bool) {
 	var t agent.Target
 	err := s.db.QueryRow(ctx, `
-		SELECT host, port
-		FROM agents
+		SELECT host, port FROM agents
 		WHERE user_id = $1 AND status = 'running'
 		ORDER BY last_health DESC NULLS LAST
 		LIMIT 1
 	`, userID).Scan(&t.Host, &t.Port)
-	if err == nil {
-		return t, nil
-	}
+	return t, err == nil
+}
 
-	if strings.TrimSpace(s.cfg.DefaultAgentID) != "" {
-		err = s.db.QueryRow(ctx, `SELECT host, port FROM agents WHERE id = $1 AND status = 'running' LIMIT 1`, s.cfg.DefaultAgentID).Scan(&t.Host, &t.Port)
-		if err == nil {
-			_, _ = s.db.Exec(ctx, `UPDATE agents SET user_id = $1 WHERE id = $2`, userID, s.cfg.DefaultAgentID)
-			return t, nil
-		}
+func (s *Server) resolveByDefaultID(ctx context.Context, userID string) (agent.Target, bool) {
+	if strings.TrimSpace(s.cfg.DefaultAgentID) == "" {
+		return agent.Target{}, false
 	}
-
-	if s.cfg.AutoAssignFirstAgent {
-		var agentID string
-		err = s.db.QueryRow(ctx, `
-			SELECT id, host, port FROM agents
-			WHERE status = 'running'
-			ORDER BY last_health DESC NULLS LAST
-			LIMIT 1
-		`).Scan(&agentID, &t.Host, &t.Port)
-		if err == nil {
-			_, _ = s.db.Exec(ctx, `UPDATE agents SET user_id = $1 WHERE id = $2`, userID, agentID)
-			return t, nil
-		}
+	var t agent.Target
+	err := s.db.QueryRow(ctx, `SELECT host, port FROM agents WHERE id = $1 AND status = 'running' LIMIT 1`, s.cfg.DefaultAgentID).Scan(&t.Host, &t.Port)
+	if err != nil {
+		return agent.Target{}, false
 	}
+	_, _ = s.db.Exec(ctx, `UPDATE agents SET user_id = $1 WHERE id = $2`, userID, s.cfg.DefaultAgentID)
+	return t, true
+}
 
-	return agent.Target{}, err
+func (s *Server) resolveAutoAssignFirst(ctx context.Context, userID string) (agent.Target, bool) {
+	if !s.cfg.AutoAssignFirstAgent {
+		return agent.Target{}, false
+	}
+	var agentID string
+	var t agent.Target
+	err := s.db.QueryRow(ctx, `
+		SELECT id, host, port FROM agents
+		WHERE status = 'running'
+		ORDER BY last_health DESC NULLS LAST
+		LIMIT 1
+	`).Scan(&agentID, &t.Host, &t.Port)
+	if err != nil {
+		return agent.Target{}, false
+	}
+	_, _ = s.db.Exec(ctx, `UPDATE agents SET user_id = $1 WHERE id = $2`, userID, agentID)
+	return t, true
 }
 
 func (s *Server) requireIdentity(next func(http.ResponseWriter, *http.Request, auth.Identity)) http.HandlerFunc {

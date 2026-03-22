@@ -9,6 +9,7 @@ import (
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 type Handler struct {
@@ -36,18 +37,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.media == nil || !h.media.Enabled() {
-		writeError(w, http.StatusBadRequest, "media storage is not configured")
+		httputil.WriteError(w, http.StatusBadRequest, "media storage is not configured")
 		return
 	}
 	var req struct {
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	userID := strings.TrimSpace(req.UserID)
@@ -56,14 +57,14 @@ func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request
 	}
 	bucket := h.media.BucketForUser(userID)
 	if strings.TrimSpace(bucket) == "" {
-		writeError(w, http.StatusBadRequest, "media bucket is not configured")
+		httputil.WriteError(w, http.StatusBadRequest, "media bucket is not configured")
 		return
 	}
 	if err := h.media.EnsureBucket(r.Context(), bucket); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "bucket": bucket})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"success": true, "bucket": bucket})
 }
 
 func (h *Handler) memoryUserID(r *http.Request) string {
@@ -75,20 +76,20 @@ func (h *Handler) memoryUserID(r *http.Request) string {
 
 func (h *Handler) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	facts, err := h.store.GetMemoryFacts(r.Context(), h.memoryUserID(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"facts": facts})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"facts": facts})
 }
 
 func (h *Handler) handleMemorySessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	limit := 100
@@ -99,15 +100,15 @@ func (h *Handler) handleMemorySessions(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions, err := h.store.ListMemorySessions(r.Context(), h.memoryUserID(r), limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
 func (h *Handler) handleMemoryConversations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	limit := 20
@@ -119,7 +120,7 @@ func (h *Handler) handleMemoryConversations(w http.ResponseWriter, r *http.Reque
 	userID := h.memoryUserID(r)
 	conversations, err := h.store.ListMemoryConversations(r.Context(), userID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if h.media != nil && h.media.Enabled() {
@@ -129,7 +130,7 @@ func (h *Handler) handleMemoryConversations(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"conversations": conversations})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"conversations": conversations})
 }
 
 func hydrateConversationMedia(ctx context.Context, mediaSvc *media.Service, userID string, content any) (any, bool) {
@@ -195,7 +196,7 @@ func hydrateConversationMedia(ctx context.Context, mediaSvc *media.Service, user
 
 func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	limit := 100
@@ -207,15 +208,15 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	recs, err := h.store.ListMemories(r.Context(), h.memoryUserID(r), category, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"memories": recs})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"memories": recs})
 }
 
 func (h *Handler) handleMemoryDecisions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
@@ -225,15 +226,15 @@ func (h *Handler) handleMemoryDecisions(w http.ResponseWriter, r *http.Request) 
 	}
 	recs, err := h.store.ListDecisions(r.Context(), h.memoryUserID(r), category, activeOnly)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"decisions": recs})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"decisions": recs})
 }
 
 func (h *Handler) handleMemoryNotifications(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	limit := 200
@@ -244,33 +245,33 @@ func (h *Handler) handleMemoryNotifications(w http.ResponseWriter, r *http.Reque
 	}
 	notifications, err := h.store.ListMemoryNotifications(r.Context(), h.memoryUserID(r), limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	reliability, err := h.store.GetMemoryReliabilitySnapshot(r.Context(), h.memoryUserID(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"notifications": notifications, "reliability": reliability})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"notifications": notifications, "reliability": reliability})
 }
 
 func (h *Handler) handleMemoryExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	export, err := h.store.ExportMemorySnapshot(r.Context(), h.memoryUserID(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"export": export})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"export": export})
 }
 
 func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	limit := 50
@@ -291,21 +292,21 @@ func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {
 		entities, err = h.store.ListEntities(r.Context(), userID, entityType, limit)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entities": entities, "count": len(entities)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entities": entities, "count": len(entities)})
 }
 
 func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	entityID := strings.TrimPrefix(r.URL.Path, "/api/memory/entities/")
 	entityID = strings.Trim(entityID, "/")
 	if entityID == "" {
-		writeError(w, http.StatusNotFound, "entity id is required")
+		httputil.WriteError(w, http.StatusNotFound, "entity id is required")
 		return
 	}
 
@@ -317,29 +318,29 @@ func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
 		if err == db.ErrNotFound {
 			status = http.StatusNotFound
 		}
-		writeError(w, status, err.Error())
+		httputil.WriteError(w, status, err.Error())
 		return
 	}
 
 	observations, err := h.store.ListEntityObservations(ctx, entityID, 50)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	interactions, err := h.store.ListEntityInteractions(ctx, entityID, 50)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	relations, err := h.store.ListEntityRelations(ctx, entityID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"entity":       entity,
 		"observations": observations,
 		"interactions": interactions,
@@ -349,11 +350,11 @@ func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "store unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	module := strings.TrimSpace(r.URL.Query().Get("module"))
@@ -371,24 +372,16 @@ func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 		jobs, err = h.store.ListCronJobs(r.Context())
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if len(jobs) > limit {
 		jobs = jobs[:limit]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "count": len(jobs)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "count": len(jobs)})
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
-}
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
