@@ -8,6 +8,7 @@ import (
 type parsedSkill struct {
 	Name        string
 	Description string
+	AlwaysLoad  bool
 	Body        string
 }
 
@@ -48,13 +49,14 @@ func parseSkillMarkdown(raw string) (parsedSkill, error) {
 	if name == "" || desc == "" {
 		return parsedSkill{}, fmt.Errorf("%w: name and description required", ErrInvalidSkill)
 	}
+	alwaysLoad := strings.EqualFold(strings.TrimSpace(meta["always_load"]), "true")
 
 	body := ""
 	if end+1 < len(lines) {
 		body = strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
 	}
 
-	return parsedSkill{Name: name, Description: desc, Body: body}, nil
+	return parsedSkill{Name: name, Description: desc, AlwaysLoad: alwaysLoad, Body: body}, nil
 }
 
 func buildSkillMarkdown(name, description, body string) string {

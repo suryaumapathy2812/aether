@@ -463,7 +463,13 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 
 	h.emitSessionBusy(state.userID, sessionID)
 
-	env := h.builder.Build(messages, map[string]any{}, state.userID, sessionID)
+	policy := map[string]any{}
+	if h.store != nil {
+		if modelPref, err := h.store.GetUserPreference(ctx, state.userID, "model"); err == nil && strings.TrimSpace(modelPref) != "" {
+			policy["model"] = strings.TrimSpace(modelPref)
+		}
+	}
+	env := h.builder.Build(messages, policy, state.userID, sessionID)
 	rCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{UserID: state.userID})
 	answerParts := []string{}
 	pendingToolCalls := []map[string]any{}

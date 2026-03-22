@@ -19,6 +19,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 type Handler struct {
@@ -111,11 +112,11 @@ func (h *Handler) emit(userID, eventType string, payload map[string]any) {
 
 func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.runtime == nil || h.builder == nil {
-		writeError(w, http.StatusInternalServerError, "conversation runtime unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "conversation runtime unavailable")
 		return
 	}
 	var req struct {
@@ -127,11 +128,11 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		Session     string           `json:"session"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if len(req.Messages) == 0 {
-		writeError(w, http.StatusBadRequest, "messages is required")
+		httputil.WriteError(w, http.StatusBadRequest, "messages is required")
 		return
 	}
 
@@ -166,17 +167,17 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	latestUser, err := latestUserTurnMessage(req.Messages)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	resolvedTurn, err := h.resolveMediaRefs(r.Context(), userID, []map[string]any{latestUser})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(resolvedTurn) == 0 {
-		writeError(w, http.StatusBadRequest, "latest user message is required")
+		httputil.WriteError(w, http.StatusBadRequest, "latest user message is required")
 		return
 	}
 	latestUser = resolvedTurn[0]
@@ -189,6 +190,11 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := map[string]any{}
+	if h.store != nil {
+		if modelPref, err := h.store.GetUserPreference(r.Context(), userID, "model"); err == nil && strings.TrimSpace(modelPref) != "" {
+			policy["model"] = strings.TrimSpace(modelPref)
+		}
+	}
 	if req.MaxTokens != nil {
 		policy["max_tokens"] = *req.MaxTokens
 	}
@@ -208,7 +214,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
 
@@ -238,7 +244,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		if ev.EventType == conversation.EventStart {
 			chunk["messageMetadata"] = map[string]any{"sessionId": sessionID}
 		}
-		writeSSE(w, chunk)
+		httputil.WriteSSE(w, chunk)
 		flusher.Flush()
 
 		// Side effects: persist to DB and collect answer text.
@@ -424,20 +430,8 @@ func extractToolCallIDs(msg map[string]any) []string {
 	return ids
 }
 
-func writeSSE(w http.ResponseWriter, payload map[string]any) {
-	b, _ := json.Marshal(payload)
-	_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
-}
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
-}
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
@@ -628,11 +622,11 @@ func isSupportedAudioFormat(ext string) bool {
 
 func (h *Handler) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "store unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -643,19 +637,19 @@ func (h *Handler) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	sessions, err := h.store.ListChatSessions(r.Context(), userID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := map[string]string{}
 	for _, sess := range sessions {
 		out[sess.ID] = h.status.get(sess.ID)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"statuses": out})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"statuses": out})
 }
 
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "store unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 	switch r.Method {
@@ -672,10 +666,10 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		sessions, err := h.store.ListChatSessions(r.Context(), userID, limit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 
 	case http.MethodPost:
 		var req struct {
@@ -683,7 +677,7 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Title  string `json:"title"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json")
+			httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
 		userID := strings.TrimSpace(req.UserID)
@@ -696,28 +690,28 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		sess, err := h.store.CreateChatSession(r.Context(), userID, title)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		h.status.set(sess.ID, "idle")
 		h.emit(userID, "session.created", map[string]any{"sessionID": sess.ID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
-		writeJSON(w, http.StatusCreated, sess)
+		httputil.WriteJSON(w, http.StatusCreated, sess)
 
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
 func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
-		writeError(w, http.StatusInternalServerError, "store unavailable")
+		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
 	// Extract session ID from path: /v1/sessions/{id}
 	sessionID := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
 	sessionID = strings.Trim(sessionID, "/")
 	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session id required")
+		httputil.WriteError(w, http.StatusBadRequest, "session id required")
 		return
 	}
 
@@ -725,12 +719,12 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		sess, err := h.store.GetChatSession(r.Context(), sessionID)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "session not found")
+			httputil.WriteError(w, http.StatusNotFound, "session not found")
 			return
 		}
 		// Also load messages for this session.
 		msgs, _ := h.store.ListChatMessages(r.Context(), sess.UserID, sessionID, 500)
-		writeJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs})
 
 	case http.MethodPatch:
 		var req struct {
@@ -738,38 +732,38 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			Archive *bool   `json:"archive"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json")
+			httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
 		if req.Title != nil {
 			if err := h.store.UpdateChatSessionTitle(r.Context(), sessionID, strings.TrimSpace(*req.Title)); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			h.emit(sessUserIDFromStore(h, r.Context(), sessionID), "session.updated", map[string]any{"sessionID": sessionID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		}
 		if req.Archive != nil && *req.Archive {
 			if err := h.store.ArchiveChatSession(r.Context(), sessionID); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			h.emit(sessUserIDFromStore(h, r.Context(), sessionID), "session.updated", map[string]any{"sessionID": sessionID, "archived": true, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 		}
 		sess, _ := h.store.GetChatSession(r.Context(), sessionID)
-		writeJSON(w, http.StatusOK, sess)
+		httputil.WriteJSON(w, http.StatusOK, sess)
 
 	case http.MethodDelete:
 		userID := sessUserIDFromStore(h, r.Context(), sessionID)
 		if err := h.store.DeleteChatSession(r.Context(), sessionID); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		h.status.set(sessionID, "idle")
 		h.emit(userID, "session.deleted", map[string]any{"sessionID": sessionID, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
-		writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
 
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 

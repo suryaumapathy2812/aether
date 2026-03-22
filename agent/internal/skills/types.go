@@ -13,6 +13,7 @@ const (
 type SkillMeta struct {
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
+	AlwaysLoad  bool       `json:"always_load"`
 	Location    string     `json:"location"`
 	Source      SourceType `json:"source"`
 }

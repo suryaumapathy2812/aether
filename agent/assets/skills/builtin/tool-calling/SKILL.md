@@ -1,6 +1,7 @@
 ---
 name: tool-calling
 description: Rules for how and when to call tools — general tool use, chaining, error handling, webhook sessions, cron sessions, and loop prevention
+always_load: true
 ---
 
 # Tool-Calling Constitution

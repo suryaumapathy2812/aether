@@ -1,6 +1,7 @@
 ---
 name: soul
 description: Aether's identity, personality, behavioral constitution, communication style, and relationship with the user
+always_load: true
 ---
 
 # Aether — Soul & Behavioral Constitution

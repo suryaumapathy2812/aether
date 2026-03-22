@@ -141,7 +141,7 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		env.Policy["max_tokens"] = 8192
 	}
 	if _, ok := env.Policy["temperature"]; !ok {
-		env.Policy["temperature"] = 0.2
+		env.Policy["temperature"] = 0.7
 	}
 	return env.Normalize()
 }
@@ -336,15 +336,27 @@ func (b *ContextBuilder) skillsPromptSection() string {
 	if len(all) == 0 {
 		return ""
 	}
-	lines := []string{"Available skills (load with skill tools as needed):"}
+	var alwaysLoaded []string
+	listLines := []string{"Available skills (load with read_skill as needed):"}
 	for _, s := range all {
-		desc := strings.TrimSpace(s.Description)
-		if desc == "" {
-			desc = "(no description)"
+		if s.AlwaysLoad {
+			if content, err := b.skills.Read(s.Name); err == nil && strings.TrimSpace(content) != "" {
+				alwaysLoaded = append(alwaysLoaded, strings.TrimSpace(content))
+			}
+		} else {
+			desc := strings.TrimSpace(s.Description)
+			if desc == "" {
+				desc = "(no description)"
+			}
+			listLines = append(listLines, fmt.Sprintf("- %s: %s", s.Name, desc))
 		}
-		lines = append(lines, fmt.Sprintf("- %s: %s", s.Name, desc))
 	}
-	return strings.Join(lines, "\n")
+	var parts []string
+	parts = append(parts, alwaysLoaded...)
+	if len(listLines) > 1 {
+		parts = append(parts, strings.Join(listLines, "\n"))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func (b *ContextBuilder) pluginsPromptSection() string {

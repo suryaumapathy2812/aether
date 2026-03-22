@@ -440,6 +440,7 @@ func scanDir(root string, source SourceType, acc map[string]SkillMeta) (int, err
 		acc[key] = SkillMeta{
 			Name:        parsed.Name,
 			Description: parsed.Description,
+			AlwaysLoad:  parsed.AlwaysLoad,
 			Location:    path,
 			Source:      source,
 		}
