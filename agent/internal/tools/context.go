@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 
-	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
@@ -37,10 +36,9 @@ type ExecContext struct {
 	PushDeliverer PushDeliverer
 	// QuestionAsker enables the ask_user tool to pose blocking questions (optional).
 	QuestionAsker QuestionAsker
-	// VectorDB provides semantic memory search using CortexDB (optional)
-	VectorDB *cortexdb.DB
 	// EmbeddingProvider generates embeddings for semantic search (optional)
 	EmbeddingProvider interface {
+		Embed(ctx context.Context, texts []string) ([][]float32, error)
 		EmbedSingle(ctx context.Context, text string) ([]float32, error)
 	}
 }

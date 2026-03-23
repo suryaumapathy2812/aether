@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
@@ -49,17 +50,35 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, call tools.Call) tools.Res
 		_ = call.Ctx.Store.StoreMemoryDecision(ctx, userID, content, "preference", "explicit", 0)
 	}
 
-	// Also save to vector store for semantic search (if available)
-	if call.Ctx.VectorDB != nil && call.Ctx.EmbeddingProvider != nil {
-		// Generate embedding for the content
-		embedding, err := call.Ctx.EmbeddingProvider.EmbedSingle(ctx, content)
+	var embedding []float32
+	if call.Ctx.EmbeddingProvider != nil {
+		var err error
+		embedding, err = call.Ctx.EmbeddingProvider.EmbedSingle(ctx, content)
 		if err != nil {
-			// Log but don't fail - vector storage is optional
 			fmt.Printf("warning: failed to generate embedding for memory: %v\n", err)
-		} else if embedding != nil {
-			// Store in CortexDB for semantic search
-			call.Ctx.VectorDB.Quick().Add(ctx, embedding, content)
 		}
+	}
+	_, _ = call.Ctx.Store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		UserID:     userID,
+		Kind:       "memory",
+		Category:   category,
+		Content:    content,
+		Confidence: 0.95,
+		Importance: 0.75,
+		SourceType: "manual",
+		Embedding:  embedding,
+	})
+	if strings.EqualFold(category, "preference") {
+		_, _ = call.Ctx.Store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+			UserID:     userID,
+			Kind:       "decision",
+			Category:   "preference",
+			Content:    content,
+			Confidence: 1.0,
+			Importance: 0.95,
+			SourceType: "manual",
+			Embedding:  embedding,
+		})
 	}
 
 	return tools.Success("Saved to memory.", map[string]any{"category": category})
@@ -126,20 +145,18 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, call tools.Call) tools.R
 		}
 	}
 
-	// 2. Semantic vector search (CortexDB) - if available
-	if call.Ctx.VectorDB != nil && call.Ctx.EmbeddingProvider != nil {
-		// Generate embedding for the query
+	// 2. Hybrid semantic search from canonical memory items.
+	if call.Ctx.EmbeddingProvider != nil {
 		queryEmbedding, err := call.Ctx.EmbeddingProvider.EmbedSingle(ctx, query)
 		if err == nil && queryEmbedding != nil {
-			// Search CortexDB
-			vectorResults, err := call.Ctx.VectorDB.Quick().Search(ctx, queryEmbedding, limit)
+			hybridResults, err := call.Ctx.Store.SearchMemoryHybrid(ctx, userID, query, queryEmbedding, limit)
 			if err == nil {
-				for _, r := range vectorResults {
-					allResults = append(allResults, memResult{
-						content: r.Content,
-						source:  "semantic",
-						score:   r.Score,
-					})
+				for _, r := range hybridResults {
+					content := memorySearchContent(r)
+					if strings.TrimSpace(content) == "" {
+						continue
+					}
+					allResults = append(allResults, memResult{content: content, source: "semantic", score: r.Similarity})
 				}
 			}
 		}
@@ -173,4 +190,26 @@ func truncateOutput(v string, max int) string {
 		return v
 	}
 	return strings.TrimSpace(v[:max]) + "..."
+}
+
+func memorySearchContent(r db.MemorySearchResult) string {
+	switch r.Type {
+	case "fact":
+		return r.Fact
+	case "decision":
+		return r.Decision
+	case "summary":
+		return r.Summary
+	case "entity", "entity_observation":
+		if strings.TrimSpace(r.EntityName) != "" {
+			return strings.TrimSpace(r.EntityName + ": " + r.EntitySummary)
+		}
+		return r.EntitySummary
+	case "action":
+		return strings.TrimSpace(r.ToolName + ": " + r.Output)
+	case "conversation":
+		return r.UserMessage
+	default:
+		return r.Memory
+	}
 }

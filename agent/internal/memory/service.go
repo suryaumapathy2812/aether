@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -16,10 +17,16 @@ import (
 type Service struct {
 	store    *db.Store
 	core     *llm.Core
+	embedder embedder
 	queue    chan extractionJob
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	entityMu sync.Mutex // serializes entity resolution across workers to prevent duplicates
+}
+
+type embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+	EmbedSingle(ctx context.Context, text string) ([]float32, error)
 }
 
 type extractionJob struct {
@@ -29,11 +36,12 @@ type extractionJob struct {
 	AssistantMessage string
 }
 
-func NewService(store *db.Store, core *llm.Core) *Service {
+func NewService(store *db.Store, core *llm.Core, embedding embedder) *Service {
 	return &Service{
-		store: store,
-		core:  core,
-		queue: make(chan extractionJob, 256),
+		store:    store,
+		core:     core,
+		embedder: embedding,
+		queue:    make(chan extractionJob, 256),
 	}
 }
 
@@ -109,6 +117,25 @@ func (s *Service) RecordSessionSummary(ctx context.Context, userID, sessionID, s
 	if err := s.store.AddMemorySessionSummary(ctx, userID, sessionID, summary, startedAt, endedAt, turns, toolsUsed); err != nil {
 		log.Printf("memory session write failed: %v", err)
 	}
+	metadata := map[string]any{"turns": turns, "tools_used": toolsUsed}
+	var embedding []float32
+	if s.embedder != nil {
+		embedding, _ = s.embedder.EmbedSingle(ctx, summary)
+	}
+	_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		UserID:     userID,
+		Kind:       "summary",
+		Category:   "session",
+		Content:    summary,
+		Confidence: 0.9,
+		Importance: 0.8,
+		SourceType: "session",
+		SourceID:   sessionID,
+		SessionID:  sessionID,
+		Metadata:   metadata,
+		Embedding:  embedding,
+		ObservedAt: endedAt,
+	})
 }
 
 func (s *Service) worker(ctx context.Context) {
@@ -195,16 +222,55 @@ Assistant: ` + job.AssistantMessage
 			}
 		}
 	}
+	if runCtx.Err() != nil {
+		return
+	}
 	content := strings.TrimSpace(strings.Join(parts, ""))
 	parsed := parseExtraction(content)
-	for _, fact := range parsed.Facts {
-		_ = s.store.StoreMemoryFact(context.Background(), job.UserID, fact, job.ConversationID)
+	factEmbeddings := s.embedTexts(ctx, parsed.Facts)
+	for idx, fact := range parsed.Facts {
+		_ = s.store.StoreMemoryFact(ctx, job.UserID, fact, job.ConversationID)
+		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+			UserID:     job.UserID,
+			Kind:       "fact",
+			Category:   "profile",
+			Content:    fact,
+			Confidence: 0.9,
+			Importance: 0.85,
+			SourceType: "conversation",
+			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			Embedding:  embeddingAt(factEmbeddings, idx),
+		})
 	}
-	for _, memory := range parsed.Memories {
-		_ = s.store.StoreMemory(context.Background(), job.UserID, memory, "episodic", job.ConversationID, nil)
+	memoryEmbeddings := s.embedTexts(ctx, parsed.Memories)
+	for idx, memory := range parsed.Memories {
+		_ = s.store.StoreMemory(ctx, job.UserID, memory, "episodic", job.ConversationID, nil)
+		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+			UserID:     job.UserID,
+			Kind:       "memory",
+			Category:   "episodic",
+			Content:    memory,
+			Confidence: 0.85,
+			Importance: 0.65,
+			SourceType: "conversation",
+			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			Embedding:  embeddingAt(memoryEmbeddings, idx),
+		})
 	}
-	for _, decision := range parsed.Decisions {
-		_ = s.store.StoreMemoryDecision(context.Background(), job.UserID, decision, "preference", "extracted", job.ConversationID)
+	decisionEmbeddings := s.embedTexts(ctx, parsed.Decisions)
+	for idx, decision := range parsed.Decisions {
+		_ = s.store.StoreMemoryDecision(ctx, job.UserID, decision, "preference", "extracted", job.ConversationID)
+		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+			UserID:     job.UserID,
+			Kind:       "decision",
+			Category:   "preference",
+			Content:    decision,
+			Confidence: 0.95,
+			Importance: 0.95,
+			SourceType: "conversation",
+			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			Embedding:  embeddingAt(decisionEmbeddings, idx),
+		})
 	}
 	// Store extracted entities with dedup: serialize entity resolution across
 	// workers via mutex to prevent race conditions where two workers both
@@ -225,10 +291,59 @@ Assistant: ` + job.AssistantMessage
 			if obs == "" {
 				continue
 			}
-			_ = s.store.AddEntityObservation(context.Background(), entityID, job.UserID, obs, "trait", "extracted")
+			_ = s.store.AddEntityObservation(ctx, entityID, job.UserID, obs, "trait", "extracted")
+			_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+				UserID:     job.UserID,
+				Kind:       "entity_observation",
+				Category:   entity.Type,
+				Content:    entity.Name + ": " + obs,
+				Confidence: 0.8,
+				Importance: 0.7,
+				SourceType: "conversation",
+				SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			})
 		}
 	}
 	s.entityMu.Unlock()
+}
+
+func (s *Service) embedTexts(ctx context.Context, texts []string) [][]float32 {
+	if s == nil || s.embedder == nil || len(texts) == 0 {
+		return nil
+	}
+	clean := make([]string, 0, len(texts))
+	indexMap := make([]int, 0, len(texts))
+	for i, text := range texts {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		clean = append(clean, text)
+		indexMap = append(indexMap, i)
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	vecs, err := s.embedder.Embed(ctx, clean)
+	if err != nil {
+		log.Printf("memory embedding failed: %v", err)
+		return nil
+	}
+	result := make([][]float32, len(texts))
+	for i, vec := range vecs {
+		if i >= len(indexMap) {
+			break
+		}
+		result[indexMap[i]] = vec
+	}
+	return result
+}
+
+func embeddingAt(vectors [][]float32, idx int) []float32 {
+	if idx < 0 || idx >= len(vectors) {
+		return nil
+	}
+	return vectors[idx]
 }
 
 // resolveOrCreateEntity searches for an existing entity by exact name, alias,

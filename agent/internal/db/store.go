@@ -17,9 +17,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
-	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
+	_ "github.com/tursodatabase/go-libsql"
 )
 
 var (
@@ -29,10 +27,13 @@ var (
 )
 
 type Store struct {
-	db   *instrumentedDB
-	aead cipher.AEAD
-	path string // DB file path for vector store
+	db            *instrumentedDB
+	aead          cipher.AEAD
+	path          string
+	vectorEnabled bool
 }
+
+const defaultMemoryEmbeddingDimensions = 1536
 
 type SkillRecord struct {
 	Name        string
@@ -130,34 +131,31 @@ func Open(path, stateKey string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("libsql", libsqlFilePath(path))
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
+	if err := applyPragma(db, `PRAGMA journal_mode = WAL;`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+	if err := applyPragma(db, `PRAGMA busy_timeout = 5000;`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec(`PRAGMA synchronous = NORMAL;`); err != nil {
+	if err := applyPragma(db, `PRAGMA synchronous = NORMAL;`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-
-	// Load sqlite-vec extension for vector search
-	// Note: sqlite_vec.Auto() registers the extension globally when the package is imported
-	// The vec0 virtual table will be available after this connection is opened
 
 	store := &Store{db: newInstrumentedDB(db), path: path}
 	if err := store.ConfigureCrypto(stateKey); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	store.vectorEnabled = detectVectorSupport(db)
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -180,15 +178,30 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// VectorStore returns a CortexDB instance for vector semantic search
-// It uses the SAME SQLite file as the main store
-func (s *Store) VectorStore() (*cortexdb.DB, error) {
-	if s == nil || s.path == "" {
-		return nil, fmt.Errorf("store not initialized")
+func libsqlFilePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if strings.HasPrefix(trimmed, "file:") {
+		return trimmed
 	}
-	// Open CortexDB on the same file
-	config := cortexdb.DefaultConfig(s.path)
-	return cortexdb.Open(config)
+	return "file:" + trimmed
+}
+
+func applyPragma(db *sql.DB, query string) error {
+	rows, err := db.Query(query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		// Drain any rows returned by PRAGMA statements.
+	}
+	return rows.Err()
+}
+
+func detectVectorSupport(db *sql.DB) bool {
+	row := db.QueryRow(`SELECT vector_distance_cos(vector32('[0,1]'), vector32('[0,1]'))`)
+	var distance float64
+	return row.Scan(&distance) == nil
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -326,6 +339,31 @@ func (s *Store) migrate(ctx context.Context) error {
 			UNIQUE(user_id, decision_key)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_user_updated_at ON decisions(user_id, updated_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS memory_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			kind TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			normalized_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
+			confidence REAL NOT NULL DEFAULT 1.0,
+			importance REAL NOT NULL DEFAULT 0.5,
+			evidence_count INTEGER NOT NULL DEFAULT 1,
+			first_seen_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			expires_at TEXT,
+			source_type TEXT NOT NULL DEFAULT 'system',
+			source_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			embedding F32_BLOB(` + fmt.Sprintf("%d", defaultMemoryEmbeddingDimensions) + `),
+			UNIQUE(user_id, kind, normalized_key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_items_user_kind_status ON memory_items(user_id, kind, status, updated_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_items_user_last_seen ON memory_items(user_id, last_seen_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -481,9 +519,22 @@ func (s *Store) migrate(ctx context.Context) error {
 			content,
 			tokenize='porter unicode61'
 		);`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
+			user_id UNINDEXED,
+			item_id UNINDEXED,
+			kind UNINDEXED,
+			category UNINDEXED,
+			content,
+			tokenize='porter unicode61'
+		);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if s.vectorEnabled {
+		if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_memory_items_vec ON memory_items(libsql_vector_idx(embedding)) WHERE embedding IS NOT NULL AND status = 'active';`); err != nil {
 			return err
 		}
 	}
@@ -491,6 +542,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.rebuildMemoryFTS(ctx); err != nil {
+		return err
+	}
+	if err := s.rebuildMemoryItemsFTS(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -522,6 +576,22 @@ func (s *Store) rebuildMemoryFTS(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) rebuildMemoryItemsFTS(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM memory_items_fts`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO memory_items_fts(user_id, item_id, kind, category, content)
+		SELECT user_id, id, kind, category, content
+		FROM memory_items
+		WHERE status = 'active'
+	`)
+	return err
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, column, ddl string) error {

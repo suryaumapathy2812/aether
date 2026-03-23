@@ -170,12 +170,6 @@ func main() {
 	llmProvider := providers.NewOpenAILLMProvider(cfg.LLM)
 	llmCore := llm.NewCore(llmProvider, toolOrchestrator)
 
-	// Get VectorDB for semantic memory search (uses same state.db)
-	vectorDB, err := store.VectorStore()
-	if err != nil {
-		log.Printf("warning: failed to open vector store: %v", err)
-	}
-
 	// Embedding provider for memory vector search
 	embeddingProvider := providers.NewEmbeddingProvider(
 		cfg.LLM.EmbeddingAPIKey,
@@ -190,7 +184,6 @@ func main() {
 		Plugins:           pluginsManager,
 		PushDeliverer:     pushDeliverer,
 		QuestionAsker:     questionAskerHolder,
-		VectorDB:          vectorDB,
 		EmbeddingProvider: embeddingProvider,
 	})
 
@@ -198,11 +191,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init media storage: %v", err)
 	}
-	memoryService := memory.NewService(store, llmCore)
+	memoryService := memory.NewService(store, llmCore, embeddingProvider)
 	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store, llm.ContextBuilderConfig{
 		SystemPrompt: cfg.SystemPrompt,
 		PromptFile:   cfg.PromptFile,
 		AssetsDir:    cfg.AssetsDir,
+		Embedder:     embeddingProvider,
 	})
 
 	// ── Proactive engine ────────────────────────────────────────────
@@ -219,7 +213,7 @@ func main() {
 	// ── Memory dedup engine ────────────────────────────────────────
 	dedupEngine := memory.NewDedupEngine(memory.DedupOptions{
 		Store:        store,
-		IntervalSecs: memory.DefaultDedupIntervalSecs, // 2 hours
+		IntervalSecs: memory.DefaultDedupIntervalSecs, // 12 hours
 	})
 	memory.RegisterDedupCronHandlers(scheduler, dedupEngine)
 

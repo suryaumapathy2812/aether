@@ -17,8 +17,8 @@ const (
 	CronModuleMemory = "memory"
 	// CronJobTypeDedup is the job type for the recurring dedup cycle.
 	CronJobTypeDedup = "dedup"
-	// Default dedup interval: 2 hours.
-	DefaultDedupIntervalSecs = 7200
+	// Default dedup interval: 12 hours.
+	DefaultDedupIntervalSecs = 43200
 )
 
 // DedupEngine runs periodic deduplication across memory tables.
@@ -39,6 +39,7 @@ type DedupStats struct {
 	MemoriesRemoved  int
 	DecisionsRemoved int
 	EntitiesMerged   int
+	ItemsArchived    int
 }
 
 // NewDedupEngine creates a new dedup engine.
@@ -93,36 +94,47 @@ func (e *DedupEngine) RunDedup(ctx context.Context) error {
 	start := time.Now()
 	stats := DedupStats{}
 
-	userID := "default"
-
-	removed, err := e.dedupFacts(ctx, userID)
+	users, err := e.store.ListMemoryUsers(ctx)
 	if err != nil {
-		log.Printf("memory dedup: facts error: %v", err)
+		return err
 	}
-	stats.FactsRemoved = removed
+	for _, userID := range users {
+		removed, err := e.dedupFacts(ctx, userID)
+		if err != nil {
+			log.Printf("memory dedup: facts error user=%s: %v", userID, err)
+		}
+		stats.FactsRemoved += removed
 
-	removed, err = e.dedupMemories(ctx, userID)
-	if err != nil {
-		log.Printf("memory dedup: memories error: %v", err)
+		removed, err = e.dedupMemories(ctx, userID)
+		if err != nil {
+			log.Printf("memory dedup: memories error user=%s: %v", userID, err)
+		}
+		stats.MemoriesRemoved += removed
+
+		removed, err = e.dedupDecisions(ctx, userID)
+		if err != nil {
+			log.Printf("memory dedup: decisions error user=%s: %v", userID, err)
+		}
+		stats.DecisionsRemoved += removed
+
+		merged, err := e.dedupEntities(ctx, userID)
+		if err != nil {
+			log.Printf("memory dedup: entities error user=%s: %v", userID, err)
+		}
+		stats.EntitiesMerged += merged
+
+		archived, err := e.store.ArchiveStaleMemoryItems(ctx, userID, time.Now().UTC().Add(-45*24*time.Hour), true)
+		if err != nil {
+			log.Printf("memory dedup: archive error user=%s: %v", userID, err)
+		} else {
+			stats.ItemsArchived += int(archived)
+		}
 	}
-	stats.MemoriesRemoved = removed
 
-	removed, err = e.dedupDecisions(ctx, userID)
-	if err != nil {
-		log.Printf("memory dedup: decisions error: %v", err)
-	}
-	stats.DecisionsRemoved = removed
-
-	merged, err := e.dedupEntities(ctx, userID)
-	if err != nil {
-		log.Printf("memory dedup: entities error: %v", err)
-	}
-	stats.EntitiesMerged = merged
-
-	total := stats.FactsRemoved + stats.MemoriesRemoved + stats.DecisionsRemoved + stats.EntitiesMerged
+	total := stats.FactsRemoved + stats.MemoriesRemoved + stats.DecisionsRemoved + stats.EntitiesMerged + stats.ItemsArchived
 	if total > 0 {
-		log.Printf("memory dedup: completed in %v — facts_removed=%d memories_removed=%d decisions_removed=%d entities_merged=%d",
-			time.Since(start).Round(time.Millisecond), stats.FactsRemoved, stats.MemoriesRemoved, stats.DecisionsRemoved, stats.EntitiesMerged)
+		log.Printf("memory dedup: completed in %v — facts_removed=%d memories_removed=%d decisions_removed=%d entities_merged=%d items_archived=%d",
+			time.Since(start).Round(time.Millisecond), stats.FactsRemoved, stats.MemoriesRemoved, stats.DecisionsRemoved, stats.EntitiesMerged, stats.ItemsArchived)
 	} else {
 		log.Printf("memory dedup: completed in %v — nothing to clean", time.Since(start).Round(time.Millisecond))
 	}
