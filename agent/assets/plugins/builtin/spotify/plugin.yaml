@@ -28,8 +28,8 @@ tools:
       path: /me/player/currently-playing
 
   - name: play_pause
-    description: Toggle play/pause on Spotify.
-    status_text: Toggling playback...
+    description: Play or pause Spotify playback.
+    status_text: Updating playback...
     http:
       method: PUT
       path: /me/player/play
@@ -48,6 +48,30 @@ tools:
       path: /me/player/next
     response:
       success_msg: Skipped to next track.
+
+  - name: previous_track
+    description: Skip to the previous track on Spotify.
+    status_text: Going to previous track...
+    http:
+      method: POST
+      path: /me/player/previous
+    response:
+      success_msg: Returned to previous track.
+
+  - name: set_volume
+    description: Set Spotify playback volume.
+    status_text: Setting volume...
+    http:
+      method: PUT
+      path: /me/player/volume
+    parameters:
+      - name: volume_percent
+        type: integer
+        required: true
+        description: Volume percentage from 0 to 100
+        map_to: query.volume_percent
+    response:
+      success_msg: Volume updated.
 
   - name: search_spotify
     description: Search for tracks, artists, or albums on Spotify.

@@ -21,7 +21,7 @@ func (t *LocalSearchTool) Definition() tools.Definition {
 		StatusText:  "Searching nearby places...",
 		Parameters: []tools.Param{
 			{Name: "query", Type: "string", Description: "What to search for", Required: true},
-			{Name: "location", Type: "string", Description: "Location (city/area)", Required: true},
+			{Name: "location", Type: "string", Description: "Location (city/area)", Required: false},
 			{Name: "count", Type: "integer", Description: "Number of results (1-20)", Required: false, Default: 5},
 		},
 	}
@@ -29,6 +29,10 @@ func (t *LocalSearchTool) Definition() tools.Definition {
 
 func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	q, _ := call.Args["query"].(string)
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return tools.Fail("Search query is required", nil)
+	}
 	location, _ := call.Args["location"].(string)
 	count, _ := asInt(call.Args["count"])
 	if count <= 0 {
@@ -53,7 +57,7 @@ func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Re
 		}
 	}
 	if googleKey == "" {
-		return tools.Fail("Local search requires Google Places API key. Set plugin config key `google_api_key`.", nil)
+		return tools.Fail("Local search requires Google Places API key. Set plugin config key `google_api_key` or `google_places_api_key`.", nil)
 	}
 
 	places, err := googleLocalSearch(ctx, googleKey, q, location, count)
@@ -64,7 +68,12 @@ func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Re
 		return tools.Success("No local results found.", map[string]any{"query": q, "location": location, "count": 0})
 	}
 
-	lines := []string{fmt.Sprintf("Places for '%s' near %s:", q, location)}
+	location = strings.TrimSpace(location)
+	heading := fmt.Sprintf("Places for '%s':", q)
+	if location != "" {
+		heading = fmt.Sprintf("Places for '%s' near %s:", q, location)
+	}
+	lines := []string{heading}
 	for i, p := range places {
 		rating := ""
 		if p.UserRatingCount > 0 {
@@ -89,8 +98,12 @@ type googlePlace struct {
 }
 
 func googleLocalSearch(ctx context.Context, apiKey, query, location string, count int) ([]googlePlace, error) {
+	textQuery := strings.TrimSpace(query)
+	if strings.TrimSpace(location) != "" {
+		textQuery = fmt.Sprintf("%s near %s", textQuery, strings.TrimSpace(location))
+	}
 	payload := map[string]any{
-		"textQuery":      fmt.Sprintf("%s near %s", strings.TrimSpace(query), strings.TrimSpace(location)),
+		"textQuery":      textQuery,
 		"maxResultCount": count,
 	}
 	b, err := json.Marshal(payload)

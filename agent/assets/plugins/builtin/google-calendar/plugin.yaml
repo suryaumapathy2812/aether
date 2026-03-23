@@ -113,3 +113,57 @@ tools:
     transform: calendar_event
     response:
       success_msg: Event created.
+
+  - name: update_event
+    description: Update fields on an existing Google Calendar event.
+    status_text: Updating event...
+    http:
+      method: PATCH
+      path: /calendars/primary/events/{{event_id}}
+    parameters:
+      - name: event_id
+        type: string
+        required: true
+      - name: summary
+        type: string
+        required: false
+        description: Updated event title
+      - name: start_time
+        type: string
+        required: false
+        description: Updated start time in RFC3339 format
+      - name: end_time
+        type: string
+        required: false
+        description: Updated end time in RFC3339 format
+      - name: description
+        type: string
+        required: false
+      - name: location
+        type: string
+        required: false
+    transform: calendar_event_update
+    response:
+      success_msg: Event updated.
+
+  - name: delete_event
+    description: Delete a Google Calendar event.
+    status_text: Deleting event...
+    http:
+      method: DELETE
+      path: /calendars/primary/events/{{event_id}}
+    parameters:
+      - name: event_id
+        type: string
+        required: true
+    response:
+      success_msg: Event deleted.
+
+  - name: list_calendars
+    description: List available Google Calendars.
+    status_text: Loading calendars...
+    http:
+      method: GET
+      path: /users/me/calendarList
+    response:
+      extract: items

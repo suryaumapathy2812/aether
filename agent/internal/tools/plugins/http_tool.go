@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -102,7 +103,7 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 		case "query":
 			queryParams.Set(field, fmt.Sprintf("%v", val))
 		case "path":
-			path = strings.ReplaceAll(path, "{{"+field+"}}", fmt.Sprintf("%v", val))
+			path = strings.ReplaceAll(path, "{{"+field+"}}", escapePathTemplateValue(fmt.Sprintf("%v", val)))
 		case "body":
 			bodyFields[field] = val
 		}
@@ -257,6 +258,12 @@ func (t *HTTPTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	return tools.Success(output, nil)
 }
 
+func escapePathTemplateValue(value string) string {
+	escaped := url.PathEscape(value)
+	escaped = strings.ReplaceAll(escaped, "=", "%3D")
+	return escaped
+}
+
 // injectAuth adds the appropriate auth header to the request based on manifest auth type.
 func (t *HTTPTool) injectAuth(ctx context.Context, call tools.Call, req *http.Request) error {
 	switch t.manifest.Auth.Type {
@@ -347,6 +354,8 @@ func applyTransform(name string, args map[string]any, body map[string]any) (map[
 		return transformMIMEDraft(args, body)
 	case "calendar_event":
 		return transformCalendarEvent(args, body)
+	case "calendar_event_update":
+		return transformCalendarEventUpdate(args, body)
 	case "label_modify":
 		return transformLabelModify(args, body)
 	default:
@@ -360,7 +369,12 @@ func transformMIMEMessage(args map[string]any, _ map[string]any) (map[string]any
 	body, _ := args["body"].(string)
 	cc, _ := args["cc"].(string)
 	bcc, _ := args["bcc"].(string)
-	headers := []string{"To: " + to, "Subject: " + subject}
+	headers := []string{
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=\"UTF-8\"",
+		"To: " + to,
+		"Subject: " + subject,
+	}
 	if strings.TrimSpace(cc) != "" {
 		headers = append(headers, "Cc: "+cc)
 	}
@@ -379,7 +393,13 @@ func transformMIMEReply(args map[string]any, _ map[string]any) (map[string]any, 
 	if strings.TrimSpace(subject) == "" {
 		subject = "Re: (no subject)"
 	}
-	raw := base64.RawURLEncoding.EncodeToString([]byte("To: " + to + "\r\nSubject: " + subject + "\r\n\r\n" + body))
+	headers := []string{
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=\"UTF-8\"",
+		"To: " + to,
+		"Subject: " + subject,
+	}
+	raw := base64.RawURLEncoding.EncodeToString([]byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + body))
 	return map[string]any{"raw": raw, "threadId": threadID}, nil
 }
 
@@ -411,9 +431,29 @@ func transformCalendarEvent(args map[string]any, _ map[string]any) (map[string]a
 	return event, nil
 }
 
+func transformCalendarEventUpdate(args map[string]any, _ map[string]any) (map[string]any, error) {
+	event := map[string]any{}
+	if summary, ok := optionalStringArg(args, "summary"); ok {
+		event["summary"] = summary
+	}
+	if startTime, ok := optionalStringArg(args, "start_time"); ok {
+		event["start"] = map[string]any{"dateTime": startTime}
+	}
+	if endTime, ok := optionalStringArg(args, "end_time"); ok {
+		event["end"] = map[string]any{"dateTime": endTime}
+	}
+	if desc, ok := optionalStringArg(args, "description"); ok {
+		event["description"] = desc
+	}
+	if location, ok := optionalStringArg(args, "location"); ok {
+		event["location"] = location
+	}
+	return event, nil
+}
+
 func transformLabelModify(args map[string]any, _ map[string]any) (map[string]any, error) {
 	action, _ := args["_label_action"].(string) // "addLabelIds" or "removeLabelIds"
-	labelIDs, _ := args["_label_ids"].([]string)
+	labelIDs := stringSliceArg(args["_label_ids"])
 	if action == "" || len(labelIDs) == 0 {
 		return nil, fmt.Errorf("label_modify requires _label_action and _label_ids")
 	}
@@ -449,11 +489,42 @@ type requestNormalizerContext struct {
 
 type requestNormalizer func(ctx requestNormalizerContext)
 
+var (
+	reDriveQueryFieldOperator = regexp.MustCompile(`(?i)\b(?:fulltext|name|mimetype|modifiedtime|trashed)\b\s*(?:contains|=|<|>)`)
+	reDriveQueryParents       = regexp.MustCompile(`'[^']*'\s+in\s+parents\b`)
+	reDriveQueryLogical       = regexp.MustCompile(`(?:^|\s)(?:and|or)(?:\s|$)`)
+	reDriveTrashedClause      = regexp.MustCompile(`(?i)\btrashed\b\s*(?:=|!=|<=|>=|<|>)`)
+	reDriveOrderBy            = regexp.MustCompile(`(?i)\border\s+by\b`)
+)
+
 func normalizerKey(pluginName, toolName string) string {
 	return strings.TrimSpace(strings.ToLower(pluginName)) + ":" + strings.TrimSpace(strings.ToLower(toolName))
 }
 
 var toolRequestNormalizers = map[string]requestNormalizer{
+	normalizerKey("gmail", "archive_email"): func(ctx requestNormalizerContext) {
+		setGmailLabelModifyArgs(ctx.args, "removeLabelIds", "INBOX")
+	},
+	normalizerKey("gmail", "mark_read"): func(ctx requestNormalizerContext) {
+		setGmailLabelModifyArgs(ctx.args, "removeLabelIds", "UNREAD")
+	},
+	normalizerKey("gmail", "mark_unread"): func(ctx requestNormalizerContext) {
+		setGmailLabelModifyArgs(ctx.args, "addLabelIds", "UNREAD")
+	},
+	normalizerKey("gmail", "add_label"): func(ctx requestNormalizerContext) {
+		labelID := stringArg(ctx.args, "label_id", "")
+		if labelID == "" {
+			return
+		}
+		setGmailLabelModifyArgs(ctx.args, "addLabelIds", labelID)
+	},
+	normalizerKey("gmail", "remove_label"): func(ctx requestNormalizerContext) {
+		labelID := stringArg(ctx.args, "label_id", "")
+		if labelID == "" {
+			return
+		}
+		setGmailLabelModifyArgs(ctx.args, "removeLabelIds", labelID)
+	},
 	normalizerKey("google-calendar", "upcoming_events"): func(ctx requestNormalizerContext) {
 		applyUpcomingEventsWindow(ctx.args, ctx.queryParams)
 	},
@@ -507,24 +578,7 @@ func normalizeDriveSearchQuery(args map[string]any, queryParams url.Values) {
 		queryParams.Set("q", ensureDriveNotTrashedClause(raw))
 		return
 	}
-
-	terms := strings.Fields(raw)
-	clauses := make([]string, 0, len(terms)+1)
-	for _, term := range terms {
-		term = strings.TrimSpace(term)
-		if term == "" {
-			continue
-		}
-		clauses = append(clauses, fmt.Sprintf("name contains '%s'", escapeSingleQuote(term)))
-		if len(clauses) >= 8 {
-			break
-		}
-	}
-	if len(clauses) == 0 {
-		clauses = append(clauses, fmt.Sprintf("name contains '%s'", escapeSingleQuote(raw)))
-	}
-	clauses = append(clauses, "trashed = false")
-	queryParams.Set("q", strings.Join(clauses, " and "))
+	queryParams.Set("q", fmt.Sprintf("fullText contains '%s' and trashed = false", escapeSingleQuote(raw)))
 }
 
 func normalizeDriveCreateFolder(args map[string]any, bodyFields map[string]any) {
@@ -600,6 +654,21 @@ func intArg(args map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+func optionalStringArg(args map[string]any, key string) (string, bool) {
+	if args == nil {
+		return "", false
+	}
+	v, ok := args[key]
+	if !ok || v == nil {
+		return "", false
+	}
+	s := strings.TrimSpace(fmt.Sprintf("%v", v))
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
 func stringArg(args map[string]any, key, fallback string) string {
 	if args == nil {
 		return fallback
@@ -620,6 +689,46 @@ func stringArg(args map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func stringSliceArg(value any) []string {
+	switch ids := value.(type) {
+	case []string:
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if trimmed := strings.TrimSpace(fmt.Sprintf("%v", id)); trimmed != "" && trimmed != "<nil>" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case string:
+		if trimmed := strings.TrimSpace(ids); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	return nil
+}
+
+func setGmailLabelModifyArgs(args map[string]any, action string, labelIDs ...string) {
+	if args == nil {
+		return
+	}
+	cleaned := make([]string, 0, len(labelIDs))
+	for _, labelID := range labelIDs {
+		if trimmed := strings.TrimSpace(labelID); trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	args["_label_action"] = action
+	args["_label_ids"] = cleaned
 }
 
 func parseRetryAfterHeader(resp *http.Response) int64 {
@@ -658,17 +767,14 @@ func escapeSingleQuote(value string) string {
 }
 
 func looksLikeDriveQuery(value string) bool {
-	v := strings.ToLower(strings.TrimSpace(value))
+	v := strings.TrimSpace(value)
 	if v == "" {
 		return false
 	}
-	patterns := []string{" contains ", " and ", " or ", "=", " in parents", " mimetype", " modifiedtime", "name ", "trashed"}
-	for _, pattern := range patterns {
-		if strings.Contains(v, pattern) {
-			return true
-		}
+	if reDriveQueryFieldOperator.MatchString(v) || reDriveQueryParents.MatchString(v) {
+		return true
 	}
-	return strings.Contains(v, "'")
+	return strings.Contains(v, "'") && reDriveQueryLogical.MatchString(v)
 }
 
 func ensureDriveNotTrashedClause(query string) string {
@@ -676,10 +782,14 @@ func ensureDriveNotTrashedClause(query string) string {
 	if q == "" {
 		return "trashed = false"
 	}
-	if strings.Contains(strings.ToLower(q), "trashed") {
+	if reDriveTrashedClause.MatchString(q) {
 		return q
 	}
-	return q + " and trashed = false"
+	trashedClause := "trashed = false"
+	if loc := reDriveOrderBy.FindStringIndex(q); loc != nil {
+		return strings.TrimSpace(q[:loc[0]]) + " and " + trashedClause + " " + q[loc[0]:]
+	}
+	return q + " and " + trashedClause
 }
 
 func filterCalendarEventsByWindow(extracted any, timeMinRaw, timeMaxRaw string) any {

@@ -195,6 +195,7 @@ tools:
       - name: message_id
         type: string
         required: true
+    # normalizer injects _label_action=removeLabelIds and _label_ids=[INBOX]
     transform: label_modify
     response:
       success_msg: Email archived.
@@ -222,6 +223,7 @@ tools:
       - name: message_id
         type: string
         required: true
+    # normalizer injects _label_action=removeLabelIds and _label_ids=[UNREAD]
     transform: label_modify
     response:
       success_msg: Email marked as read.
@@ -236,6 +238,7 @@ tools:
       - name: message_id
         type: string
         required: true
+    # normalizer injects _label_action=addLabelIds and _label_ids=[UNREAD]
     transform: label_modify
     response:
       success_msg: Email marked as unread.
@@ -263,6 +266,7 @@ tools:
         type: string
         required: true
         description: Label ID to add
+    # normalizer injects _label_action=addLabelIds and _label_ids=[label_id]
     transform: label_modify
     response:
       success_msg: Label added.
@@ -281,6 +285,7 @@ tools:
         type: string
         required: true
         description: Label ID to remove
+    # normalizer injects _label_action=removeLabelIds and _label_ids=[label_id]
     transform: label_modify
     response:
       success_msg: Label removed.

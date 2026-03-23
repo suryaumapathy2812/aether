@@ -2,9 +2,11 @@ package plugins
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -52,6 +54,15 @@ func makeManifest(auth coreplugins.ManifestAuth, baseURL string) coreplugins.Plu
 		Auth:        auth,
 		API:         coreplugins.ManifestAPI{BaseURL: baseURL},
 	}
+}
+
+func decodeRawMessage(t *testing.T, raw string) string {
+	t.Helper()
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("decode raw MIME message: %v", err)
+	}
+	return string(decoded)
 }
 
 // ── Tests ──────────────────────────────────────────────
@@ -157,6 +168,32 @@ func TestHTTPTool_PathTemplating(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "msg-123") {
 		t.Errorf("expected msg-123 in response, got: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_PathTemplating_EscapesReservedCharacters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/messages/msg%2F123%3Fpart%3D1" {
+			t.Fatalf("expected escaped path, got %s", r.URL.EscapedPath())
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": "ok"})
+	}))
+	defer srv.Close()
+
+	manifest := makeManifest(coreplugins.ManifestAuth{Type: "none"}, srv.URL)
+	toolDef := coreplugins.ManifestTool{
+		Name: "read_msg",
+		HTTP: coreplugins.ManifestHTTP{Method: "GET", Path: "/messages/{{message_id}}"},
+		Parameters: []coreplugins.ManifestParam{
+			{Name: "message_id", Type: "string", Required: true},
+		},
+	}
+
+	ht := NewHTTPTool("test", manifest, toolDef)
+	result := ht.Execute(context.Background(), makeCall(nil, map[string]any{"message_id": "msg/123?part=1"}))
+
+	if result.Error {
+		t.Fatalf("unexpected error: %s", result.Output)
 	}
 }
 
@@ -469,7 +506,7 @@ func TestHTTPTool_GoogleDriveListDriveFiles_UsesFolderParentQuery(t *testing.T) 
 func TestHTTPTool_GoogleDriveSearchDrive_NormalizesNaturalLanguageQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
-		expected := "name contains 'project' and name contains 'ai' and name contains 'job' and name contains 'finder' and trashed = false"
+		expected := "fullText contains 'project ai job finder' and trashed = false"
 		if q != expected {
 			t.Fatalf("expected normalized drive query, got %q", q)
 		}
@@ -548,6 +585,93 @@ func TestHTTPTool_GoogleDriveCreateFolder_UsesParentsArrayAndFolderMimeType(t *t
 
 	if result.Error {
 		t.Fatalf("unexpected error: %s", result.Output)
+	}
+}
+
+func TestHTTPTool_GmailLabelModifyTools_SendExpectedBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		args     map[string]any
+		wantBody map[string]any
+	}{
+		{
+			name:     "archive removes inbox label",
+			toolName: "archive_email",
+			args:     map[string]any{"message_id": "msg-1"},
+			wantBody: map[string]any{"removeLabelIds": []any{"INBOX"}},
+		},
+		{
+			name:     "mark read removes unread label",
+			toolName: "mark_read",
+			args:     map[string]any{"message_id": "msg-1"},
+			wantBody: map[string]any{"removeLabelIds": []any{"UNREAD"}},
+		},
+		{
+			name:     "mark unread adds unread label",
+			toolName: "mark_unread",
+			args:     map[string]any{"message_id": "msg-1"},
+			wantBody: map[string]any{"addLabelIds": []any{"UNREAD"}},
+		},
+		{
+			name:     "add label adds requested label",
+			toolName: "add_label",
+			args:     map[string]any{"message_id": "msg-1", "label_id": "Label_123"},
+			wantBody: map[string]any{"addLabelIds": []any{"Label_123"}},
+		},
+		{
+			name:     "remove label removes requested label",
+			toolName: "remove_label",
+			args:     map[string]any{"message_id": "msg-1", "label_id": "Label_123"},
+			wantBody: map[string]any{"removeLabelIds": []any{"Label_123"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Fatalf("expected POST, got %s", r.Method)
+				}
+				if r.URL.Path != "/messages/msg-1/modify" {
+					t.Fatalf("expected modify endpoint, got %s", r.URL.Path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				if !reflect.DeepEqual(body, tt.wantBody) {
+					t.Fatalf("expected body %#v, got %#v", tt.wantBody, body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+			}))
+			defer srv.Close()
+
+			params := []coreplugins.ManifestParam{{Name: "message_id", Type: "string", Required: true}}
+			if tt.toolName == "add_label" || tt.toolName == "remove_label" {
+				params = append(params, coreplugins.ManifestParam{Name: "label_id", Type: "string", Required: true})
+			}
+
+			manifest := coreplugins.PluginManifest{
+				Name:        "gmail",
+				DisplayName: "Gmail",
+				Auth:        coreplugins.ManifestAuth{Type: "none"},
+				API:         coreplugins.ManifestAPI{BaseURL: srv.URL},
+			}
+			toolDef := coreplugins.ManifestTool{
+				Name:       tt.toolName,
+				HTTP:       coreplugins.ManifestHTTP{Method: "POST", Path: "/messages/{{message_id}}/modify"},
+				Parameters: params,
+				Transform:  "label_modify",
+			}
+
+			ht := NewHTTPTool("gmail", manifest, toolDef)
+			result := ht.Execute(context.Background(), makeCall(nil, tt.args))
+			if result.Error {
+				t.Fatalf("unexpected error: %s", result.Output)
+			}
+		})
 	}
 }
 
@@ -674,6 +798,19 @@ func TestTransform_MIMEMessage(t *testing.T) {
 	if !ok || raw == "" {
 		t.Fatal("expected raw field in result")
 	}
+	decoded := decodeRawMessage(t, raw)
+	for _, want := range []string{
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=\"UTF-8\"",
+		"To: alice@example.com",
+		"Cc: bob@example.com",
+		"Subject: Hello",
+		"\r\n\r\nHi Alice!",
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("expected decoded message to contain %q, got %q", want, decoded)
+		}
+	}
 }
 
 func TestTransform_MIMEReply(t *testing.T) {
@@ -688,6 +825,22 @@ func TestTransform_MIMEReply(t *testing.T) {
 	}
 	if result["threadId"] != "thread-123" {
 		t.Errorf("expected threadId, got %v", result["threadId"])
+	}
+	raw, ok := result["raw"].(string)
+	if !ok || raw == "" {
+		t.Fatal("expected raw field in result")
+	}
+	decoded := decodeRawMessage(t, raw)
+	for _, want := range []string{
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=\"UTF-8\"",
+		"To: alice@example.com",
+		"Subject: Re: Hello",
+		"\r\n\r\nThanks!",
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("expected decoded reply to contain %q, got %q", want, decoded)
+		}
 	}
 }
 
@@ -731,6 +884,100 @@ func TestTransform_CalendarEvent(t *testing.T) {
 	}
 	if result["location"] != "Room 5" {
 		t.Errorf("expected location, got %v", result["location"])
+	}
+}
+
+func TestTransform_CalendarEventUpdate(t *testing.T) {
+	result, err := applyTransform("calendar_event_update", map[string]any{
+		"summary":  "Updated Standup",
+		"location": "Room 7",
+	}, nil)
+	if err != nil {
+		t.Fatalf("transform error: %v", err)
+	}
+	if result["summary"] != "Updated Standup" {
+		t.Fatalf("expected updated summary, got %v", result["summary"])
+	}
+	if result["location"] != "Room 7" {
+		t.Fatalf("expected updated location, got %v", result["location"])
+	}
+	if _, ok := result["start"]; ok {
+		t.Fatal("did not expect start in partial update")
+	}
+	if _, ok := result["end"]; ok {
+		t.Fatal("did not expect end in partial update")
+	}
+}
+
+func TestTransform_LabelModifyAcceptsStringAndJSONSlices(t *testing.T) {
+	tests := []struct {
+		name string
+		ids  any
+		want []string
+	}{
+		{name: "string slice", ids: []string{"INBOX"}, want: []string{"INBOX"}},
+		{name: "json slice", ids: []any{"UNREAD"}, want: []string{"UNREAD"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := applyTransform("label_modify", map[string]any{
+				"_label_action": "removeLabelIds",
+				"_label_ids":    tt.ids,
+			}, nil)
+			if err != nil {
+				t.Fatalf("transform error: %v", err)
+			}
+			got, ok := result["removeLabelIds"].([]string)
+			if !ok {
+				t.Fatalf("expected []string result, got %#v", result["removeLabelIds"])
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("expected label ids %#v, got %#v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestLooksLikeDriveQuery_DoesNotTreatNaturalLanguageAsQuerySyntax(t *testing.T) {
+	for _, input := range []string{"android release notes", "report on q1", "name ideas for docs"} {
+		if looksLikeDriveQuery(input) {
+			t.Fatalf("expected natural language query %q to stay natural language", input)
+		}
+	}
+
+	for _, input := range []string{"name contains 'roadmap'", "fullText contains 'meeting notes'", "'root' in parents and trashed = false", "Name CONTAINS 'roadmap'", "FullText contains 'notes'"} {
+		if !looksLikeDriveQuery(input) {
+			t.Fatalf("expected drive syntax query %q to be detected", input)
+		}
+	}
+}
+
+func TestEnsureDriveNotTrashedClause_RequiresActualTrashedFilter(t *testing.T) {
+	query := "fullText contains 'trashed notes'"
+	got := ensureDriveNotTrashedClause(query)
+	want := query + " and trashed = false"
+	if got != want {
+		t.Fatalf("expected query %q, got %q", want, got)
+	}
+
+	alreadyFiltered := "fullText contains 'notes' and trashed = false"
+	if got := ensureDriveNotTrashedClause(alreadyFiltered); got != alreadyFiltered {
+		t.Fatalf("expected existing trashed filter to stay intact, got %q", got)
+	}
+
+	orderBy := "fullText contains 'report' order by modifiedTime desc"
+	got = ensureDriveNotTrashedClause(orderBy)
+	want = "fullText contains 'report' and trashed = false order by modifiedTime desc"
+	if got != want {
+		t.Fatalf("expected trashed clause before order by, got %q", got)
+	}
+
+	caseInsensitive := "FullText contains 'report' ORDER BY modifiedTime desc"
+	got = ensureDriveNotTrashedClause(caseInsensitive)
+	want = "FullText contains 'report' and trashed = false ORDER BY modifiedTime desc"
+	if got != want {
+		t.Fatalf("expected case-insensitive order by handling, got %q", got)
 	}
 }
 

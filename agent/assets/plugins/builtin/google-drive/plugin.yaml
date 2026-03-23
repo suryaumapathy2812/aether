@@ -89,6 +89,40 @@ tools:
         type: string
         required: true
 
+  - name: export_google_doc
+    description: Export a Google Workspace document as text. Use for files with mimeType 'application/vnd.google-apps.*'.
+    status_text: Exporting document...
+    http:
+      method: GET
+      path: /files/{{file_id}}/export
+      query:
+        mimeType: text/plain
+        supportsAllDrives: "true"
+    parameters:
+      - name: file_id
+        type: string
+        required: true
+      - name: export_format
+        type: string
+        required: false
+        default: text/plain
+        description: Export MIME type (text/plain for Docs, text/csv for Sheets)
+        map_to: query.mimeType
+
+  - name: download_file
+    description: Download raw content of a non-Google-Workspace file. Best for text files.
+    status_text: Downloading file...
+    http:
+      method: GET
+      path: /files/{{file_id}}
+      query:
+        alt: media
+        supportsAllDrives: "true"
+    parameters:
+      - name: file_id
+        type: string
+        required: true
+
   - name: create_folder
     description: Create a new folder in Google Drive.
     status_text: Creating folder...

@@ -125,14 +125,17 @@ type ddgResult struct {
 }
 
 // Regex patterns for parsing DDG HTML results.
-// The HTML structure is stable: each result is a div.web-result containing:
+// NOTE 2026-03-24: DuckDuckGo's HTML markup is fragile and changes over time.
+// Keep the block matcher loose and fall back to broader result link parsing if the
+// primary block regex stops matching.
+// The expected HTML structure is a div.web-result containing:
 //   - Title in <a class="result__a" href="...uddg=ENCODED_URL...">TITLE</a>
 //   - Snippet in <a class="result__snippet">SNIPPET</a>
 var (
-	reResultBlock = regexp.MustCompile(`(?s)<div class="result results_links results_links_deep web-result\s*">(.*?)<div class="clear"></div>\s*</div>\s*</div>`)
-	reTitle       = regexp.MustCompile(`<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
-	reTitleHref   = regexp.MustCompile(`<a[^>]+class="result__a"[^>]+href="([^"]*)"`)
-	reSnippet     = regexp.MustCompile(`(?s)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
+	reResultBlock = regexp.MustCompile(`(?s)<div[^>]*\bweb-result\b[^>]*>(.*?)</div>\s*</div>\s*</div>`)
+	reTitle       = regexp.MustCompile(`(?s)<a[^>]+class="[^"]*\bresult__a\b[^"]*"[^>]*>(.*?)</a>`)
+	reTitleHref   = regexp.MustCompile(`(?s)<a[^>]+class="[^"]*\bresult__a\b[^"]*"[^>]+href="([^"]*)"`)
+	reSnippet     = regexp.MustCompile(`(?s)<(?:a|div|span)[^>]+class="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)</(?:a|div|span)>`)
 	reUddg        = regexp.MustCompile(`uddg=([^&]+)`)
 	reHTMLTag     = regexp.MustCompile(`<[^>]+>`)
 	reHTMLEntity2 = regexp.MustCompile(`&[a-zA-Z]+;|&#\d+;|&#x[0-9a-fA-F]+;`)
@@ -143,7 +146,7 @@ func parseDDGResults(html string) []ddgResult {
 	results := make([]ddgResult, 0, len(blocks))
 
 	for _, block := range blocks {
-		content := block[1]
+		content := block[0]
 
 		// Extract title
 		titleMatch := reTitle.FindStringSubmatch(content)
@@ -159,13 +162,7 @@ func parseDDGResults(html string) []ddgResult {
 		resultURL := ""
 		hrefMatch := reTitleHref.FindStringSubmatch(content)
 		if hrefMatch != nil {
-			uddgMatch := reUddg.FindStringSubmatch(hrefMatch[1])
-			if uddgMatch != nil {
-				decoded, err := url.QueryUnescape(uddgMatch[1])
-				if err == nil {
-					resultURL = decoded
-				}
-			}
+			resultURL = decodeDDGResultURL(hrefMatch[1])
 		}
 		if resultURL == "" {
 			continue
@@ -185,7 +182,83 @@ func parseDDGResults(html string) []ddgResult {
 		})
 	}
 
+	if len(results) > 0 {
+		return results
+	}
+
+	return parseDDGResultsFallback(html)
+}
+
+func parseDDGResultsFallback(html string) []ddgResult {
+	matches := reTitle.FindAllStringSubmatchIndex(html, -1)
+	results := make([]ddgResult, 0, len(matches))
+	seen := map[string]struct{}{}
+
+	for i, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		segmentStart := match[0]
+		segmentEnd := len(html)
+		if i+1 < len(matches) && len(matches[i+1]) >= 2 {
+			segmentEnd = matches[i+1][0]
+		}
+
+		segment := html[segmentStart:segmentEnd]
+		title := stripHTML(html[match[2]:match[3]])
+		if title == "" {
+			continue
+		}
+
+		hrefMatch := reTitleHref.FindStringSubmatch(segment)
+		if hrefMatch == nil {
+			continue
+		}
+		resultURL := decodeDDGResultURL(hrefMatch[1])
+		if resultURL == "" {
+			continue
+		}
+		if _, ok := seen[resultURL]; ok {
+			continue
+		}
+		seen[resultURL] = struct{}{}
+
+		snippet := ""
+		if snippetMatch := reSnippet.FindStringSubmatch(segment); snippetMatch != nil {
+			snippet = stripHTML(snippetMatch[1])
+		}
+
+		results = append(results, ddgResult{
+			title:   title,
+			url:     resultURL,
+			snippet: snippet,
+		})
+	}
+
 	return results
+}
+
+func decodeDDGResultURL(href string) string {
+	href = decodeDDGEntities(strings.TrimSpace(href))
+	if href == "" {
+		return ""
+	}
+	if uddgMatch := reUddg.FindStringSubmatch(href); uddgMatch != nil {
+		decoded, err := url.QueryUnescape(uddgMatch[1])
+		if err == nil {
+			return decoded
+		}
+	}
+	if decoded, err := url.QueryUnescape(href); err == nil {
+		href = decoded
+	}
+	if strings.HasPrefix(href, "//") {
+		return "https:" + href
+	}
+	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
+		return href
+	}
+	return ""
 }
 
 // stripHTML removes HTML tags and decodes common entities.

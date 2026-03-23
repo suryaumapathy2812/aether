@@ -156,6 +156,5 @@ func (b BraveClient) LLMContextSearch(ctx context.Context, query string) ([]Cont
 
 func (b BraveClient) setHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("X-Subscription-Token", b.APIKey)
 }
