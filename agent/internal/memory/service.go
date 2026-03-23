@@ -228,6 +228,8 @@ Assistant: ` + job.AssistantMessage
 	content := strings.TrimSpace(strings.Join(parts, ""))
 	parsed := parseExtraction(content)
 	factEmbeddings := s.embedTexts(ctx, parsed.Facts)
+	// Ensure the self entity exists before processing user-facts.
+	selfEntityID := s.EnsureSelfEntity(ctx, job.UserID)
 	for idx, fact := range parsed.Facts {
 		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
@@ -240,6 +242,20 @@ Assistant: ` + job.AssistantMessage
 			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
 			Embedding:  embeddingAt(factEmbeddings, idx),
 		})
+		// Link user-facts as observations on the self entity.
+		if selfEntityID != "" && isUserFact(fact) {
+			_ = s.store.AddEntityObservation(ctx, selfEntityID, job.UserID, fact, "trait", "extracted")
+			_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+				UserID:     job.UserID,
+				Kind:       "entity_observation",
+				Category:   "self",
+				Content:    "You: " + fact,
+				Confidence: 0.9,
+				Importance: 0.85,
+				SourceType: "conversation",
+				SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			})
+		}
 	}
 	memoryEmbeddings := s.embedTexts(ctx, parsed.Memories)
 	for idx, memory := range parsed.Memories {
@@ -524,4 +540,30 @@ func defaultUser(v string) string {
 		return "default"
 	}
 	return v
+}
+
+// EnsureSelfEntity returns the entity ID for the user's "self" entity
+// (entity_type="self", name="You"). Creates it if it doesn't exist.
+func (s *Service) EnsureSelfEntity(ctx context.Context, userID string) string {
+	if s == nil || s.store == nil {
+		return ""
+	}
+	userID = defaultUser(userID)
+	entities, err := s.store.ListEntities(ctx, userID, "self", 1)
+	if err == nil && len(entities) > 0 {
+		return entities[0].ID
+	}
+	id, err := s.store.UpsertEntity(ctx, userID, "self", "You", nil, nil)
+	if err != nil {
+		log.Printf("memory: failed to create self entity: %v", err)
+		return ""
+	}
+	return id
+}
+
+// userFactPattern matches facts that are about "the user".
+var userFactPattern = regexp.MustCompile(`(?i)^(the )?user('s)?\b`)
+
+func isUserFact(fact string) bool {
+	return userFactPattern.MatchString(strings.TrimSpace(fact))
 }
