@@ -11,12 +11,10 @@ import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import {
   exportMemory,
-  getDecisions,
   getEntities,
   getEntityDetails,
-  getMemories,
   getMemoryConversations,
-  getMemoryFacts,
+  getMemoryItems,
   type EntityRow,
   type EntityDetails,
 } from "@/lib/api";
@@ -53,9 +51,7 @@ const assistantMarkdownComponents: Components = {
   h2: ({ children }) => <strong className="block mb-1">{children}</strong>,
   h3: ({ children }) => <strong className="block mb-1">{children}</strong>,
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-  strong: ({ children }) => (
-    <strong className="font-semibold text-foreground">{children}</strong>
-  ),
+  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   code: ({ children, className }) => {
     if (className) {
@@ -83,9 +79,7 @@ const assistantMarkdownComponents: Components = {
       {children}
     </a>
   ),
-  ul: ({ children }) => (
-    <ul className="mb-2 ml-4 list-disc space-y-0.5 last:mb-0">{children}</ul>
-  ),
+  ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-0.5 last:mb-0">{children}</ul>,
   ol: ({ children }) => (
     <ol className="mb-2 ml-4 list-decimal space-y-0.5 last:mb-0">{children}</ol>
   ),
@@ -125,18 +119,41 @@ export default function MemoryPage() {
 
     async function load() {
       try {
-        const [factsRes, convsRes, memoriesRes, decisionsRes, entitiesRes] =
-          await Promise.all([
-            getMemoryFacts(userId),
-            getMemoryConversations(userId, 30),
-            getMemories(userId, 100),
-            getDecisions(userId, undefined, true),
-            getEntities(userId),
-          ]);
-        setFacts(factsRes.facts || []);
+        const [itemsRes, convsRes, entitiesRes] = await Promise.all([
+          getMemoryItems(userId, 300, { status: "active" }),
+          getMemoryConversations(userId, 30),
+          getEntities(userId),
+        ]);
+        const items = itemsRes.items || [];
+        setFacts(items.filter((item) => item.kind === "fact").map((item) => item.content));
         setConversations(convsRes.conversations || []);
-        setMemories(memoriesRes.memories || []);
-        setDecisions(decisionsRes.decisions || []);
+        setMemories(
+          items
+            .filter((item) => item.kind === "memory" || item.kind === "summary")
+            .map((item) => ({
+              id: item.id,
+              memory: item.content,
+              category:
+                item.kind === "summary"
+                  ? `summary:${item.category || "general"}`
+                  : item.category || "episodic",
+              confidence: item.confidence,
+              created_at: item.created_at,
+            })),
+        );
+        setDecisions(
+          items
+            .filter((item) => item.kind === "decision")
+            .map((item) => ({
+              id: item.id,
+              decision: item.content,
+              category: item.category || "preference",
+              source: item.source_type || "memory",
+              active: item.status === "active",
+              confidence: item.confidence,
+              updated_at: item.updated_at,
+            })),
+        );
         setEntities(entitiesRes.entities || []);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to load memory");
@@ -178,15 +195,9 @@ export default function MemoryPage() {
     decisions.length === 0;
 
   return (
-    <ContentShell
-      title="Memory"
-      back="/home"
-     
-    >
+    <ContentShell title="Memory" back="/home">
       {loading ? (
-        <p className="text-muted-foreground text-xs tracking-wider text-center">
-          loading...
-        </p>
+        <p className="text-muted-foreground text-xs tracking-wider text-center">loading...</p>
       ) : error ? (
         <p className="text-muted-foreground text-xs text-center">{error}</p>
       ) : isEmpty ? (
@@ -219,9 +230,7 @@ export default function MemoryPage() {
           </div>
 
           {tab === "about" && <FactsTab facts={facts} />}
-          {tab === "conversations" && (
-            <ConversationsTab conversations={conversations} />
-          )}
+          {tab === "conversations" && <ConversationsTab conversations={conversations} />}
           {tab === "entities" && (
             <EntitiesTab
               entities={entities}
@@ -299,20 +308,13 @@ function TabBar({
 
 function FactsTab({ facts }: { facts: string[] }) {
   if (facts.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">nothing learned yet</p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">nothing learned yet</p>;
   }
   return (
     <div className="space-y-3 pt-2">
       {facts.map((fact, i) => (
-        <div
-          key={i}
-          className="pl-3 border-l-2 border-border animate-[fade-in_0.2s_ease]"
-        >
-          <p className="text-sm text-secondary-foreground leading-relaxed max-w-[84ch]">
-            {fact}
-          </p>
+        <div key={i} className="pl-3 border-l-2 border-border animate-[fade-in_0.2s_ease]">
+          <p className="text-sm text-secondary-foreground leading-relaxed max-w-[84ch]">{fact}</p>
         </div>
       ))}
       <p className="text-[10px] text-muted-foreground pt-2">
@@ -322,15 +324,9 @@ function FactsTab({ facts }: { facts: string[] }) {
   );
 }
 
-function ConversationsTab({
-  conversations,
-}: {
-  conversations: ConversationRow[];
-}) {
+function ConversationsTab({ conversations }: { conversations: ConversationRow[] }) {
   if (conversations.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">no conversations yet</p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">no conversations yet</p>;
   }
 
   const reversed = [...conversations].reverse();
@@ -378,19 +374,13 @@ function ConversationsTab({
 
 function MemoriesTab({ memories }: { memories: MemoryRow[] }) {
   if (memories.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">
-        no episodic memories yet
-      </p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">no episodic memories yet</p>;
   }
   return (
     <div className="space-y-3 pt-2">
       {memories.map((m) => (
         <div key={m.id} className="rounded-xl border border-border/70 p-3">
-          <p className="text-sm text-secondary-foreground leading-relaxed">
-            {m.memory}
-          </p>
+          <p className="text-sm text-secondary-foreground leading-relaxed">{m.memory}</p>
           <div className="flex items-center gap-2 mt-2">
             <Badge variant="secondary" className="text-[9px] tracking-wider">
               {m.category}
@@ -411,26 +401,18 @@ function MemoriesTab({ memories }: { memories: MemoryRow[] }) {
 
 function DecisionsTab({ decisions }: { decisions: DecisionRow[] }) {
   if (decisions.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">
-        no active decisions yet
-      </p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">no active decisions yet</p>;
   }
   return (
     <div className="space-y-3 pt-2">
       {decisions.map((d) => (
         <div key={d.id} className="rounded-xl border border-border/70 p-3">
-          <p className="text-sm text-secondary-foreground leading-relaxed">
-            {d.decision}
-          </p>
+          <p className="text-sm text-secondary-foreground leading-relaxed">{d.decision}</p>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             <Badge variant="secondary" className="text-[9px] tracking-wider">
               {d.category}
             </Badge>
-            <span className="text-[10px] text-muted-foreground">
-              source {d.source}
-            </span>
+            <span className="text-[10px] text-muted-foreground">source {d.source}</span>
             <span className="text-[10px] text-muted-foreground">·</span>
             <span className="text-[10px] text-muted-foreground">
               {d.active ? "active" : "inactive"}
@@ -460,26 +442,15 @@ function EntitiesTab({
   onBack: () => void;
 }) {
   if (selectedEntity) {
-    return (
-      <EntityDetailView
-        details={selectedEntity}
-        onBack={onBack}
-      />
-    );
+    return <EntityDetailView details={selectedEntity} onBack={onBack} />;
   }
 
   if (entityLoading) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">loading entity...</p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">loading entity...</p>;
   }
 
   if (entities.length === 0) {
-    return (
-      <p className="text-muted-foreground text-xs pt-4">
-        no entities discovered yet
-      </p>
-    );
+    return <p className="text-muted-foreground text-xs pt-4">no entities discovered yet</p>;
   }
 
   // Group entities by type
@@ -513,9 +484,7 @@ function EntitiesTab({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-foreground font-medium truncate">
-                      {entity.name}
-                    </p>
+                    <p className="text-sm text-foreground font-medium truncate">{entity.name}</p>
                     {entity.summary && (
                       <p className="text-xs text-secondary-foreground mt-0.5 line-clamp-2 leading-relaxed">
                         {entity.summary}
@@ -560,13 +529,7 @@ function EntitiesTab({
   );
 }
 
-function EntityDetailView({
-  details,
-  onBack,
-}: {
-  details: EntityDetails;
-  onBack: () => void;
-}) {
+function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack: () => void }) {
   const { entity, observations, interactions, relations } = details;
 
   return (
@@ -592,9 +555,7 @@ function EntityDetailView({
           </Badge>
         </div>
         {entity.summary && (
-          <p className="text-sm text-secondary-foreground mt-1 leading-relaxed">
-            {entity.summary}
-          </p>
+          <p className="text-sm text-secondary-foreground mt-1 leading-relaxed">{entity.summary}</p>
         )}
         {entity.aliases.length > 0 && (
           <div className="flex gap-1.5 mt-2 flex-wrap">
@@ -628,10 +589,7 @@ function EntityDetailView({
           </p>
           <div className="space-y-2">
             {observations.map((obs) => (
-              <div
-                key={obs.id}
-                className="pl-3 border-l-2 border-border"
-              >
+              <div key={obs.id} className="pl-3 border-l-2 border-border">
                 <p className="text-sm text-secondary-foreground leading-relaxed">
                   {obs.observation}
                 </p>
@@ -639,9 +597,7 @@ function EntityDetailView({
                   <Badge variant="secondary" className="text-[9px] tracking-wider">
                     {obs.category}
                   </Badge>
-                  <span className="text-[10px] text-muted-foreground">
-                    {obs.source}
-                  </span>
+                  <span className="text-[10px] text-muted-foreground">{obs.source}</span>
                 </div>
               </div>
             ))}
@@ -659,21 +615,18 @@ function EntityDetailView({
             {relations.map((rel) => {
               const isSource = rel.source_entity_id === entity.id;
               return (
-                <div
-                  key={rel.id}
-                  className="rounded-xl border border-border/70 p-3"
-                >
+                <div key={rel.id} className="rounded-xl border border-border/70 p-3">
                   <p className="text-sm text-secondary-foreground">
                     {isSource ? (
                       <>
-                        <span className="text-foreground font-medium">{entity.name}</span>
-                        {" "}<span className="text-muted-foreground">{rel.relation}</span>{" "}
+                        <span className="text-foreground font-medium">{entity.name}</span>{" "}
+                        <span className="text-muted-foreground">{rel.relation}</span>{" "}
                         <span className="text-foreground">{rel.target_entity_id}</span>
                       </>
                     ) : (
                       <>
-                        <span className="text-foreground">{rel.source_entity_id}</span>
-                        {" "}<span className="text-muted-foreground">{rel.relation}</span>{" "}
+                        <span className="text-foreground">{rel.source_entity_id}</span>{" "}
+                        <span className="text-muted-foreground">{rel.relation}</span>{" "}
                         <span className="text-foreground font-medium">{entity.name}</span>
                       </>
                     )}
@@ -696,13 +649,8 @@ function EntityDetailView({
           </p>
           <div className="space-y-2">
             {interactions.map((inter) => (
-              <div
-                key={inter.id}
-                className="pl-3 border-l-2 border-border"
-              >
-                <p className="text-sm text-secondary-foreground leading-relaxed">
-                  {inter.summary}
-                </p>
+              <div key={inter.id} className="pl-3 border-l-2 border-border">
+                <p className="text-sm text-secondary-foreground leading-relaxed">{inter.summary}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="secondary" className="text-[9px] tracking-wider">
                     {inter.source}
@@ -719,9 +667,7 @@ function EntityDetailView({
 
       {/* Empty state for sections */}
       {observations.length === 0 && relations.length === 0 && interactions.length === 0 && (
-        <p className="text-muted-foreground text-xs">
-          no details recorded yet for this entity
-        </p>
+        <p className="text-muted-foreground text-xs">no details recorded yet for this entity</p>
       )}
     </div>
   );
@@ -765,10 +711,7 @@ function formatDate(ts: number): string {
   });
 }
 
-function shouldShowDateBreak(
-  currentTs: number,
-  prevTs: number | null,
-): boolean {
+function shouldShowDateBreak(currentTs: number, prevTs: number | null): boolean {
   if (prevTs === null) return true;
   const current = new Date(currentTs * 1000).toDateString();
   const prev = new Date(prevTs * 1000).toDateString();

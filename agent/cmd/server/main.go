@@ -230,7 +230,7 @@ func main() {
 	convHandler.RegisterRoutes(mux)
 	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Store: store, Limits: cfg.Media, Notify: wsNotify, Validator: directValidator})
 	convWSHandler.RegisterRoutes(mux)
-	dataHandler := dataapi.New(dataapi.Options{Store: store, Media: mediaService, Validator: directValidator})
+	dataHandler := dataapi.New(dataapi.Options{Store: store, Media: mediaService, Embedder: embeddingProvider, Validator: directValidator})
 	dataHandler.RegisterRoutes(mux)
 	skillsHandler := skillshttp.New(skillshttp.Options{Manager: skillsManager, Store: store, Validator: directValidator})
 	skillsHandler.RegisterRoutes(mux)

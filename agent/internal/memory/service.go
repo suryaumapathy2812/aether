@@ -122,7 +122,7 @@ func (s *Service) RecordSessionSummary(ctx context.Context, userID, sessionID, s
 	if s.embedder != nil {
 		embedding, _ = s.embedder.EmbedSingle(ctx, summary)
 	}
-	_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+	_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 		UserID:     userID,
 		Kind:       "summary",
 		Category:   "session",
@@ -229,8 +229,7 @@ Assistant: ` + job.AssistantMessage
 	parsed := parseExtraction(content)
 	factEmbeddings := s.embedTexts(ctx, parsed.Facts)
 	for idx, fact := range parsed.Facts {
-		_ = s.store.StoreMemoryFact(ctx, job.UserID, fact, job.ConversationID)
-		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "fact",
 			Category:   "profile",
@@ -244,8 +243,7 @@ Assistant: ` + job.AssistantMessage
 	}
 	memoryEmbeddings := s.embedTexts(ctx, parsed.Memories)
 	for idx, memory := range parsed.Memories {
-		_ = s.store.StoreMemory(ctx, job.UserID, memory, "episodic", job.ConversationID, nil)
-		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "memory",
 			Category:   "episodic",
@@ -259,8 +257,7 @@ Assistant: ` + job.AssistantMessage
 	}
 	decisionEmbeddings := s.embedTexts(ctx, parsed.Decisions)
 	for idx, decision := range parsed.Decisions {
-		_ = s.store.StoreMemoryDecision(ctx, job.UserID, decision, "preference", "extracted", job.ConversationID)
-		_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "decision",
 			Category:   "preference",
@@ -292,7 +289,7 @@ Assistant: ` + job.AssistantMessage
 				continue
 			}
 			_ = s.store.AddEntityObservation(ctx, entityID, job.UserID, obs, "trait", "extracted")
-			_, _ = s.store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+			_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
 				UserID:     job.UserID,
 				Kind:       "entity_observation",
 				Category:   entity.Type,

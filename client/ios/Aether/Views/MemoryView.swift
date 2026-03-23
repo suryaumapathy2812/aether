@@ -43,13 +43,30 @@ final class MemoryViewModel: ObservableObject {
         loading = true
         error = ""
         do {
-            async let f = service.fetchFacts()
-            async let m = service.fetchMemories(limit: 100)
-            async let d = service.fetchDecisions()
+            async let itemsTask = service.fetchMemoryItems(limit: 200)
             async let e = service.fetchEntities(limit: 50)
-            facts = try await f
-            memories = try await m
-            decisions = try await d
+            let items = try await itemsTask
+            facts = items.filter { $0.kind == "fact" }.map(\.content)
+            memories = items.filter { $0.kind == "memory" || $0.kind == "summary" }.map {
+                MemoryItem(
+                    id: $0.id,
+                    memory: $0.content,
+                    category: $0.kind == "summary" ? "summary:\($0.category.isEmpty ? "general" : $0.category)" : $0.category,
+                    confidence: $0.confidence,
+                    createdAt: $0.createdAt
+                )
+            }
+            decisions = items.filter { $0.kind == "decision" }.map {
+                DecisionItem(
+                    id: $0.id,
+                    decision: $0.content,
+                    category: $0.category,
+                    source: $0.sourceType,
+                    active: $0.status == "active",
+                    confidence: $0.confidence,
+                    updatedAt: $0.updatedAt
+                )
+            }
             entities = try await e
         } catch {
             self.error = error.localizedDescription

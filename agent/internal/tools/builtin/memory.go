@@ -43,13 +43,6 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, call tools.Call) tools.Res
 	}
 
 	// Save to SQLite (existing behavior)
-	if err := call.Ctx.Store.StoreMemory(ctx, userID, content, category, 0, nil); err != nil {
-		return tools.Fail("Failed to save memory: "+err.Error(), nil)
-	}
-	if strings.EqualFold(category, "preference") {
-		_ = call.Ctx.Store.StoreMemoryDecision(ctx, userID, content, "preference", "explicit", 0)
-	}
-
 	var embedding []float32
 	if call.Ctx.EmbeddingProvider != nil {
 		var err error
@@ -58,7 +51,7 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, call tools.Call) tools.Res
 			fmt.Printf("warning: failed to generate embedding for memory: %v\n", err)
 		}
 	}
-	_, _ = call.Ctx.Store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+	if _, err := call.Ctx.Store.AddMemory(ctx, db.AddMemoryInput{
 		UserID:     userID,
 		Kind:       "memory",
 		Category:   category,
@@ -67,9 +60,11 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, call tools.Call) tools.Res
 		Importance: 0.75,
 		SourceType: "manual",
 		Embedding:  embedding,
-	})
+	}); err != nil {
+		return tools.Fail("Failed to save memory: "+err.Error(), nil)
+	}
 	if strings.EqualFold(category, "preference") {
-		_, _ = call.Ctx.Store.UpsertMemoryItem(ctx, db.MemoryItemUpsert{
+		_, _ = call.Ctx.Store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     userID,
 			Kind:       "decision",
 			Category:   "preference",
@@ -114,74 +109,32 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, call tools.Call) tools.R
 		userID = strings.TrimSpace(taskCtx.UserID)
 	}
 
-	// Track all results with their sources
-	type memResult struct {
-		content string
-		source  string // "token" or "semantic"
-		score   float64
-	}
-	allResults := make([]memResult, 0)
-
-	// 1. Token-based search (SQLite) - existing behavior
-	tokenResults, err := call.Ctx.Store.SearchMemory(ctx, userID, query, limit)
-	if err == nil {
-		for _, r := range tokenResults {
-			switch r.Type {
-			case "fact":
-				allResults = append(allResults, memResult{content: r.Fact, source: "token", score: 0})
-			case "memory":
-				allResults = append(allResults, memResult{content: r.Memory, source: "token", score: 0})
-			case "decision":
-				allResults = append(allResults, memResult{content: r.Decision, source: "token", score: 0})
-			case "action":
-				allResults = append(allResults, memResult{content: fmt.Sprintf("%s: %s", r.ToolName, r.Output), source: "token", score: 0})
-			case "session":
-				allResults = append(allResults, memResult{content: r.Summary, source: "token", score: 0})
-			case "conversation":
-				allResults = append(allResults, memResult{content: r.UserMessage, source: "token", score: 0})
-			case "entity":
-				allResults = append(allResults, memResult{content: fmt.Sprintf("%s: %s", r.EntityName, r.EntitySummary), source: "token", score: 0})
-			}
-		}
-	}
-
-	// 2. Hybrid semantic search from canonical memory items.
+	var queryEmbedding []float32
 	if call.Ctx.EmbeddingProvider != nil {
-		queryEmbedding, err := call.Ctx.EmbeddingProvider.EmbedSingle(ctx, query)
-		if err == nil && queryEmbedding != nil {
-			hybridResults, err := call.Ctx.Store.SearchMemoryHybrid(ctx, userID, query, queryEmbedding, limit)
-			if err == nil {
-				for _, r := range hybridResults {
-					content := memorySearchContent(r)
-					if strings.TrimSpace(content) == "" {
-						continue
-					}
-					allResults = append(allResults, memResult{content: content, source: "semantic", score: r.Similarity})
-				}
-			}
-		}
+		queryEmbedding, _ = call.Ctx.EmbeddingProvider.EmbedSingle(ctx, query)
 	}
 
-	if len(allResults) == 0 {
+	results, err := call.Ctx.Store.SearchMemory(ctx, db.MemorySearchQuery{UserID: userID, Text: query, QueryEmbedding: queryEmbedding, Limit: limit})
+	if err != nil {
+		return tools.Fail("Failed to search memory: "+err.Error(), nil)
+	}
+	if len(results) == 0 {
 		return tools.Success("No relevant memories found.", map[string]any{"count": 0})
 	}
 
-	// Format results - show both token and semantic results
-	lines := make([]string, 0, len(allResults))
-	for i, r := range allResults {
-		idx := i + 1
-		source := r.source
-		if r.source == "semantic" {
-			source = fmt.Sprintf("semantic (score: %.2f)", r.score)
+	lines := make([]string, 0, len(results))
+	for i, r := range results {
+		content := memorySearchContent(r)
+		if strings.TrimSpace(content) == "" {
+			continue
 		}
-		lines = append(lines, fmt.Sprintf("%d. [%s] %s", idx, source, truncateOutput(r.content, 100)))
+		idx := i + 1
+		lines = append(lines, fmt.Sprintf("%d. [%s | %.2f] %s", idx, r.Type, r.Similarity, truncateOutput(content, 100)))
 	}
-
-	sourceInfo := ""
-	if len(tokenResults) > 0 && len(allResults) > len(tokenResults) {
-		sourceInfo = " (hybrid: token + semantic)"
+	if len(lines) == 0 {
+		return tools.Success("No relevant memories found.", map[string]any{"count": 0})
 	}
-	return tools.Success("Found relevant memories"+sourceInfo+":\n"+strings.Join(lines, "\n"), map[string]any{"count": len(allResults), "token_results": len(tokenResults)})
+	return tools.Success("Found relevant memories:\n"+strings.Join(lines, "\n"), map[string]any{"count": len(lines)})
 }
 
 func truncateOutput(v string, max int) string {

@@ -146,40 +146,40 @@ func (e *DedupEngine) RunDedup(ctx context.Context) error {
 // catches semantically similar facts like:
 //   - "The user works at DET" vs "The user works at Deshpande Educational Trust"
 func (e *DedupEngine) dedupFacts(ctx context.Context, userID string) (int, error) {
-	facts, err := e.store.ListFacts(ctx, userID)
+	facts, err := e.store.ListMemoryItems(ctx, db.MemoryListQuery{UserID: userID, Kinds: []string{"fact"}, Status: "active", Limit: 2000})
 	if err != nil {
 		return 0, err
 	}
-	return dedupTextRecords(ctx, facts, func(r db.FactRecord) (int64, string) {
-		return r.ID, r.Fact
+	return dedupTextRecords(ctx, facts, func(r db.MemoryItemRecord) (int64, string) {
+		return r.ID, r.Content
 	}, func(ctx context.Context, id int64) error {
-		return e.store.DeleteFact(ctx, id)
+		return e.store.DeleteMemoryItem(ctx, id)
 	})
 }
 
 // dedupMemories finds memories with high token overlap and removes duplicates.
 func (e *DedupEngine) dedupMemories(ctx context.Context, userID string) (int, error) {
-	memories, err := e.store.ListMemories(ctx, userID, "", 2000)
+	memories, err := e.store.ListMemoryItems(ctx, db.MemoryListQuery{UserID: userID, Kinds: []string{"memory"}, Status: "active", Limit: 2000})
 	if err != nil {
 		return 0, err
 	}
-	return dedupTextRecords(ctx, memories, func(r db.MemoryRecord) (int64, string) {
-		return r.ID, r.Memory
+	return dedupTextRecords(ctx, memories, func(r db.MemoryItemRecord) (int64, string) {
+		return r.ID, r.Content
 	}, func(ctx context.Context, id int64) error {
-		return e.store.DeleteMemory(ctx, id)
+		return e.store.DeleteMemoryItem(ctx, id)
 	})
 }
 
 // dedupDecisions finds decisions with high token overlap and removes duplicates.
 func (e *DedupEngine) dedupDecisions(ctx context.Context, userID string) (int, error) {
-	decisions, err := e.store.ListDecisions(ctx, userID, "", false)
+	decisions, err := e.store.ListMemoryItems(ctx, db.MemoryListQuery{UserID: userID, Kinds: []string{"decision"}, Status: "all", Limit: 2000})
 	if err != nil {
 		return 0, err
 	}
-	return dedupTextRecords(ctx, decisions, func(r db.DecisionRecord) (int64, string) {
-		return r.ID, r.Decision
+	return dedupTextRecords(ctx, decisions, func(r db.MemoryItemRecord) (int64, string) {
+		return r.ID, r.Content
 	}, func(ctx context.Context, id int64) error {
-		return e.store.DeleteDecision(ctx, id)
+		return e.store.DeleteMemoryItem(ctx, id)
 	})
 }
 

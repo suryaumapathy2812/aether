@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -29,26 +28,6 @@ type MemorySession struct {
 	EndedAt   time.Time
 	Turns     int
 	ToolsUsed []string
-}
-
-type MemoryRecord struct {
-	ID         int64
-	Memory     string
-	Category   string
-	Confidence float64
-	CreatedAt  time.Time
-	ExpiresAt  *time.Time
-}
-
-type DecisionRecord struct {
-	ID         int64
-	Decision   string
-	Category   string
-	Source     string
-	Active     bool
-	Confidence float64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
 }
 
 type MemoryNotification struct {
@@ -154,119 +133,6 @@ func (s *Store) AddMemorySessionSummary(ctx context.Context, userID, sessionID, 
 	return err
 }
 
-func (s *Store) StoreMemoryFact(ctx context.Context, userID, fact string, sourceConversationID int64) error {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	fact = strings.TrimSpace(fact)
-	if fact == "" {
-		return nil
-	}
-	key := normalizeMemoryKey(fact)
-	now := formatTS(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO facts(user_id, fact, fact_key, source_conversation_id, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(user_id, fact_key) DO UPDATE SET
-			fact = excluded.fact,
-			source_conversation_id = excluded.source_conversation_id,
-			updated_at = excluded.updated_at
-	`, userID, fact, key, sourceConversationID, now, now)
-	if err != nil {
-		return err
-	}
-	_ = s.upsertMemoryFTS(ctx, userID, "fact", key, fact)
-	return nil
-}
-
-func (s *Store) StoreMemory(ctx context.Context, userID, memory, category string, sourceConversationID int64, expiresAt *time.Time) error {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	memory = strings.TrimSpace(memory)
-	if memory == "" {
-		return nil
-	}
-	if strings.TrimSpace(category) == "" {
-		category = "episodic"
-	}
-	key := normalizeMemoryKey(memory)
-	now := formatTS(time.Now().UTC())
-	expires := sql.NullString{}
-	if expiresAt != nil {
-		expires = sql.NullString{String: formatTS(expiresAt.UTC()), Valid: true}
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO memories(user_id, memory, memory_key, category, source_conversation_id, created_at, expires_at, confidence)
-		VALUES(?, ?, ?, ?, ?, ?, ?, 1.0)
-		ON CONFLICT(user_id, memory_key) DO UPDATE SET
-			memory = excluded.memory,
-			source_conversation_id = excluded.source_conversation_id,
-			confidence = 1.0
-	`, userID, memory, key, category, sourceConversationID, now, expires)
-	if err != nil {
-		return err
-	}
-	_ = s.upsertMemoryFTS(ctx, userID, "memory", key, memory)
-	return nil
-}
-
-func (s *Store) StoreMemoryDecision(ctx context.Context, userID, decision, category, source string, sourceConversationID int64) error {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	decision = strings.TrimSpace(decision)
-	if decision == "" {
-		return nil
-	}
-	if strings.TrimSpace(category) == "" {
-		category = "preference"
-	}
-	if strings.TrimSpace(source) == "" {
-		source = "extracted"
-	}
-	key := normalizeMemoryKey(decision)
-	now := formatTS(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO decisions(user_id, decision, decision_key, category, source, source_conversation_id, active, created_at, updated_at, confidence)
-		VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, 1.0)
-		ON CONFLICT(user_id, decision_key) DO UPDATE SET
-			decision = excluded.decision,
-			source = excluded.source,
-			source_conversation_id = excluded.source_conversation_id,
-			active = 1,
-			updated_at = excluded.updated_at,
-			confidence = 1.0
-	`, userID, decision, key, category, source, sourceConversationID, now, now)
-	if err != nil {
-		return err
-	}
-	_ = s.upsertMemoryFTS(ctx, userID, "decision", key, decision)
-	return nil
-}
-
-func (s *Store) upsertMemoryFTS(ctx context.Context, userID, sourceType, sourceKey, content string) error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	if strings.TrimSpace(sourceType) == "" || strings.TrimSpace(sourceKey) == "" || strings.TrimSpace(content) == "" {
-		return nil
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		DELETE FROM memory_fts WHERE user_id = ? AND source_type = ? AND source_key = ?
-	`, userID, sourceType, sourceKey); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO memory_fts(user_id, source_type, source_key, content)
-		VALUES(?, ?, ?, ?)
-	`, userID, sourceType, sourceKey, content)
-	return err
-}
-
 func (s *Store) ListMemoryConversations(ctx context.Context, userID string, limit int) ([]MemoryConversation, error) {
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
@@ -305,26 +171,6 @@ func (s *Store) ListMemoryConversations(ctx context.Context, userID string, limi
 		}
 		rec.Timestamp = v
 		out = append(out, rec)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetMemoryFacts(ctx context.Context, userID string) ([]string, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT fact FROM facts WHERE user_id = ? ORDER BY updated_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var fact string
-		if err := rows.Scan(&fact); err != nil {
-			return nil, err
-		}
-		out = append(out, fact)
 	}
 	return out, rows.Err()
 }
@@ -371,147 +217,6 @@ func (s *Store) ListMemorySessions(ctx context.Context, userID string, limit int
 		out = append(out, rec)
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) ListMemories(ctx context.Context, userID, category string, limit int) ([]MemoryRecord, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	if limit <= 0 || limit > 2000 {
-		limit = 100
-	}
-	query := `
-		SELECT id, memory, category, confidence, created_at, expires_at
-		FROM memories
-		WHERE user_id = ?
-	`
-	args := []any{userID}
-	if strings.TrimSpace(category) != "" {
-		query += ` AND category = ?`
-		args = append(args, category)
-	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []MemoryRecord{}
-	for rows.Next() {
-		var rec MemoryRecord
-		var created string
-		var expires sql.NullString
-		if err := rows.Scan(&rec.ID, &rec.Memory, &rec.Category, &rec.Confidence, &created, &expires); err != nil {
-			return nil, err
-		}
-		createdTS, err := parseTS(created)
-		if err != nil {
-			return nil, err
-		}
-		rec.CreatedAt = createdTS
-		if expires.Valid {
-			exp, err := parseTS(expires.String)
-			if err == nil {
-				rec.ExpiresAt = &exp
-			}
-		}
-		out = append(out, rec)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) ListDecisions(ctx context.Context, userID, category string, activeOnly bool) ([]DecisionRecord, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	query := `
-		SELECT id, decision, category, source, active, confidence, created_at, updated_at
-		FROM decisions
-		WHERE user_id = ?
-	`
-	args := []any{userID}
-	if activeOnly {
-		query += ` AND active = 1`
-	}
-	if strings.TrimSpace(category) != "" {
-		query += ` AND category = ?`
-		args = append(args, category)
-	}
-	query += ` ORDER BY updated_at DESC`
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []DecisionRecord{}
-	for rows.Next() {
-		var rec DecisionRecord
-		var active int
-		var created, updated string
-		if err := rows.Scan(&rec.ID, &rec.Decision, &rec.Category, &rec.Source, &active, &rec.Confidence, &created, &updated); err != nil {
-			return nil, err
-		}
-		createdTS, err := parseTS(created)
-		if err != nil {
-			return nil, err
-		}
-		updatedTS, err := parseTS(updated)
-		if err != nil {
-			return nil, err
-		}
-		rec.Active = active == 1
-		rec.CreatedAt = createdTS
-		rec.UpdatedAt = updatedTS
-		out = append(out, rec)
-	}
-	return out, rows.Err()
-}
-
-// FactRecord represents a stored fact with its ID.
-type FactRecord struct {
-	ID      int64
-	Fact    string
-	FactKey string
-}
-
-// ListFacts returns all facts for a user with their IDs and keys.
-func (s *Store) ListFacts(ctx context.Context, userID string) ([]FactRecord, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, fact, fact_key FROM facts WHERE user_id = ? ORDER BY updated_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []FactRecord{}
-	for rows.Next() {
-		var rec FactRecord
-		if err := rows.Scan(&rec.ID, &rec.Fact, &rec.FactKey); err != nil {
-			return nil, err
-		}
-		out = append(out, rec)
-	}
-	return out, rows.Err()
-}
-
-// DeleteFact deletes a fact by ID.
-func (s *Store) DeleteFact(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, id)
-	return err
-}
-
-// DeleteMemory deletes a memory by ID.
-func (s *Store) DeleteMemory(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM memories WHERE id = ?`, id)
-	return err
-}
-
-// DeleteDecision deletes a decision by ID.
-func (s *Store) DeleteDecision(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM decisions WHERE id = ?`, id)
-	return err
 }
 
 // MergeEntities merges the source entity into the target entity.
@@ -733,23 +438,15 @@ func (s *Store) GetMemoryReliabilitySnapshot(ctx context.Context, userID string)
 }
 
 func (s *Store) ExportMemorySnapshot(ctx context.Context, userID string) (map[string]any, error) {
-	facts, err := s.GetMemoryFacts(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	memories, err := s.ListMemories(ctx, userID, "", 10000)
-	if err != nil {
-		return nil, err
-	}
-	decisions, err := s.ListDecisions(ctx, userID, "", false)
-	if err != nil {
-		return nil, err
-	}
 	conversations, err := s.ListMemoryConversations(ctx, userID, 10000)
 	if err != nil {
 		return nil, err
 	}
 	sessions, err := s.ListMemorySessions(ctx, userID, 10000)
+	if err != nil {
+		return nil, err
+	}
+	canonicalItems, err := s.listMemoryItemsByKind(ctx, userID, []string{"fact", "memory", "decision", "summary", "entity_observation"}, "", false, 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -806,178 +503,13 @@ func (s *Store) ExportMemorySnapshot(ctx context.Context, userID string) (map[st
 	}
 
 	return map[string]any{
-		"facts":            facts,
-		"memories":         memories,
-		"decisions":        decisions,
+		"memory_items":     canonicalItems,
 		"conversations":    conversations,
 		"sessions":         sessions,
 		"notifications":    notifications,
 		"proactive_events": proactive,
 		"entities":         entities,
 	}, nil
-}
-
-func (s *Store) SearchMemory(ctx context.Context, userID, query string, limit int) ([]MemorySearchResult, error) {
-	if strings.TrimSpace(userID) == "" {
-		userID = "default"
-	}
-	if limit <= 0 || limit > 100 {
-		limit = 5
-	}
-	qTokens := tokenizeQuery(query)
-	if len(qTokens) == 0 {
-		return []MemorySearchResult{}, nil
-	}
-	results := []MemorySearchResult{}
-
-	ftsResults, _ := s.searchMemoryFTS(ctx, userID, qTokens, limit)
-	results = append(results, ftsResults...)
-
-	appendIfMatch := func(kind, text string, boost float64, ts time.Time, enrich func(*MemorySearchResult)) {
-		score := overlapScore(qTokens, tokenizeQuery(text))
-		if score <= 0 {
-			return
-		}
-		item := MemorySearchResult{Type: kind, Similarity: score + boost, Timestamp: ts}
-		if enrich != nil {
-			enrich(&item)
-		}
-		results = append(results, item)
-	}
-
-	convRows, err := s.ListMemoryConversations(ctx, userID, 200)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range convRows {
-		text := row.UserMessage + " " + row.AssistantMessage
-		appendIfMatch("conversation", text, 0, row.Timestamp, func(r *MemorySearchResult) {
-			r.UserMessage = row.UserMessage
-			r.AssistantMessage = row.AssistantMessage
-		})
-	}
-
-	facts, err := s.GetMemoryFacts(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	for _, fact := range facts {
-		f := fact
-		appendIfMatch("fact", f, 0.1, now, func(r *MemorySearchResult) {
-			r.Fact = f
-		})
-	}
-
-	memoryRows, err := s.ListMemories(ctx, userID, "", 200)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range memoryRows {
-		if row.ExpiresAt != nil && row.ExpiresAt.Before(now) {
-			continue
-		}
-		m := row.Memory
-		appendIfMatch("memory", m, 0.05, row.CreatedAt, func(r *MemorySearchResult) {
-			r.Memory = m
-			r.Category = row.Category
-			r.Confidence = row.Confidence
-		})
-	}
-
-	decisionRows, err := s.ListDecisions(ctx, userID, "", true)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range decisionRows {
-		d := row.Decision
-		appendIfMatch("decision", d, 0.15, row.UpdatedAt, func(r *MemorySearchResult) {
-			r.Decision = d
-			r.Category = row.Category
-			r.Source = row.Source
-			r.Confidence = row.Confidence
-		})
-	}
-
-	actionsRows, err := s.db.QueryContext(ctx, `
-		SELECT tool_name, arguments, output, error, timestamp
-		FROM actions
-		WHERE user_id = ?
-		ORDER BY timestamp DESC
-		LIMIT 200
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	for actionsRows.Next() {
-		var toolName, args, output, ts string
-		var errInt int
-		if err := actionsRows.Scan(&toolName, &args, &output, &errInt, &ts); err != nil {
-			actionsRows.Close()
-			return nil, err
-		}
-		timeVal, err := parseTS(ts)
-		if err != nil {
-			actionsRows.Close()
-			return nil, err
-		}
-		text := toolName + " " + args + " " + output
-		appendIfMatch("action", text, 0.05, timeVal, func(r *MemorySearchResult) {
-			r.ToolName = toolName
-			r.Arguments = args
-			r.Output = output
-			r.Error = errInt == 1
-		})
-	}
-	actionsRows.Close()
-
-	sessions, err := s.ListMemorySessions(ctx, userID, 200)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range sessions {
-		summary := row.Summary
-		appendIfMatch("session", summary, 0.05, row.EndedAt, func(r *MemorySearchResult) {
-			r.Summary = summary
-		})
-	}
-
-	// Search entities for matching results.
-	entities, err := s.ListEntities(ctx, userID, "", 100)
-	if err == nil {
-		for _, ent := range entities {
-			// Search name + summary + aliases
-			text := ent.Name + " " + ent.Summary + " " + strings.Join(ent.Aliases, " ")
-			appendIfMatch("entity", text, 0.12, ent.LastSeenAt, func(r *MemorySearchResult) {
-				r.EntityName = ent.Name
-				r.EntityType = ent.EntityType
-				r.EntitySummary = ent.Summary
-			})
-
-			// ALSO search entity observations (the detailed traits/facts)
-			obs, _ := s.ListEntityObservations(ctx, ent.ID, 20)
-			for _, o := range obs {
-				obsText := o.Observation
-				appendIfMatch("entity_observation", obsText, 0.10, o.CreatedAt, func(r *MemorySearchResult) {
-					r.EntityName = ent.Name
-					r.EntityType = ent.EntityType
-					r.EntitySummary = obsText
-				})
-			}
-		}
-	}
-
-	results = dedupeMemoryResults(results)
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Similarity == results[j].Similarity {
-			return results[i].Timestamp.After(results[j].Timestamp)
-		}
-		return results[i].Similarity > results[j].Similarity
-	})
-	if len(results) > limit {
-		results = results[:limit]
-	}
-	return results, nil
 }
 
 func dedupeMemoryResults(in []MemorySearchResult) []MemorySearchResult {
@@ -1004,55 +536,6 @@ func memoryResultKey(item MemorySearchResult) string {
 		base = strings.TrimSpace(strings.ToLower(item.Type))
 	}
 	return item.Type + "|" + base
-}
-
-func (s *Store) searchMemoryFTS(ctx context.Context, userID string, qTokens map[string]struct{}, limit int) ([]MemorySearchResult, error) {
-	if len(qTokens) == 0 {
-		return nil, nil
-	}
-	tokens := make([]string, 0, len(qTokens))
-	for t := range qTokens {
-		tokens = append(tokens, t)
-	}
-	sort.Strings(tokens)
-	ftsQuery := strings.Join(tokens, " OR ")
-	if strings.TrimSpace(ftsQuery) == "" {
-		return nil, nil
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT source_type, content
-		FROM memory_fts
-		WHERE user_id = ? AND memory_fts MATCH ?
-		LIMIT ?
-	`, userID, ftsQuery, limit*2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	res := make([]MemorySearchResult, 0)
-	for rows.Next() {
-		var sourceType, content string
-		if scanErr := rows.Scan(&sourceType, &content); scanErr != nil {
-			return nil, scanErr
-		}
-		item := MemorySearchResult{Type: sourceType, Similarity: 0.25, Timestamp: time.Now().UTC()}
-		switch sourceType {
-		case "fact":
-			item.Fact = content
-		case "memory":
-			item.Memory = content
-		case "decision":
-			item.Decision = content
-		default:
-			item.Type = "memory"
-			item.Memory = content
-		}
-		res = append(res, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return res, nil
 }
 
 func normalizeMemoryKey(v string) string {

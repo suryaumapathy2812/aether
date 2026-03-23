@@ -7,9 +7,21 @@ final class MemoryService {
         self.api = api
     }
 
-    func fetchFacts() async throws -> [String] {
-        let raw = try await api.get(path: "/agent/v1/memory/facts")
-        return (dictValue(raw)["facts"] as? [String]) ?? []
+    func fetchMemoryItems(limit: Int = 200) async throws -> [CanonicalMemoryItem] {
+        let raw = try await api.get(path: "/agent/v1/memory/items?status=active&limit=\(limit)")
+        return arrayValue(raw, key: "items").map { row in
+            CanonicalMemoryItem(
+                id: intValue(row, "id", "ID"),
+                kind: stringValue(row, "kind", "Kind"),
+                category: stringValue(row, "category", "Category"),
+                content: stringValue(row, "content", "Content"),
+                status: stringValue(row, "status", "Status"),
+                confidence: doubleValue(row, "confidence", "Confidence"),
+                createdAt: stringValue(row, "created_at", "CreatedAt"),
+                updatedAt: stringValue(row, "updated_at", "UpdatedAt"),
+                sourceType: stringValue(row, "source_type", "SourceType")
+            )
+        }
     }
 
     func fetchConversations(limit: Int = 30) async throws -> [MemoryConversationItem] {
@@ -20,34 +32,6 @@ final class MemoryService {
                 userMessage: stringValue(row, "user_message", "UserMessage"),
                 assistantMessage: stringValue(row, "assistant_message", "AssistantMessage"),
                 timestamp: doubleValue(row, "timestamp", "Timestamp")
-            )
-        }
-    }
-
-    func fetchMemories(limit: Int = 100) async throws -> [MemoryItem] {
-        let raw = try await api.get(path: "/agent/v1/memory/memories?limit=\(limit)")
-        return arrayValue(raw, key: "memories").map { row in
-            MemoryItem(
-                id: intValue(row, "id", "ID"),
-                memory: stringValue(row, "memory", "Memory"),
-                category: stringValue(row, "category", "Category"),
-                confidence: doubleValue(row, "confidence", "Confidence"),
-                createdAt: stringValue(row, "created_at", "CreatedAt")
-            )
-        }
-    }
-
-    func fetchDecisions() async throws -> [DecisionItem] {
-        let raw = try await api.get(path: "/agent/v1/memory/decisions?active_only=true")
-        return arrayValue(raw, key: "decisions").map { row in
-            DecisionItem(
-                id: intValue(row, "id", "ID"),
-                decision: stringValue(row, "decision", "Decision"),
-                category: stringValue(row, "category", "Category"),
-                source: stringValue(row, "source", "Source"),
-                active: boolValue(row, "active", "Active"),
-                confidence: doubleValue(row, "confidence", "Confidence"),
-                updatedAt: stringValue(row, "updated_at", "UpdatedAt")
             )
         }
     }

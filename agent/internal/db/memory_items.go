@@ -12,28 +12,28 @@ import (
 )
 
 type MemoryItemRecord struct {
-	ID            int64
-	UserID        string
-	Kind          string
-	Category      string
-	Content       string
-	NormalizedKey string
-	Status        string
-	Confidence    float64
-	Importance    float64
-	EvidenceCount int
-	FirstSeenAt   time.Time
-	LastSeenAt    time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ExpiresAt     *time.Time
-	SourceType    string
-	SourceID      string
-	SessionID     string
-	MetadataJSON  string
+	ID            int64      `json:"id"`
+	UserID        string     `json:"user_id"`
+	Kind          string     `json:"kind"`
+	Category      string     `json:"category"`
+	Content       string     `json:"content"`
+	NormalizedKey string     `json:"normalized_key"`
+	Status        string     `json:"status"`
+	Confidence    float64    `json:"confidence"`
+	Importance    float64    `json:"importance"`
+	EvidenceCount int        `json:"evidence_count"`
+	FirstSeenAt   time.Time  `json:"first_seen_at"`
+	LastSeenAt    time.Time  `json:"last_seen_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	SourceType    string     `json:"source_type"`
+	SourceID      string     `json:"source_id"`
+	SessionID     string     `json:"session_id"`
+	MetadataJSON  string     `json:"metadata_json"`
 }
 
-type MemoryItemUpsert struct {
+type AddMemoryInput struct {
 	UserID     string
 	Kind       string
 	Category   string
@@ -50,7 +50,25 @@ type MemoryItemUpsert struct {
 	ObservedAt time.Time
 }
 
-func (s *Store) UpsertMemoryItem(ctx context.Context, input MemoryItemUpsert) (int64, error) {
+type MemoryListQuery struct {
+	UserID   string
+	Kinds    []string
+	Category string
+	Status   string
+	Limit    int
+}
+
+type MemorySearchQuery struct {
+	UserID         string
+	Text           string
+	Kinds          []string
+	Category       string
+	Status         string
+	Limit          int
+	QueryEmbedding []float32
+}
+
+func (s *Store) AddMemory(ctx context.Context, input AddMemoryInput) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, fmt.Errorf("store not initialized")
 	}
@@ -178,31 +196,33 @@ func (s *Store) UpsertMemoryItem(ctx context.Context, input MemoryItemUpsert) (i
 	return id, nil
 }
 
-func (s *Store) SearchMemoryHybrid(ctx context.Context, userID, query string, queryEmbedding []float32, limit int) ([]MemorySearchResult, error) {
-	if strings.TrimSpace(userID) == "" {
+func (s *Store) SearchMemory(ctx context.Context, query MemorySearchQuery) ([]MemorySearchResult, error) {
+	userID := strings.TrimSpace(query.UserID)
+	if userID == "" {
 		userID = "default"
 	}
+	limit := query.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 12
 	}
-	results := make([]MemorySearchResult, 0, limit*2)
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return results, nil
+	text := strings.TrimSpace(query.Text)
+	if text == "" {
+		return []MemorySearchResult{}, nil
 	}
+	results := make([]MemorySearchResult, 0, limit*2)
 
-	ftsResults, err := s.searchMemoryItemsFTS(ctx, userID, query, limit*3)
+	ftsResults, err := s.searchMemoryItemsFTS(ctx, userID, text, limit*3)
 	if err != nil {
 		return nil, err
 	}
-	results = append(results, ftsResults...)
+	results = append(results, filterMemorySearchResults(ftsResults, query)...)
 
-	if len(queryEmbedding) > 0 {
-		vectorResults, err := s.searchMemoryItemsVector(ctx, userID, queryEmbedding, limit*6)
+	if len(query.QueryEmbedding) > 0 {
+		vectorResults, err := s.searchMemoryItemsVector(ctx, userID, query.QueryEmbedding, limit*6)
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, vectorResults...)
+		results = append(results, filterMemorySearchResults(vectorResults, query)...)
 	}
 
 	results = dedupeMemoryResults(results)
@@ -216,6 +236,35 @@ func (s *Store) SearchMemoryHybrid(ctx context.Context, userID, query string, qu
 		results = results[:limit]
 	}
 	return results, nil
+}
+
+func (s *Store) ListMemoryItems(ctx context.Context, query MemoryListQuery) ([]MemoryItemRecord, error) {
+	items, err := s.listMemoryItemsByKind(ctx, query.UserID, normalizeKinds(query.Kinds), query.Category, false, query.Limit)
+	if err != nil {
+		return nil, err
+	}
+	status := strings.TrimSpace(strings.ToLower(query.Status))
+	if status == "" || status == "all" {
+		return items, nil
+	}
+	filtered := make([]MemoryItemRecord, 0, len(items))
+	for _, item := range items {
+		if strings.EqualFold(item.Status, status) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Store) DeleteMemoryItem(ctx context.Context, id int64) error {
+	if id == 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM memory_items WHERE id = ?`, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM memory_items_fts WHERE item_id = ?`, id)
+	return err
 }
 
 func (s *Store) searchMemoryItemsFTS(ctx context.Context, userID, query string, limit int) ([]MemorySearchResult, error) {
@@ -463,6 +512,58 @@ func defaultImportanceForKind(kind string) float64 {
 	}
 }
 
+func normalizeKinds(kinds []string) []string {
+	if len(kinds) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(kinds))
+	out := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		kind = strings.TrimSpace(strings.ToLower(kind))
+		if kind == "" {
+			continue
+		}
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		out = append(out, kind)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func filterMemorySearchResults(results []MemorySearchResult, query MemorySearchQuery) []MemorySearchResult {
+	if len(results) == 0 {
+		return results
+	}
+	kinds := normalizeKinds(query.Kinds)
+	kindSet := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		kindSet[kind] = struct{}{}
+	}
+	category := strings.TrimSpace(strings.ToLower(query.Category))
+	status := strings.TrimSpace(strings.ToLower(query.Status))
+	out := make([]MemorySearchResult, 0, len(results))
+	for _, item := range results {
+		if len(kindSet) > 0 {
+			if _, ok := kindSet[strings.ToLower(item.Type)]; !ok {
+				continue
+			}
+		}
+		if category != "" && !strings.EqualFold(item.Category, category) {
+			continue
+		}
+		if status != "" && status != "all" && !strings.EqualFold(status, "active") {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func toMemorySearchResult(kind, category, content string, similarity, confidence float64, ts time.Time) MemorySearchResult {
 	item := MemorySearchResult{Type: kind, Category: category, Similarity: similarity, Confidence: confidence, Timestamp: ts}
 	switch kind {
@@ -485,18 +586,7 @@ func (s *Store) ListMemoryUsers(ctx context.Context) ([]string, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT user_id FROM (
-			SELECT user_id FROM memory_items
-			UNION
-			SELECT user_id FROM facts
-			UNION
-			SELECT user_id FROM memories
-			UNION
-			SELECT user_id FROM decisions
-		)
-		ORDER BY user_id
-	`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT user_id FROM memory_items ORDER BY user_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -553,4 +643,153 @@ func (s *Store) ArchiveStaleMemoryItems(ctx context.Context, userID string, befo
 		}
 	}
 	return count, nil
+}
+
+func (s *Store) listMemoryItemsByKind(ctx context.Context, userID string, kinds []string, category string, activeOnly bool, limit int) ([]MemoryItemRecord, error) {
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	if limit <= 0 || limit > 10000 {
+		limit = 100
+	}
+	query := `
+		SELECT id, user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
+			source_type, source_id, session_id, metadata_json
+		FROM memory_items
+		WHERE user_id = ?
+	`
+	args := []any{userID}
+	if len(kinds) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(kinds)), ",")
+		query += ` AND kind IN (` + placeholders + `)`
+		for _, kind := range kinds {
+			args = append(args, kind)
+		}
+	}
+	if activeOnly {
+		query += ` AND status = 'active'`
+	}
+	if strings.TrimSpace(category) != "" {
+		query += ` AND category = ?`
+		args = append(args, category)
+	}
+	query += ` ORDER BY updated_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]MemoryItemRecord, 0)
+	for rows.Next() {
+		rec, err := scanMemoryItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *rec)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) backfillLegacyMemoryItems(ctx context.Context) error {
+	exists, err := s.tableExists(ctx, "facts")
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := s.backfillFacts(ctx); err != nil {
+			return err
+		}
+	}
+	exists, err = s.tableExists(ctx, "memories")
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := s.backfillMemories(ctx); err != nil {
+			return err
+		}
+	}
+	exists, err = s.tableExists(ctx, "decisions")
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := s.backfillDecisions(ctx); err != nil {
+			return err
+		}
+	}
+	exists, err = s.tableExists(ctx, "sessions")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := s.backfillSessionSummaries(ctx); err != nil {
+		return err
+	}
+	return s.rebuildMemoryItemsFTS(ctx)
+}
+
+func (s *Store) backfillFacts(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_items(
+			user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, source_type, source_id, session_id, metadata_json
+		)
+		SELECT user_id, 'fact', 'profile', fact, fact_key, 'active', 1.0, 0.85,
+			1, created_at, updated_at, created_at, updated_at,
+			'legacy_fact', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+		FROM facts
+	`)
+	return err
+}
+
+func (s *Store) backfillMemories(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_items(
+			user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
+			source_type, source_id, session_id, metadata_json
+		)
+		SELECT user_id, 'memory', category, memory, memory_key, 'active', confidence, 0.65,
+			1, created_at, created_at, created_at, created_at, expires_at,
+			'legacy_memory', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+		FROM memories
+	`)
+	return err
+}
+
+func (s *Store) backfillDecisions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_items(
+			user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at,
+			source_type, source_id, session_id, metadata_json
+		)
+		SELECT user_id, 'decision', category, decision, decision_key,
+			CASE WHEN active = 1 THEN 'active' ELSE 'superseded' END,
+			confidence, 0.95, 1, created_at, updated_at, created_at, updated_at,
+			source, COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+		FROM decisions
+	`)
+	return err
+}
+
+func (s *Store) backfillSessionSummaries(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_items(
+			user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at,
+			source_type, source_id, session_id, metadata_json
+		)
+		SELECT user_id, 'summary', 'session', summary, 'session:' || session_id || ':' || started_at,
+			'active', 0.9, 0.8, 1, started_at, ended_at, started_at, ended_at,
+			'session', session_id, session_id, json_object('turns', turns, 'tools_used', tools_used)
+		FROM sessions
+		WHERE trim(summary) <> ''
+	`)
+	return err
 }

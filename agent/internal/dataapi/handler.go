@@ -16,13 +16,19 @@ import (
 type Handler struct {
 	store     *db.Store
 	media     *media.Service
+	embedder  embedder
 	validator *agentauth.Validator
 }
 
 type Options struct {
 	Store     *db.Store
 	Media     *media.Service
+	Embedder  embedder
 	Validator *agentauth.Validator
+}
+
+type embedder interface {
+	EmbedSingle(ctx context.Context, text string) ([]float32, error)
 }
 
 func trimDataAPIPathPrefix(path string, prefixes ...string) string {
@@ -35,27 +41,24 @@ func trimDataAPIPathPrefix(path string, prefixes ...string) string {
 }
 
 func New(opts Options) *Handler {
-	return &Handler{store: opts.Store, media: opts.Media, validator: opts.Validator}
+	return &Handler{store: opts.Store, media: opts.Media, embedder: opts.Embedder, validator: opts.Validator}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	for _, path := range []string{"/agent/v1/media/ensure-bucket", "/api/media/ensure-bucket"} {
 		mux.HandleFunc(path, h.handleEnsureMediaBucket)
 	}
-	for _, path := range []string{"/agent/v1/memory/facts", "/api/memory/facts"} {
-		mux.HandleFunc(path, h.handleMemoryFacts)
+	for _, path := range []string{"/agent/v1/memory/items", "/api/memory/items"} {
+		mux.HandleFunc(path, h.handleMemoryItems)
+	}
+	for _, path := range []string{"/agent/v1/memory/search", "/api/memory/search"} {
+		mux.HandleFunc(path, h.handleMemorySearch)
 	}
 	for _, path := range []string{"/agent/v1/memory/sessions", "/api/memory/sessions"} {
 		mux.HandleFunc(path, h.handleMemorySessions)
 	}
 	for _, path := range []string{"/agent/v1/memory/conversations", "/api/memory/conversations"} {
 		mux.HandleFunc(path, h.handleMemoryConversations)
-	}
-	for _, path := range []string{"/agent/v1/memory/memories", "/api/memory/memories"} {
-		mux.HandleFunc(path, h.handleMemories)
-	}
-	for _, path := range []string{"/agent/v1/memory/decisions", "/api/memory/decisions"} {
-		mux.HandleFunc(path, h.handleMemoryDecisions)
 	}
 	for _, path := range []string{"/agent/v1/memory/notifications", "/api/memory/notifications"} {
 		mux.HandleFunc(path, h.handleMemoryNotifications)
@@ -111,7 +114,53 @@ func (h *Handler) memoryUserID(r *http.Request) (string, error) {
 	return agentauth.ResolveDirectUserID(r, h.validator, r.URL.Query().Get("user_id"))
 }
 
-func (h *Handler) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
+func parseKinds(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func (h *Handler) handleMemoryItems(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	items, err := h.store.ListMemoryItems(r.Context(), db.MemoryListQuery{
+		UserID:   userID,
+		Kinds:    parseKinds(r.URL.Query().Get("kind")),
+		Category: strings.TrimSpace(r.URL.Query().Get("category")),
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		Limit:    limit,
+	})
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -121,12 +170,35 @@ func (h *Handler) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	facts, err := h.store.GetMemoryFacts(r.Context(), userID)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"results": []db.MemorySearchResult{}})
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	var embedding []float32
+	if h.embedder != nil {
+		embedding, _ = h.embedder.EmbedSingle(r.Context(), q)
+	}
+	results, err := h.store.SearchMemory(r.Context(), db.MemorySearchQuery{
+		UserID:         userID,
+		Text:           q,
+		Kinds:          parseKinds(r.URL.Query().Get("kind")),
+		Category:       strings.TrimSpace(r.URL.Query().Get("category")),
+		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
+		Limit:          limit,
+		QueryEmbedding: embedding,
+	})
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"facts": facts})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (h *Handler) handleMemorySessions(w http.ResponseWriter, r *http.Request) {
@@ -243,54 +315,6 @@ func hydrateConversationMedia(ctx context.Context, mediaSvc *media.Service, user
 		return content, false
 	}
 	return out, true
-}
-
-func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	userID, err := h.memoryUserID(r)
-	if err != nil {
-		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	recs, err := h.store.ListMemories(r.Context(), userID, category, limit)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"memories": recs})
-}
-
-func (h *Handler) handleMemoryDecisions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	activeOnly := true
-	if raw := strings.TrimSpace(r.URL.Query().Get("active_only")); raw != "" {
-		activeOnly = !strings.EqualFold(raw, "false")
-	}
-	userID, err := h.memoryUserID(r)
-	if err != nil {
-		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	recs, err := h.store.ListDecisions(r.Context(), userID, category, activeOnly)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"decisions": recs})
 }
 
 func (h *Handler) handleMemoryNotifications(w http.ResponseWriter, r *http.Request) {

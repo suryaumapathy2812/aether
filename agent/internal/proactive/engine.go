@@ -142,11 +142,11 @@ func (e *Engine) buildPlanningContext(ctx context.Context) string {
 	// 5. User facts
 	sb.WriteString("### User Facts\n")
 	if e.store != nil {
-		facts, err := e.store.GetMemoryFacts(ctx, "default")
+		facts, err := e.store.ListMemoryItems(ctx, db.MemoryListQuery{UserID: "default", Kinds: []string{"fact"}, Status: "active", Limit: 20})
 		if err == nil && len(facts) > 0 {
 			for _, f := range facts {
 				sb.WriteString("- ")
-				sb.WriteString(f)
+				sb.WriteString(f.Content)
 				sb.WriteString("\n")
 			}
 		} else {
@@ -160,13 +160,13 @@ func (e *Engine) buildPlanningContext(ctx context.Context) string {
 	// 6. User decisions
 	sb.WriteString("### User Decisions & Preferences\n")
 	if e.store != nil {
-		decisions, err := e.store.ListDecisions(ctx, "default", "", true)
+		decisions, err := e.store.ListMemoryItems(ctx, db.MemoryListQuery{UserID: "default", Kinds: []string{"decision"}, Status: "active", Limit: 20})
 		if err == nil && len(decisions) > 0 {
 			for _, d := range decisions {
 				sb.WriteString("- [")
 				sb.WriteString(d.Category)
 				sb.WriteString("] ")
-				sb.WriteString(d.Decision)
+				sb.WriteString(d.Content)
 				sb.WriteString("\n")
 			}
 		} else {

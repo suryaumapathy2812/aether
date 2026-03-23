@@ -7,6 +7,18 @@ struct MemoryConversationItem: Identifiable, Hashable {
     let timestamp: TimeInterval
 }
 
+struct CanonicalMemoryItem: Identifiable, Hashable {
+    let id: Int
+    let kind: String
+    let category: String
+    let content: String
+    let status: String
+    let confidence: Double
+    let createdAt: String
+    let updatedAt: String
+    let sourceType: String
+}
+
 struct MemoryItem: Identifiable, Hashable {
     let id: Int
     let memory: String

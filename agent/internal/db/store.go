@@ -278,17 +278,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(user_id, session_id, id);`,
-		`CREATE TABLE IF NOT EXISTS facts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id TEXT NOT NULL DEFAULT 'default',
-			fact TEXT NOT NULL,
-			fact_key TEXT NOT NULL,
-			source_conversation_id INTEGER,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(user_id, fact_key)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_facts_user_updated_at ON facts(user_id, updated_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS actions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -311,34 +300,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			tools_used TEXT NOT NULL DEFAULT '[]'
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user_ended_at ON sessions(user_id, ended_at DESC);`,
-		`CREATE TABLE IF NOT EXISTS memories (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id TEXT NOT NULL DEFAULT 'default',
-			memory TEXT NOT NULL,
-			memory_key TEXT NOT NULL,
-			category TEXT NOT NULL DEFAULT 'episodic',
-			source_conversation_id INTEGER,
-			created_at TEXT NOT NULL,
-			expires_at TEXT,
-			confidence REAL NOT NULL DEFAULT 1.0,
-			UNIQUE(user_id, memory_key)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_memories_user_created_at ON memories(user_id, created_at DESC);`,
-		`CREATE TABLE IF NOT EXISTS decisions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id TEXT NOT NULL DEFAULT 'default',
-			decision TEXT NOT NULL,
-			decision_key TEXT NOT NULL,
-			category TEXT NOT NULL DEFAULT 'preference',
-			source TEXT NOT NULL DEFAULT 'extracted',
-			source_conversation_id INTEGER,
-			active INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			confidence REAL NOT NULL DEFAULT 1.0,
-			UNIQUE(user_id, decision_key)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_decisions_user_updated_at ON decisions(user_id, updated_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS memory_items (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -512,13 +473,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, timestamp DESC);`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-			user_id UNINDEXED,
-			source_type UNINDEXED,
-			source_key UNINDEXED,
-			content,
-			tokenize='porter unicode61'
-		);`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
 			user_id UNINDEXED,
 			item_id UNINDEXED,
@@ -541,38 +495,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "conversations", "user_content_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := s.rebuildMemoryFTS(ctx); err != nil {
+	if err := s.backfillLegacyMemoryItems(ctx); err != nil {
 		return err
 	}
 	if err := s.rebuildMemoryItemsFTS(ctx); err != nil {
 		return err
 	}
-	return nil
-}
-
-func (s *Store) rebuildMemoryFTS(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM memory_fts`); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO memory_fts(user_id, source_type, source_key, content)
-		SELECT user_id, 'fact', fact_key, fact FROM facts
-	`); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO memory_fts(user_id, source_type, source_key, content)
-		SELECT user_id, 'memory', memory_key, memory FROM memories
-	`); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO memory_fts(user_id, source_type, source_key, content)
-		SELECT user_id, 'decision', decision_key, decision FROM decisions
-	`); err != nil {
+	if err := s.dropLegacyMemoryTables(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -618,6 +547,34 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, ddl string) err
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+ddl)
 	return err
+}
+
+func (s *Store) tableExists(ctx context.Context, table string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table)
+	var one int
+	if err := row.Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) dropLegacyMemoryTables(ctx context.Context) error {
+	for _, table := range []string{"facts", "memories", "decisions", "memory_fts"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpsertSkill(ctx context.Context, r SkillRecord) error {

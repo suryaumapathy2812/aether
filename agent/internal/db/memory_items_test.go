@@ -11,7 +11,7 @@ func TestUpsertMemoryItemPrefersRicherContent(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
-	if _, err := store.UpsertMemoryItem(ctx, MemoryItemUpsert{
+	if _, err := store.AddMemory(ctx, AddMemoryInput{
 		UserID:     "user-1",
 		Kind:       "fact",
 		Category:   "profile",
@@ -20,7 +20,7 @@ func TestUpsertMemoryItemPrefersRicherContent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert first memory item: %v", err)
 	}
-	id, err := store.UpsertMemoryItem(ctx, MemoryItemUpsert{
+	id, err := store.AddMemory(ctx, AddMemoryInput{
 		UserID:     "user-1",
 		Kind:       "fact",
 		Category:   "profile",
@@ -54,7 +54,7 @@ func TestSearchMemoryHybridUsesCanonicalFTS(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
-	_, err := store.UpsertMemoryItem(ctx, MemoryItemUpsert{
+	_, err := store.AddMemory(ctx, AddMemoryInput{
 		UserID:     "user-1",
 		Kind:       "decision",
 		Category:   "preference",
@@ -65,7 +65,7 @@ func TestSearchMemoryHybridUsesCanonicalFTS(t *testing.T) {
 		t.Fatalf("insert canonical decision: %v", err)
 	}
 
-	results, err := store.SearchMemoryHybrid(ctx, "user-1", "bun preference", nil, 5)
+	results, err := store.SearchMemory(ctx, MemorySearchQuery{UserID: "user-1", Text: "bun preference", Limit: 5})
 	if err != nil {
 		t.Fatalf("search hybrid: %v", err)
 	}
@@ -80,13 +80,101 @@ func TestSearchMemoryHybridUsesCanonicalFTS(t *testing.T) {
 	}
 }
 
+func TestLegacyReadAPIsUseCanonicalMemoryItems(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	_, err := store.AddMemory(ctx, AddMemoryInput{UserID: "user-1", Kind: "fact", Category: "profile", Content: "User prefers concise answers", SourceType: "manual"})
+	if err != nil {
+		t.Fatalf("insert fact item: %v", err)
+	}
+	_, err = store.AddMemory(ctx, AddMemoryInput{UserID: "user-1", Kind: "memory", Category: "episodic", Content: "User debugged Caddy routing", SourceType: "manual"})
+	if err != nil {
+		t.Fatalf("insert memory item: %v", err)
+	}
+	_, err = store.AddMemory(ctx, AddMemoryInput{UserID: "user-1", Kind: "decision", Category: "preference", Content: "Always use Bun when possible", SourceType: "manual"})
+	if err != nil {
+		t.Fatalf("insert decision item: %v", err)
+	}
+
+	facts, err := store.ListMemoryItems(ctx, MemoryListQuery{UserID: "user-1", Kinds: []string{"fact"}, Status: "active", Limit: 10})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	if len(facts) != 1 || facts[0].Content != "User prefers concise answers" {
+		t.Fatalf("unexpected facts: %#v", facts)
+	}
+
+	memories, err := store.ListMemoryItems(ctx, MemoryListQuery{UserID: "user-1", Kinds: []string{"memory"}, Status: "active", Limit: 10})
+	if err != nil {
+		t.Fatalf("list memories: %v", err)
+	}
+	if len(memories) != 1 || memories[0].Content != "User debugged Caddy routing" {
+		t.Fatalf("unexpected memories: %#v", memories)
+	}
+
+	decisions, err := store.ListMemoryItems(ctx, MemoryListQuery{UserID: "user-1", Kinds: []string{"decision"}, Status: "active", Limit: 10})
+	if err != nil {
+		t.Fatalf("list decisions: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].Content != "Always use Bun when possible" {
+		t.Fatalf("unexpected decisions: %#v", decisions)
+	}
+
+	results, err := store.SearchMemory(ctx, MemorySearchQuery{UserID: "user-1", Text: "bun routing concise", Limit: 10})
+	if err != nil {
+		t.Fatalf("search memory: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected canonical search results")
+	}
+}
+
+func TestMigrateBackfillsLegacyTablesIntoCanonicalMemoryItems(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TABLE facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			fact TEXT NOT NULL,
+			fact_key TEXT NOT NULL,
+			source_conversation_id INTEGER,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(user_id, fact_key)
+		)
+	`); err != nil {
+		t.Fatalf("create legacy facts table: %v", err)
+	}
+
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO facts(user_id, fact, fact_key, source_conversation_id, created_at, updated_at)
+		VALUES('user-1', 'User likes Go', 'user likes go', 0, ?, ?)
+	`, formatTS(time.Now().UTC()), formatTS(time.Now().UTC())); err != nil {
+		t.Fatalf("insert legacy fact: %v", err)
+	}
+	if err := store.backfillLegacyMemoryItems(ctx); err != nil {
+		t.Fatalf("backfill legacy memory: %v", err)
+	}
+	facts, err := store.ListMemoryItems(ctx, MemoryListQuery{UserID: "user-1", Kinds: []string{"fact"}, Status: "active", Limit: 10})
+	if err != nil {
+		t.Fatalf("list canonical facts after backfill: %v", err)
+	}
+	if len(facts) == 0 || facts[0].Content != "User likes Go" {
+		t.Fatalf("expected backfilled fact, got %#v", facts)
+	}
+}
+
 func TestArchiveStaleMemoryItems(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	defer store.Close()
 
 	observedAt := time.Now().UTC().Add(-60 * 24 * time.Hour)
-	_, err := store.UpsertMemoryItem(ctx, MemoryItemUpsert{
+	_, err := store.AddMemory(ctx, AddMemoryInput{
 		UserID:     "user-1",
 		Kind:       "memory",
 		Category:   "episodic",

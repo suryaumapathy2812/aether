@@ -363,9 +363,120 @@ export async function getLatencyMetrics() {
 
 // ── Memory ──
 
-export async function getMemoryFacts(userId: string) {
-  return api<{ facts: string[] }>(
-    `${agentPath("/memory/facts")}?user_id=${encodeURIComponent(userId)}`,
+export interface MemoryItemRow {
+  id: number;
+  user_id: string;
+  kind: string;
+  category: string;
+  content: string;
+  normalized_key: string;
+  status: string;
+  confidence: number;
+  importance: number;
+  evidence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string | null;
+  source_type: string;
+  source_id: string;
+  session_id: string;
+  metadata_json: string;
+}
+
+export interface MemorySearchResult {
+  type: string;
+  similarity: number;
+  timestamp: string | number;
+  fact?: string;
+  memory?: string;
+  decision?: string;
+  summary?: string;
+  category?: string;
+  confidence?: number;
+  entity_name?: string;
+  entity_type?: string;
+  entity_summary?: string;
+}
+
+export async function getMemoryItems(
+  userId: string,
+  limit = 200,
+  options?: { kind?: string[]; category?: string; status?: string },
+) {
+  const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
+  if (options?.kind?.length) {
+    params.set("kind", options.kind.join(","));
+  }
+  if (options?.category?.trim()) {
+    params.set("category", options.category.trim());
+  }
+  if (options?.status?.trim()) {
+    params.set("status", options.status.trim());
+  }
+  const res = await api<{
+    items: Array<
+      Partial<MemoryItemRow> & {
+        ID?: number;
+        UserID?: string;
+        Kind?: string;
+        Category?: string;
+        Content?: string;
+        NormalizedKey?: string;
+        Status?: string;
+        Confidence?: number;
+        Importance?: number;
+        EvidenceCount?: number;
+        FirstSeenAt?: string;
+        LastSeenAt?: string;
+        CreatedAt?: string;
+        UpdatedAt?: string;
+        ExpiresAt?: string | null;
+        SourceType?: string;
+        SourceID?: string;
+        SessionID?: string;
+        MetadataJSON?: string;
+      }
+    >;
+  }>(`${agentPath("/memory/items")}?${params.toString()}`);
+  return {
+    items: (res.items || []).map((item) => ({
+      id: item.id ?? item.ID ?? 0,
+      user_id: item.user_id || item.UserID || userId,
+      kind: item.kind || item.Kind || "memory",
+      category: item.category || item.Category || "",
+      content: item.content || item.Content || "",
+      normalized_key: item.normalized_key || item.NormalizedKey || "",
+      status: item.status || item.Status || "active",
+      confidence: item.confidence ?? item.Confidence ?? 1,
+      importance: item.importance ?? item.Importance ?? 0.5,
+      evidence_count: item.evidence_count ?? item.EvidenceCount ?? 1,
+      first_seen_at: item.first_seen_at || item.FirstSeenAt || "",
+      last_seen_at: item.last_seen_at || item.LastSeenAt || "",
+      created_at: item.created_at || item.CreatedAt || "",
+      updated_at: item.updated_at || item.UpdatedAt || "",
+      expires_at: item.expires_at ?? item.ExpiresAt ?? null,
+      source_type: item.source_type || item.SourceType || "",
+      source_id: item.source_id || item.SourceID || "",
+      session_id: item.session_id || item.SessionID || "",
+      metadata_json: item.metadata_json || item.MetadataJSON || "{}",
+    })),
+  };
+}
+
+export async function searchMemoryItems(
+  userId: string,
+  q: string,
+  limit = 20,
+  options?: { kind?: string[]; category?: string; status?: string },
+) {
+  const params = new URLSearchParams({ user_id: userId, q, limit: String(limit) });
+  if (options?.kind?.length) params.set("kind", options.kind.join(","));
+  if (options?.category?.trim()) params.set("category", options.category.trim());
+  if (options?.status?.trim()) params.set("status", options.status.trim());
+  return api<{ results: MemorySearchResult[] }>(
+    `${agentPath("/memory/search")}?${params.toString()}`,
   );
 }
 
@@ -420,78 +531,6 @@ export async function getMemoryConversations(userId: string, limit = 20) {
       assistant_message: c.assistant_message || c.AssistantMessage || "",
       user_content: c.user_content || c.UserContent || [],
       timestamp: c.timestamp || toEpoch(c.Timestamp),
-    })),
-  };
-}
-
-export async function getMemories(userId: string, limit = 100, category?: string) {
-  const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
-  if (category && category.trim()) {
-    params.set("category", category.trim());
-  }
-  const res = await api<{
-    memories: {
-      id?: number;
-      memory?: string;
-      category?: string;
-      confidence?: number;
-      created_at?: string;
-      expires_at?: string | null;
-      ID?: number;
-      Memory?: string;
-      Category?: string;
-      Confidence?: number;
-      CreatedAt?: string;
-      ExpiresAt?: string | null;
-    }[];
-  }>(`${agentPath("/memory/memories")}?${params.toString()}`);
-  return {
-    memories: (res.memories || []).map((m) => ({
-      id: m.id ?? m.ID ?? 0,
-      memory: m.memory || m.Memory || "",
-      category: m.category || m.Category || "episodic",
-      confidence: m.confidence ?? m.Confidence ?? 1,
-      created_at: m.created_at || m.CreatedAt || "",
-      expires_at: m.expires_at ?? m.ExpiresAt ?? null,
-    })),
-  };
-}
-
-export async function getDecisions(userId: string, category?: string, activeOnly = true) {
-  const params = new URLSearchParams({ user_id: userId, active_only: String(activeOnly) });
-  if (category && category.trim()) {
-    params.set("category", category.trim());
-  }
-  const res = await api<{
-    decisions: {
-      id?: number;
-      decision?: string;
-      category?: string;
-      source?: string;
-      active?: boolean;
-      confidence?: number;
-      created_at?: string;
-      updated_at?: string;
-      ID?: number;
-      Decision?: string;
-      Category?: string;
-      Source?: string;
-      Active?: boolean;
-      Confidence?: number;
-      CreatedAt?: string;
-      UpdatedAt?: string;
-    }[];
-  }>(`${agentPath("/memory/decisions")}?${params.toString()}`);
-  return {
-    decisions: (res.decisions || []).map((d) => ({
-      id: d.id ?? d.ID ?? 0,
-      decision: d.decision || d.Decision || "",
-      category: d.category || d.Category || "preference",
-      source: d.source || d.Source || "extracted",
-      active: d.active ?? d.Active ?? true,
-      confidence: d.confidence ?? d.Confidence ?? 1,
-      created_at: d.created_at || d.CreatedAt || "",
-      updated_at: d.updated_at || d.UpdatedAt || "",
     })),
   };
 }
