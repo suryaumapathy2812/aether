@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ContentShell from "@/components/ContentShell";
+import ListItem from "@/components/ListItem";
 import { useSession } from "@/lib/auth-client";
 import {
   installSkill,
@@ -182,22 +183,20 @@ export default function SkillsPage() {
           {results.map((skill) => {
             const isInstalled = installedNames.has(skill.name);
             return (
-                <div
-                  key={skill.id}
-                  className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-white/[0.06]"
-                >
-                <div className="min-w-0">
-                  <p className="text-sm truncate">{skill.name}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">{skill.source}</p>
-                </div>
-                <button
-                  className="h-8 px-3 text-xs border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={busySkill === skill.id || isInstalled}
-                  onClick={() => onInstall(skill)}
-                >
-                  {isInstalled ? "Installed" : "Install"}
-                </button>
-              </div>
+              <ListItem
+                key={skill.id}
+                title={skill.name}
+                description={skill.source}
+                action={
+                  <button
+                    className="h-8 px-3 text-[11px] border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    disabled={busySkill === skill.id || isInstalled}
+                    onClick={() => onInstall(skill)}
+                  >
+                    {isInstalled ? "Installed" : "Install"}
+                  </button>
+                }
+              />
             );
           })}
           {!loading && results.length === 0 && (
@@ -209,22 +208,20 @@ export default function SkillsPage() {
       ) : (
         <div className="space-y-2">
           {filteredInstalled.map((skill) => (
-            <div
+            <ListItem
               key={skill.name}
-              className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-white/[0.06]"
-            >
-              <div className="min-w-0">
-                <p className="text-sm truncate">{skill.name || "Unnamed skill"}</p>
-                <p className="text-[11px] text-muted-foreground truncate">{skill.description || "No description"}</p>
-              </div>
-              <button
-                className="h-8 px-3 text-xs border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={busySkill === skill.name}
-                onClick={() => onRemove(skill.name)}
-              >
-                Remove
-              </button>
-            </div>
+              title={skill.name || "Unnamed skill"}
+              description={skill.description || "No description"}
+              action={
+                <button
+                  className="h-8 px-3 text-[11px] border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                  disabled={busySkill === skill.name}
+                  onClick={() => onRemove(skill.name)}
+                >
+                  Remove
+                </button>
+              }
+            />
           ))}
           {filteredInstalled.length === 0 && (
             <p className="text-xs text-muted-foreground">

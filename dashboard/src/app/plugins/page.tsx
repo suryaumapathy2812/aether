@@ -2,12 +2,12 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import ContentShell from "@/components/ContentShell";
+import ListItem from "@/components/ListItem";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth-client";
 import { listPlugins, PluginInfo } from "@/lib/api";
-import { IconSearch, IconChevronRight } from "@tabler/icons-react";
+import { IconSearch } from "@tabler/icons-react";
 
 export default function PluginsPage() {
   return (
@@ -180,67 +180,24 @@ function PluginsContent() {
           )}
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-2">
           {filtered.map((plugin) => (
-            <PluginRow key={plugin.name} plugin={plugin} tab={tab} />
+            <ListItem
+              key={plugin.name}
+              title={plugin.display_name}
+              description={plugin.description}
+              href={`/plugins/${plugin.name}`}
+              action={
+                !plugin.installed && tab === "browse" ? (
+                  <span className="shrink-0 text-[11px] font-medium text-foreground/70 bg-white/[0.08] px-3 py-1 rounded-full">
+                    Get
+                  </span>
+                ) : undefined
+              }
+            />
           ))}
         </div>
       )}
     </ContentShell>
   );
-}
-
-// ── Plugin row ──
-
-function PluginRow({
-  plugin,
-  tab,
-}: {
-  plugin: PluginInfo;
-  tab: "installed" | "browse";
-}) {
-  const status = getPluginStatus(plugin);
-
-  return (
-    <Link
-      href={`/plugins/${plugin.name}`}
-      className="group flex items-center gap-3 px-3 py-3 -mx-3 rounded-xl hover:bg-white/[0.03] transition-colors"
-    >
-      {/* Info */}
-      <div className="flex-1 min-w-0">
-        <span className="text-[13px] font-medium text-foreground">
-          {plugin.display_name}
-        </span>
-        <p className="text-[11px] text-muted-foreground/60 mt-0.5 line-clamp-1">
-          {plugin.description}
-        </p>
-      </div>
-
-      {/* Browse tab: Get pill */}
-      {tab === "browse" && !plugin.installed && (
-        <span className="shrink-0 text-[11px] font-medium text-foreground/70 bg-white/[0.08] px-3 py-1 rounded-full">
-          Get
-        </span>
-      )}
-
-      <IconChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
-    </Link>
-  );
-}
-
-// ── Status helpers ──
-
-type PluginStatus = "active" | "attention" | "disabled";
-
-function getPluginStatus(plugin: PluginInfo): PluginStatus {
-  if (
-    plugin.needs_reconnect ||
-    (plugin.auth_type === "oauth2" && plugin.installed && !plugin.connected)
-  ) {
-    return "attention";
-  }
-  if (plugin.installed && plugin.enabled && plugin.connected) {
-    return "active";
-  }
-  return "disabled";
 }

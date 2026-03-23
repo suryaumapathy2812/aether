@@ -2,7 +2,6 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { cn } from "@/lib/utils";
 import ContentShell from "@/components/ContentShell";
 import { useSession } from "@/lib/auth-client";
 import { chatRuntime, useChatStatusMap } from "@/lib/chat-runtime";
@@ -137,22 +136,20 @@ function SessionsContent() {
   );
 
   return (
-    <ContentShell title="Sessions">
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-[12px] text-muted-foreground">
-          Your recent conversations
-        </p>
+    <ContentShell
+      title="Sessions"
+      action={
         <Button
           variant="aether"
           size="sm"
           onClick={handleNewChat}
           className="h-8 px-3 text-[12px]"
         >
-          <Plus className="size-3.5 mr-1.5" />
-          New Chat
+          <Plus className="size-3.5 mr-1" />
+          new
         </Button>
-      </div>
-
+      }
+    >
       {loading ? (
         <p className="text-muted-foreground/60 text-xs">loading...</p>
       ) : sessions.length === 0 ? (
@@ -259,7 +256,7 @@ function SessionGroup({
       <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground/50 font-medium mb-2">
         {label}
       </p>
-      <div className="space-y-0.5">
+      <div className="space-y-2">
         {sessions.map((s) => {
           const isActive = s.id === activeSessionId;
           const isEditing = s.id === editingId;
@@ -268,10 +265,7 @@ function SessionGroup({
           return (
             <div
               key={s.id}
-              className={cn(
-                "group/item flex items-center rounded-lg transition-colors",
-                isActive ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
-              )}
+              className="group/item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-white/[0.06] hover:bg-white/[0.03] transition-colors"
             >
               {isEditing ? (
                 <input
@@ -283,21 +277,16 @@ function SessionGroup({
                     if (e.key === "Enter") onCommitRename();
                     if (e.key === "Escape") onCancelRename();
                   }}
-                  className="h-10 min-w-0 flex-1 bg-transparent px-3 text-[13px] font-medium text-foreground outline-none"
+                  className="h-7 min-w-0 flex-1 bg-transparent text-[13px] font-medium text-foreground outline-none"
                 />
               ) : (
                 <>
                   <button
                     onClick={() => onSelect(s.id)}
                     onDoubleClick={() => onRename(s)}
-                    className={cn(
-                      "h-10 min-w-0 flex-1 px-3 text-left text-[13px] font-medium truncate cursor-pointer",
-                      isActive
-                        ? "text-foreground"
-                        : "text-foreground/60 hover:text-foreground"
-                    )}
+                    className="min-w-0 flex-1 text-left cursor-pointer"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="text-[13px] font-medium text-foreground flex items-center gap-2">
                       {s.title || "New chat"}
                       {isRunning && (
                         <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />

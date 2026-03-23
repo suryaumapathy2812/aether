@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { toast } from "sonner";
 import ContentShell from "@/components/ContentShell";
+import ListItem from "@/components/ListItem";
 import { Switch } from "@/components/ui/switch";
 import {
   listDevices,
@@ -20,7 +20,6 @@ import { useSession } from "@/lib/auth-client";
 import {
   IconBrandTelegram,
   IconDeviceMobile,
-  IconChevronRight,
   IconTrash,
 } from "@tabler/icons-react";
 
@@ -81,16 +80,24 @@ export default function DevicesPage() {
   return (
     <ContentShell title="Devices">
       {/* Tabs */}
-      <div className="flex gap-4 mb-6">
+      <div className="flex items-center gap-1 mb-6">
         <button
           onClick={() => setTab("connected")}
-          className={`text-[13px] pb-1.5 transition-colors ${tab === "connected" ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground/70"}`}
+          className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
+            tab === "connected"
+              ? "bg-white/[0.08] text-foreground"
+              : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+          }`}
         >
           Connected
         </button>
         <button
           onClick={() => setTab("browse")}
-          className={`text-[13px] pb-1.5 transition-colors ${tab === "browse" ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground/70"}`}
+          className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
+            tab === "browse"
+              ? "bg-white/[0.08] text-foreground"
+              : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+          }`}
         >
           Browse
         </button>
@@ -155,7 +162,7 @@ function ConnectedTab({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {devices.map((d) => (
         <div key={d.id} className="flex items-center justify-between py-3 group">
           <div className="min-w-0 flex-1">
@@ -233,26 +240,17 @@ function ConnectedTab({
 
 function BrowseTab() {
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {DEVICE_TYPES.map((device) => {
         const Icon = device.icon;
         return (
-          <Link
+          <ListItem
             key={device.type}
+            title={device.name}
+            description={device.description}
             href={device.href}
-            className="group flex items-center gap-3 px-3 py-3 -mx-3 rounded-xl hover:bg-white/[0.03] transition-colors"
-          >
-            <Icon className="size-4 text-muted-foreground shrink-0" strokeWidth={1.5} />
-            <div className="flex-1 min-w-0">
-              <span className="text-[13px] font-medium text-foreground">
-                {device.name}
-              </span>
-              <p className="text-[11px] text-muted-foreground/60 mt-0.5 line-clamp-1">
-                {device.description}
-              </p>
-            </div>
-            <IconChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
-          </Link>
+            icon={<Icon className="size-4" strokeWidth={1.5} />}
+          />
         );
       })}
     </div>

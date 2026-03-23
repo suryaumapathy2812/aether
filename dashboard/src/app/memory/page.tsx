@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
 import ContentShell from "@/components/ContentShell";
+import ListItem from "@/components/ListItem";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -12,94 +11,23 @@ import { useSession } from "@/lib/auth-client";
 import {
   getEntities,
   getEntityDetails,
-  getMemoryConversations,
   getMemoryItems,
   type EntityRow,
   type EntityDetails,
 } from "@/lib/api";
 
-type Tab = "about" | "conversations" | "entities" | "memories" | "decisions";
+type Tab = "about" | "entities";
 
-interface ConversationRow {
+interface MemoryItem {
   id: number;
-  user_message: string;
-  assistant_message: string;
-  timestamp: number;
+  content: string;
 }
-
-interface MemoryRow {
-  id: number;
-  memory: string;
-  category: string;
-  confidence: number;
-  created_at: string;
-}
-
-interface DecisionRow {
-  id: number;
-  decision: string;
-  category: string;
-  source: string;
-  active: boolean;
-  confidence: number;
-  updated_at: string;
-}
-
-const assistantMarkdownComponents: Components = {
-  h1: ({ children }) => <strong className="block mb-1">{children}</strong>,
-  h2: ({ children }) => <strong className="block mb-1">{children}</strong>,
-  h3: ({ children }) => <strong className="block mb-1">{children}</strong>,
-  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-  em: ({ children }) => <em>{children}</em>,
-  code: ({ children, className }) => {
-    if (className) {
-      return <code className={className}>{children}</code>;
-    }
-
-    return (
-      <code className="rounded bg-white/8 px-1.5 py-0.5 text-[0.9em] font-mono text-foreground/90">
-        {children}
-      </code>
-    );
-  },
-  pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded-lg bg-white/6 border border-border/50 p-3 text-[0.85em] font-mono leading-relaxed">
-      {children}
-    </pre>
-  ),
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="underline underline-offset-2 decoration-foreground/30 hover:decoration-foreground/60 transition-colors"
-    >
-      {children}
-    </a>
-  ),
-  ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-0.5 last:mb-0">{children}</ul>,
-  ol: ({ children }) => (
-    <ol className="mb-2 ml-4 list-decimal space-y-0.5 last:mb-0">{children}</ol>
-  ),
-  li: ({ children }) => <li className="pl-0.5">{children}</li>,
-  blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-foreground/20 pl-3 italic text-secondary-foreground">
-      {children}
-    </blockquote>
-  ),
-  hr: () => <hr className="my-3 border-border/50" />,
-  img: () => null,
-};
 
 export default function MemoryPage() {
   const router = useRouter();
   const { data: session, isPending: sessionPending } = useSession();
   const [tab, setTab] = useState<Tab>("about");
-  const [facts, setFacts] = useState<string[]>([]);
-  const [conversations, setConversations] = useState<ConversationRow[]>([]);
-  const [memories, setMemories] = useState<MemoryRow[]>([]);
-  const [decisions, setDecisions] = useState<DecisionRow[]>([]);
+  const [items, setItems] = useState<MemoryItem[]>([]);
   const [entities, setEntities] = useState<EntityRow[]>([]);
   const [selectedEntity, setSelectedEntity] = useState<EntityDetails | null>(null);
   const [entityLoading, setEntityLoading] = useState(false);
@@ -117,40 +45,18 @@ export default function MemoryPage() {
 
     async function load() {
       try {
-        const [itemsRes, convsRes, entitiesRes] = await Promise.all([
+        const [itemsRes, entitiesRes] = await Promise.all([
           getMemoryItems(userId, 300, { status: "active" }),
-          getMemoryConversations(userId, 30),
           getEntities(userId),
         ]);
-        const items = itemsRes.items || [];
-        setFacts(items.filter((item) => item.kind === "fact").map((item) => item.content));
-        setConversations(convsRes.conversations || []);
-        setMemories(
-          items
-            .filter((item) => item.kind === "memory" || item.kind === "summary")
+        const raw = itemsRes.items || [];
+        setItems(
+          raw
+            .filter((item) => ["fact", "memory", "summary", "decision"].includes(item.kind))
             .map((item) => ({
               id: item.id,
-              memory: item.content,
-              category:
-                item.kind === "summary"
-                  ? `summary:${item.category || "general"}`
-                  : item.category || "episodic",
-              confidence: item.confidence,
-              created_at: item.created_at,
-            })),
-        );
-        setDecisions(
-          items
-            .filter((item) => item.kind === "decision")
-            .map((item) => ({
-              id: item.id,
-              decision: item.content,
-              category: item.category || "preference",
-              source: item.source_type || "memory",
-              active: item.status === "active",
-              confidence: item.confidence,
-              updated_at: item.updated_at,
-            })),
+              content: item.content,
+            }))
         );
         setEntities(entitiesRes.entities || []);
       } catch (e: unknown) {
@@ -165,12 +71,7 @@ export default function MemoryPage() {
 
   if (sessionPending || !session) return null;
 
-  const isEmpty =
-    facts.length === 0 &&
-    conversations.length === 0 &&
-    entities.length === 0 &&
-    memories.length === 0 &&
-    decisions.length === 0;
+  const isEmpty = items.length === 0 && entities.length === 0;
 
   return (
     <ContentShell title="Memory">
@@ -188,16 +89,12 @@ export default function MemoryPage() {
             tab={tab}
             onTabChange={setTab}
             counts={{
-              about: facts.length,
-              conversations: conversations.length,
+              about: items.length,
               entities: entities.length,
-              memories: memories.length,
-              decisions: decisions.length,
             }}
           />
 
-          {tab === "about" && <FactsTab facts={facts} />}
-          {tab === "conversations" && <ConversationsTab conversations={conversations} />}
+          {tab === "about" && <AboutTab items={items} />}
           {tab === "entities" && (
             <EntitiesTab
               entities={entities}
@@ -218,8 +115,6 @@ export default function MemoryPage() {
               onBack={() => setSelectedEntity(null)}
             />
           )}
-          {tab === "memories" && <MemoriesTab memories={memories} />}
-          {tab === "decisions" && <DecisionsTab decisions={decisions} />}
         </div>
       )}
     </ContentShell>
@@ -237,10 +132,7 @@ function TabBar({
 }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: "about", label: "About You" },
-    { id: "conversations", label: "Conversations" },
     { id: "entities", label: "Entities" },
-    { id: "memories", label: "Memories" },
-    { id: "decisions", label: "Decisions" },
   ];
 
   return (
@@ -273,124 +165,19 @@ function TabBar({
   );
 }
 
-function FactsTab({ facts }: { facts: string[] }) {
-  if (facts.length === 0) {
+function AboutTab({ items }: { items: MemoryItem[] }) {
+  if (items.length === 0) {
     return <p className="text-muted-foreground text-xs pt-4">nothing learned yet</p>;
   }
+
   return (
-    <div className="space-y-3 pt-2">
-      {facts.map((fact, i) => (
-        <div key={i} className="pl-3 border-l-2 border-border animate-[fade-in_0.2s_ease]">
-          <p className="text-sm text-secondary-foreground leading-relaxed max-w-[84ch]">{fact}</p>
-        </div>
+    <div className="space-y-2 pt-2">
+      {items.map((item) => (
+        <ListItem key={item.id} title={item.content} />
       ))}
       <p className="text-[10px] text-muted-foreground pt-2">
-        {facts.length} {facts.length === 1 ? "fact" : "facts"} remembered
+        {items.length} {items.length === 1 ? "item" : "items"} remembered
       </p>
-    </div>
-  );
-}
-
-function ConversationsTab({ conversations }: { conversations: ConversationRow[] }) {
-  if (conversations.length === 0) {
-    return <p className="text-muted-foreground text-xs pt-4">no conversations yet</p>;
-  }
-
-  const reversed = [...conversations].reverse();
-  return (
-    <div className="space-y-0 pt-2">
-      {reversed.map((c, i) => {
-        const prevTimestamp = i > 0 ? reversed[i - 1].timestamp : null;
-        const showDateBreak = shouldShowDateBreak(c.timestamp, prevTimestamp);
-        return (
-          <div key={`${c.id}-${i}`} className="animate-[fade-in_0.2s_ease]">
-            {showDateBreak && (
-              <div className="flex items-center gap-3 py-4">
-                <Separator className="flex-1" />
-                <span className="text-[10px] text-muted-foreground tracking-wider shrink-0">
-                  {formatDate(c.timestamp)}
-                </span>
-                <Separator className="flex-1" />
-              </div>
-            )}
-            <div className="py-3 space-y-2.5">
-              <div className="flex flex-col items-end">
-                <div className="bg-card border border-border rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[80%]">
-                  <p className="text-[13px] text-secondary-foreground leading-relaxed max-w-[76ch]">
-                    {c.user_message}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-col items-start">
-                <div className="text-[13px] text-foreground leading-relaxed max-w-[76ch]">
-                  <ReactMarkdown components={assistantMarkdownComponents}>
-                    {c.assistant_message}
-                  </ReactMarkdown>
-                </div>
-                <span className="text-[9px] text-muted-foreground mt-1 tracking-wider">
-                  {formatRelativeTime(c.timestamp)}
-                </span>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function MemoriesTab({ memories }: { memories: MemoryRow[] }) {
-  if (memories.length === 0) {
-    return <p className="text-muted-foreground text-xs pt-4">no episodic memories yet</p>;
-  }
-  return (
-    <div className="space-y-3 pt-2">
-      {memories.map((m) => (
-        <div key={m.id} className="rounded-xl border border-border/70 p-3">
-          <p className="text-sm text-secondary-foreground leading-relaxed">{m.memory}</p>
-          <div className="flex items-center gap-2 mt-2">
-            <Badge variant="secondary" className="text-[9px] tracking-wider">
-              {m.category}
-            </Badge>
-            <span className="text-[10px] text-muted-foreground">
-              confidence {Math.round((m.confidence || 1) * 100)}%
-            </span>
-            <span className="text-[10px] text-muted-foreground">·</span>
-            <span className="text-[10px] text-muted-foreground">
-              {formatTimestamp(m.created_at)}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DecisionsTab({ decisions }: { decisions: DecisionRow[] }) {
-  if (decisions.length === 0) {
-    return <p className="text-muted-foreground text-xs pt-4">no active decisions yet</p>;
-  }
-  return (
-    <div className="space-y-3 pt-2">
-      {decisions.map((d) => (
-        <div key={d.id} className="rounded-xl border border-border/70 p-3">
-          <p className="text-sm text-secondary-foreground leading-relaxed">{d.decision}</p>
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <Badge variant="secondary" className="text-[9px] tracking-wider">
-              {d.category}
-            </Badge>
-            <span className="text-[10px] text-muted-foreground">source {d.source}</span>
-            <span className="text-[10px] text-muted-foreground">·</span>
-            <span className="text-[10px] text-muted-foreground">
-              {d.active ? "active" : "inactive"}
-            </span>
-            <span className="text-[10px] text-muted-foreground">·</span>
-            <span className="text-[10px] text-muted-foreground">
-              {formatTimestamp(d.updated_at)}
-            </span>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
@@ -638,51 +425,6 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       )}
     </div>
   );
-}
-
-function formatRelativeTime(ts: number): string {
-  if (!ts) return "-";
-  const now = Date.now();
-  const then = ts * 1000;
-  const diff = now - then;
-
-  const minutes = Math.floor(diff / 60_000);
-  const hours = Math.floor(diff / 3_600_000);
-  const days = Math.floor(diff / 86_400_000);
-
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-
-  return new Date(then).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatDate(ts: number): string {
-  if (!ts) return "unknown day";
-  const date = new Date(ts * 1000);
-  const now = new Date();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  if (date.toDateString() === now.toDateString()) return "today";
-  if (date.toDateString() === yesterday.toDateString()) return "yesterday";
-
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function shouldShowDateBreak(currentTs: number, prevTs: number | null): boolean {
-  if (prevTs === null) return true;
-  const current = new Date(currentTs * 1000).toDateString();
-  const prev = new Date(prevTs * 1000).toDateString();
-  return current !== prev;
 }
 
 function formatTimestamp(value: string): string {
