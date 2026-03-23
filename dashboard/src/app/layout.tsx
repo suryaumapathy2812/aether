@@ -51,7 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <KeyboardShortcutsProvider>
                 <SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden md:flex-row">
                   <Suspense>
-                    <Sidebar variant="sidebar" />
+                    <Sidebar variant="inset" />
                   </Suspense>
                   <SidebarInset id="app-main" className="overflow-hidden">
                     {children}
