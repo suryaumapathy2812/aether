@@ -50,13 +50,13 @@ require_env() {
 }
 
 build_caddy_image() {
-    local docker_dir="$1"
+    local caddy_dir="$1"
     echo "Building custom Caddy image with Cloudflare DNS support..."
-    docker build -t "$CADDY_IMAGE" -f "$docker_dir/Caddy.Dockerfile" "$docker_dir"
+    docker build -t "$CADDY_IMAGE" -f "$caddy_dir/Dockerfile" "$caddy_dir"
 }
 
 restart_caddy_container() {
-    local docker_dir="$1"
+    local caddy_dir="$1"
     local caddy_data_dir="$2"
     echo "Restarting Caddy..."
     docker rm -f caddy 2>/dev/null || true
@@ -66,7 +66,7 @@ restart_caddy_container() {
         --network host \
         --restart=unless-stopped \
         -e CF_API_TOKEN="$CF_API_TOKEN" \
-        -v "$docker_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "$caddy_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
         -v "$caddy_data_dir:/data" \
         "$CADDY_IMAGE"
 }
@@ -296,8 +296,8 @@ fi
 # Rebuild and Restart Caddy
 # ============================================
 echo -e "${GREEN}Refreshing Caddy...${NC}"
-build_caddy_image "$PROJECT_ROOT/docker"
-restart_caddy_container "$PROJECT_ROOT/docker" "/var/lib/caddy"
+build_caddy_image "$PROJECT_ROOT/caddy"
+restart_caddy_container "$PROJECT_ROOT/caddy" "/var/lib/caddy"
 echo -e "${GREEN}Caddy refresh complete!${NC}"
 echo ""
 

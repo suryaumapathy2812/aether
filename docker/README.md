@@ -48,11 +48,16 @@ dynamically based on user activity.
 ```
 docker/
   .env.example                 # Environment template — copy to .env
-  Caddyfile                    # Caddy reverse proxy rules
   docker-compose.services.yml  # Postgres, MinIO, Dozzle
   ecosystem.config.js          # PM2 config (Dashboard + Orchestrator)
   setup.sh                     # Interactive VPS bootstrap script
   README.md                    # This file
+
+caddy/
+  Caddyfile                    # Production reverse proxy rules
+  Caddyfile.local              # Local development reverse proxy rules
+  Dockerfile                   # Custom Caddy image with Cloudflare DNS plugin
+  caddy-cloudflare/            # Patched Cloudflare DNS module for modern tokens
 ```
 
 ## Prerequisites
@@ -148,7 +153,7 @@ docker run -d \
   --name caddy \
   --network host \
   --restart=unless-stopped \
-  -v /opt/aether/docker/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /opt/aether/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
   -v /var/lib/caddy:/data \
   caddy:latest
 ```
@@ -162,7 +167,7 @@ Orchestrator (`:4000`) on localhost. It handles TLS automatically via Let's Encr
 
 | Variable | Used by | Description |
 |---|---|---|
-| `DOMAIN` | Caddyfile, setup.sh | Public domain (e.g., `aether.example.com`) |
+| `DOMAIN` | `caddy/Caddyfile`, `docker/setup.sh` | Public domain (e.g., `aether.example.com`) |
 | `POSTGRES_PASSWORD` | Compose, PM2 | Postgres password |
 | `DATABASE_URL` | Dashboard, Orchestrator | Full Postgres connection string |
 | `BETTER_AUTH_SECRET` | Dashboard | Auth token signing key |

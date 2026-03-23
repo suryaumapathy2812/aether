@@ -123,20 +123,20 @@ require_non_empty() {
 }
 
 build_caddy_image() {
-    local docker_dir="$1"
+    local caddy_dir="$1"
     echo "Building custom Caddy image with Cloudflare DNS support..."
-    docker build -t aether-caddy -f "$docker_dir/Caddy.Dockerfile" "$docker_dir"
+    docker build -t aether-caddy -f "$caddy_dir/Dockerfile" "$caddy_dir"
 }
 
 run_caddy_container() {
-    local docker_dir="$1"
+    local caddy_dir="$1"
     local caddy_data_dir="$2"
     docker run -d \
         --name caddy \
         --network host \
         --restart=unless-stopped \
         -e CF_API_TOKEN="$CF_API_TOKEN" \
-        -v "$docker_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "$caddy_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
         -v "$caddy_data_dir:/data" \
         aether-caddy
 }
@@ -548,10 +548,10 @@ docker rm -f caddy 2>/dev/null || true
 # Create Caddy data directory
 mkdir -p /var/lib/caddy
 
-build_caddy_image "$AETHER_DIR/docker"
+build_caddy_image "$AETHER_DIR/caddy"
 
 # Run Caddy via Docker (host networking so it can reach localhost:3000/4000)
-run_caddy_container "$AETHER_DIR/docker" "/var/lib/caddy"
+run_caddy_container "$AETHER_DIR/caddy" "/var/lib/caddy"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"

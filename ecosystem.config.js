@@ -61,8 +61,8 @@ module.exports = {
     {
       name: "aether-caddy",
       script: "caddy",
-      args: `run --config ${ROOT}/docker/Caddyfile.local`,
-      cwd: `${ROOT}/docker`,
+      args: `run --config ${ROOT}/caddy/Caddyfile.local`,
+      cwd: `${ROOT}/caddy`,
       interpreter: "none",
       autorestart: true,
       watch: false,
