@@ -16,10 +16,11 @@ import (
 	"strings"
 	"time"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 const maskedSecretValue = "__configured__"
@@ -29,6 +30,7 @@ type Handler struct {
 	orchestrator *tools.Orchestrator
 	plugins      *plugins.Manager
 	store        *db.Store
+	validator    *agentauth.Validator
 }
 
 type Options struct {
@@ -36,10 +38,11 @@ type Options struct {
 	Orchestrator *tools.Orchestrator
 	Plugins      *plugins.Manager
 	Store        *db.Store
+	Validator    *agentauth.Validator
 }
 
 func New(opts Options) *Handler {
-	return &Handler{registry: opts.Registry, orchestrator: opts.Orchestrator, plugins: opts.Plugins, store: opts.Store}
+	return &Handler{registry: opts.Registry, orchestrator: opts.Orchestrator, plugins: opts.Plugins, store: opts.Store, validator: opts.Validator}
 }
 
 func (h *Handler) EnsurePluginCronJobs(ctx context.Context) error {
@@ -284,6 +287,10 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if h.plugins == nil || h.store == nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "plugins api unavailable")
 		return
@@ -1169,5 +1176,3 @@ func pluginAuthDetails(manifest plugins.PluginManifest) (string, string, []map[s
 	}
 	return authType, authProvider, fields
 }
-
-

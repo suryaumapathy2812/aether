@@ -17,13 +17,85 @@ const API_BASE = "/api/go";
 // Set by SessionSync component which reads from useSession().
 
 let _sessionToken: string | null = null;
+let _directAgentConnection: DirectAgentConnection | null = null;
+let _directAgentPromise: Promise<DirectAgentConnection | null> | null = null;
+
+export interface DirectAgentConnection {
+  prefix: string;
+  baseUrl: string;
+  wsUrl: string;
+  directToken: string;
+  expiresAt: number;
+  agentId?: string;
+}
 
 export function setSessionToken(token: string | null) {
   _sessionToken = token;
+  if (!token) {
+    _directAgentConnection = null;
+    _directAgentPromise = null;
+  }
 }
 
 export function getSessionToken(): string | null {
   return _sessionToken;
+}
+
+export function getDirectAgentConnection(): DirectAgentConnection | null {
+  if (!_directAgentConnection) return null;
+  if (_directAgentConnection.expiresAt * 1000 <= Date.now() + 5 * 60 * 1000) {
+    return null;
+  }
+  return _directAgentConnection;
+}
+
+export async function ensureDirectAgentConnection(
+  force = false
+): Promise<DirectAgentConnection | null> {
+  if (!getSessionToken()) return null;
+  if (!force) {
+    const existing = getDirectAgentConnection();
+    if (existing) return existing;
+    if (_directAgentPromise) return _directAgentPromise;
+  }
+
+  _directAgentPromise = (async () => {
+    try {
+      const res = await fetchWithAuth("/api/agent/subdomain");
+      if (!res.ok) {
+        _directAgentConnection = null;
+        return null;
+      }
+      const payload = (await res.json()) as {
+        prefix: string;
+        base_url: string;
+        ws_url: string;
+        direct_token: string;
+        expires_at: number;
+        agent_id?: string;
+      };
+      if (!payload.base_url || !payload.ws_url || !payload.direct_token) {
+        _directAgentConnection = null;
+        return null;
+      }
+      _directAgentConnection = {
+        prefix: payload.prefix || "",
+        baseUrl: payload.base_url,
+        wsUrl: payload.ws_url,
+        directToken: payload.direct_token,
+        expiresAt: payload.expires_at,
+        agentId: payload.agent_id,
+      };
+      return _directAgentConnection;
+    } catch {
+      _directAgentConnection = null;
+      return null;
+    } finally {
+      _directAgentPromise = null;
+    }
+  })();
+
+  return _directAgentPromise;
 }
 
 // ── fetchWithAuth ──
@@ -93,6 +165,53 @@ export async function orchestratorFetch(
   return fetch(`${baseUrl}${path}`, { ...options, headers });
 }
 
+export async function directAgentFetch(
+  path: string,
+  options?: RequestInit
+): Promise<Response> {
+  const direct = await ensureDirectAgentConnection();
+  if (!direct) {
+    return fetchWithAuth(path, options);
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${direct.directToken}`,
+  };
+  const callerHeaders = options?.headers;
+  if (callerHeaders) {
+    if (callerHeaders instanceof Headers) {
+      callerHeaders.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(callerHeaders)) {
+      for (const [k, v] of callerHeaders) {
+        headers[k] = v;
+      }
+    } else {
+      Object.assign(headers, callerHeaders);
+    }
+  }
+  if (!headers["Content-Type"] && options?.body) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  try {
+    const response = await fetch(`${direct.baseUrl}${path}`, {
+      ...options,
+      headers,
+    });
+    if ([401, 502, 503, 504].includes(response.status)) {
+      if (response.status === 401) {
+        await ensureDirectAgentConnection(true);
+      }
+      return fetchWithAuth(path, options);
+    }
+    return response;
+  } catch {
+    return fetchWithAuth(path, options);
+  }
+}
+
 export function orchestratorWs(path: string, token?: string): WebSocket {
   const baseUrl = getOrchestratorBaseUrl();
   const protocol =
@@ -106,6 +225,17 @@ export function orchestratorWs(path: string, token?: string): WebSocket {
 
   const params = token ? `?token=${encodeURIComponent(token)}` : "";
   return new WebSocket(`${protocol}//${host}${baseUrl}${path}${params}`);
+}
+
+export function directAgentWs(path: string, direct?: DirectAgentConnection): WebSocket {
+  const connection = direct || getDirectAgentConnection();
+  if (!connection) {
+    throw new Error("Direct agent connection unavailable");
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return new WebSocket(
+    `${connection.wsUrl}${path}${separator}token=${encodeURIComponent(connection.directToken)}`
+  );
 }
 
 // ── Devices ──
@@ -176,12 +306,29 @@ export async function deleteDevice(deviceId: string): Promise<void> {
 // ── Typed JSON helper built on fetchWithAuth ──
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetchWithAuth(path, options);
+  const res = await agentFetch(path, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(extractErrorMessage(err, res.statusText));
   }
   return res.json();
+}
+
+const DIRECT_AGENT_PREFIXES = [
+  "/api/memory/",
+  "/api/preferences",
+  "/api/preferences/",
+  "/api/push/",
+  "/api/plugins",
+  "/api/plugins/",
+  "/api/skills/",
+];
+
+async function agentFetch(path: string, options?: RequestInit): Promise<Response> {
+  if (DIRECT_AGENT_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return directAgentFetch(path, options);
+  }
+  return fetchWithAuth(path, options);
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {

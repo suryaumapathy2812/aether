@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -30,23 +31,25 @@ const (
 )
 
 type Handler struct {
-	runtime *conversation.Runtime
-	builder *llm.ContextBuilder
-	memory  *memory.Service
-	store   *db.Store
-	limits  agentcfg.MediaLimitsConfig
-	notify  func(userID, eventType string, payload map[string]any)
+	runtime   *conversation.Runtime
+	builder   *llm.ContextBuilder
+	memory    *memory.Service
+	store     *db.Store
+	limits    agentcfg.MediaLimitsConfig
+	notify    func(userID, eventType string, payload map[string]any)
+	validator *agentauth.Validator
 
 	upgrader websocket.Upgrader
 }
 
 type Options struct {
-	Runtime *conversation.Runtime
-	Builder *llm.ContextBuilder
-	Memory  *memory.Service
-	Store   *db.Store
-	Limits  agentcfg.MediaLimitsConfig
-	Notify  func(userID, eventType string, payload map[string]any)
+	Runtime   *conversation.Runtime
+	Builder   *llm.ContextBuilder
+	Memory    *memory.Service
+	Store     *db.Store
+	Limits    agentcfg.MediaLimitsConfig
+	Notify    func(userID, eventType string, payload map[string]any)
+	Validator *agentauth.Validator
 }
 
 type envelope struct {
@@ -100,12 +103,13 @@ type connectionState struct {
 
 func New(opts Options) *Handler {
 	return &Handler{
-		runtime: opts.Runtime,
-		builder: opts.Builder,
-		memory:  opts.Memory,
-		store:   opts.Store,
-		limits:  opts.Limits,
-		notify:  opts.Notify,
+		runtime:   opts.Runtime,
+		builder:   opts.Builder,
+		memory:    opts.Memory,
+		store:     opts.Store,
+		limits:    opts.Limits,
+		notify:    opts.Notify,
+		validator: opts.Validator,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -124,9 +128,10 @@ func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing token", http.StatusUnauthorized)
 		return
 	}
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	if userID == "" {
-		userID = "default"
+	userID, ok := h.authorizeRequest(r, token)
+	if !ok {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
 	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
@@ -208,6 +213,21 @@ func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
 			h.writeError(conn, writeMu, state, in.SessionID, in.TurnID, "validation", "unsupported event type")
 		}
 	}
+}
+
+func (h *Handler) authorizeRequest(r *http.Request, token string) (string, bool) {
+	if h.validator != nil && (agentauth.RequiresDirectToken(r) || agentauth.IsDirectToken(token)) {
+		claims, err := h.validator.ValidateRequest(r)
+		if err != nil {
+			return "", false
+		}
+		return claims.UserID, true
+	}
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if userID == "" {
+		userID = "default"
+	}
+	return userID, true
 }
 
 func (h *Handler) validateEnvelope(state *connectionState, in envelope) error {

@@ -48,7 +48,7 @@ func New(cfg config.Config, db *pgxpool.Pool, mgr *agent.Manager) *Server {
 	return &Server{
 		cfg:      cfg,
 		db:       db,
-		auth:     auth.New(db, cfg.AgentSecret),
+		auth:     auth.New(db, cfg.AgentSecret, cfg.AgentDirectTokenSecret),
 		agentMgr: mgr,
 		httpClient: &http.Client{
 			Timeout: cfg.ProxyTimeout,
@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/agents/", s.handleAgentsByID)
 
 	mux.HandleFunc("/api/agent/ready", s.requireIdentity(s.handleAgentReady))
+	mux.HandleFunc("/api/agent/subdomain", s.requireIdentity(s.handleAgentSubdomain))
 	mux.HandleFunc("/api/metrics/latency", s.requireIdentity(s.handleLatency))
 	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
 	mux.HandleFunc("/api/ws/conversation", s.requireIdentity(s.handleConversationWS))
@@ -386,6 +387,41 @@ func (s *Server) handleAgentReady(w http.ResponseWriter, r *http.Request, id aut
 	}
 	defer resp.Body.Close()
 	writeJSON(w, http.StatusOK, map[string]any{"ready": resp.StatusCode == http.StatusOK})
+}
+
+func (s *Server) handleAgentSubdomain(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	_, err := s.resolveAgent(r.Context(), id.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No agent assigned")
+		return
+	}
+	prefix, agentID, err := s.lookupAgentDirectInfo(r.Context(), id.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	baseURL, wsURL, err := s.directAgentURLs(prefix)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	token, claims, err := s.auth.MintDirectToken(id.UserID, prefix, agentID, time.Hour)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"prefix":       prefix,
+		"base_url":     baseURL,
+		"ws_url":       wsURL,
+		"direct_token": token,
+		"expires_at":   claims.ExpiresAt,
+		"agent_id":     agentID,
+	})
 }
 
 func (s *Server) handleV1Proxy(w http.ResponseWriter, r *http.Request, id auth.Identity) {
@@ -866,6 +902,52 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func (s *Server) lookupAgentDirectInfo(ctx context.Context, userID string) (string, string, error) {
+	var prefix string
+	var agentID string
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(subdomain_prefix, ''), COALESCE(id, '')
+		FROM agents
+		WHERE user_id = $1
+		LIMIT 1
+	`, userID).Scan(&prefix, &agentID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if strings.TrimSpace(s.cfg.LocalAgentURL) != "" {
+				return "local", "", nil
+			}
+			return "", "", fmt.Errorf("agent not found")
+		}
+		return "", "", err
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return "", "", fmt.Errorf("agent subdomain is not ready")
+	}
+	return prefix, strings.TrimSpace(agentID), nil
+}
+
+func (s *Server) directAgentURLs(prefix string) (string, string, error) {
+	if local := strings.TrimSpace(s.cfg.LocalAgentURL); local != "" {
+		u, err := url.Parse(local)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid local agent url")
+		}
+		base := strings.TrimRight(u.String(), "/")
+		wsScheme := "ws"
+		if strings.EqualFold(u.Scheme, "https") {
+			wsScheme = "wss"
+		}
+		return base, wsScheme + "://" + u.Host, nil
+	}
+	domain := strings.Trim(strings.TrimSpace(s.cfg.DirectAgentDomain), ".")
+	if domain == "" {
+		return "", "", fmt.Errorf("direct agent domain is not configured")
+	}
+	host := strings.TrimSpace(prefix) + "." + domain
+	return "https://" + host, "wss://" + host, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

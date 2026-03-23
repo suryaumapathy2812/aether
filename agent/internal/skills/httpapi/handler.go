@@ -6,23 +6,26 @@ import (
 	"strconv"
 	"strings"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 )
 
 type Handler struct {
-	manager *skills.Manager
-	store   *db.Store
+	manager   *skills.Manager
+	store     *db.Store
+	validator *agentauth.Validator
 }
 
 type Options struct {
-	Manager *skills.Manager
-	Store   *db.Store
+	Manager   *skills.Manager
+	Store     *db.Store
+	Validator *agentauth.Validator
 }
 
 func New(opts Options) *Handler {
-	return &Handler{manager: opts.Manager, store: opts.Store}
+	return &Handler{manager: opts.Manager, store: opts.Store, validator: opts.Validator}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -33,6 +36,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleMarketplaceSearch(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if r.Method != http.MethodGet {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -61,6 +68,10 @@ func (h *Handler) handleMarketplaceSearch(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handleInstalled(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if r.Method != http.MethodGet {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -79,6 +90,10 @@ func (h *Handler) handleInstalled(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleInstall(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -121,6 +136,10 @@ func (h *Handler) handleInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRemove(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -150,5 +169,3 @@ func (h *Handler) handleRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name})
 }
-
-

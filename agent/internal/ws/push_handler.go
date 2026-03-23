@@ -5,19 +5,21 @@ import (
 	"net/http"
 	"strings"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 // PushHandler serves REST endpoints for push subscription management.
 type PushHandler struct {
-	store  *db.Store
-	sender *PushSender
+	store     *db.Store
+	sender    *PushSender
+	validator *agentauth.Validator
 }
 
 // NewPushHandler creates a push handler.
-func NewPushHandler(store *db.Store, sender *PushSender) *PushHandler {
-	return &PushHandler{store: store, sender: sender}
+func NewPushHandler(store *db.Store, sender *PushSender, validator *agentauth.Validator) *PushHandler {
+	return &PushHandler{store: store, sender: sender, validator: validator}
 }
 
 // RegisterRoutes registers push-related HTTP endpoints.
@@ -59,14 +61,16 @@ func (h *PushHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.UserID) == "" {
-		req.UserID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, req.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	if strings.TrimSpace(req.Subscription.Endpoint) == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "subscription endpoint is required")
 		return
 	}
-	err := h.store.SavePushSubscription(r.Context(), req.UserID, db.PushSubscriptionRecord{
+	err = h.store.SavePushSubscription(r.Context(), userID, db.PushSubscriptionRecord{
 		Endpoint:  req.Subscription.Endpoint,
 		KeyP256dh: req.Subscription.Keys.P256dh,
 		KeyAuth:   req.Subscription.Keys.Auth,
@@ -87,14 +91,16 @@ func (h *PushHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.UserID) == "" {
-		req.UserID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, req.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "endpoint is required")
 		return
 	}
-	err := h.store.DeletePushSubscription(r.Context(), req.UserID, req.Endpoint)
+	err = h.store.DeletePushSubscription(r.Context(), userID, req.Endpoint)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -116,9 +122,10 @@ func (h *PushHandler) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	if userID == "" {
-		userID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, r.URL.Query().Get("user_id"))
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 
 	subs, err := h.store.GetPushSubscriptions(r.Context(), userID)
@@ -166,5 +173,3 @@ func (h *PushHandler) handleTestPush(w http.ResponseWriter, r *http.Request) {
 		"results":       results,
 	})
 }
-
-

@@ -6,18 +6,21 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 )
 
 // Handler serves the WebSocket notification endpoint.
 type Handler struct {
-	hub      *Hub
-	upgrader websocket.Upgrader
+	hub       *Hub
+	validator *agentauth.Validator
+	upgrader  websocket.Upgrader
 }
 
 // NewHandler creates a handler backed by the given hub.
-func NewHandler(hub *Hub) *Handler {
+func NewHandler(hub *Hub, validator *agentauth.Validator) *Handler {
 	return &Handler{
-		hub: hub,
+		hub:       hub,
+		validator: validator,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -33,9 +36,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
-	// The orchestrator proxy validates auth before forwarding to the agent.
-	// Here we just require a non-empty token as a guard against accidental
-	// direct connections bypassing the proxy.
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
 		http.Error(w, "missing token", http.StatusUnauthorized)
@@ -43,6 +43,14 @@ func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if h.validator != nil && (agentauth.RequiresDirectToken(r) || agentauth.IsDirectToken(token)) {
+		claims, err := h.validator.ValidateRequest(r)
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		userID = claims.UserID
+	}
 	if userID == "" {
 		userID = "default"
 	}

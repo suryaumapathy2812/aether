@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
@@ -13,11 +14,12 @@ import (
 var modelNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-./]+$`)
 
 type PreferencesHandler struct {
-	store *db.Store
+	store     *db.Store
+	validator *agentauth.Validator
 }
 
-func NewPreferencesHandler(store *db.Store) *PreferencesHandler {
-	return &PreferencesHandler{store: store}
+func NewPreferencesHandler(store *db.Store, validator *agentauth.Validator) *PreferencesHandler {
+	return &PreferencesHandler{store: store, validator: validator}
 }
 
 func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -32,11 +34,11 @@ func (h *PreferencesHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, r.URL.Query().Get("user_id"))
 	key := strings.TrimSpace(r.URL.Query().Get("key"))
-
-	if userID == "" {
-		userID = "default"
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	if key == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "key is required")
@@ -68,9 +70,10 @@ func (h *PreferencesHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, req.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	key := strings.TrimSpace(req.Key)
 	value := strings.TrimSpace(req.Value)
@@ -87,7 +90,7 @@ func (h *PreferencesHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err := h.store.SaveUserPreference(r.Context(), userID, key, value)
+	err = h.store.SaveUserPreference(r.Context(), userID, key, value)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -111,9 +114,10 @@ func (h *PreferencesHandler) handleDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, req.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	key := strings.TrimSpace(req.Key)
 
@@ -122,7 +126,7 @@ func (h *PreferencesHandler) handleDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	err := h.store.DeleteUserPreference(r.Context(), userID, key)
+	err = h.store.DeleteUserPreference(r.Context(), userID, key)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

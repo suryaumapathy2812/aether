@@ -1,11 +1,11 @@
-import { fetchWithAuth } from "@/lib/api";
+import { directAgentFetch } from "@/lib/api";
 
 export async function getUserPreference(
   userId: string,
   key: string
 ): Promise<string | null> {
   try {
-    const res = await fetchWithAuth(
+    const res = await directAgentFetch(
       `/api/preferences/get?user_id=${encodeURIComponent(userId)}&key=${encodeURIComponent(key)}`
     );
     if (!res.ok) {
@@ -25,7 +25,7 @@ export async function setUserPreference(
   value: string
 ): Promise<boolean> {
   try {
-    const res = await fetchWithAuth("/api/preferences/set", {
+    const res = await directAgentFetch("/api/preferences/set", {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,
@@ -44,7 +44,7 @@ export async function deleteUserPreference(
   key: string
 ): Promise<boolean> {
   try {
-    const res = await fetchWithAuth("/api/preferences/delete", {
+    const res = await directAgentFetch("/api/preferences/delete", {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,

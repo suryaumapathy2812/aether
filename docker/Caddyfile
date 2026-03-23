@@ -25,6 +25,13 @@ aether.suryaumapathy.in {
     }
 }
 
+*.aether.suryaumapathy.in {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+    respond "Agent not found" 404
+}
+
 # Public MinIO S3 API endpoint (used by presigned upload/download URLs)
 s3.aether.suryaumapathy.in {
     reverse_proxy localhost:9000 {

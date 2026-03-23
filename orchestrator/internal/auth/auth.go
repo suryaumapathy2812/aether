@@ -17,12 +17,13 @@ type Identity struct {
 }
 
 type Authenticator struct {
-	db     *pgxpool.Pool
-	secret string
+	db           *pgxpool.Pool
+	secret       string
+	directSecret string
 }
 
-func New(db *pgxpool.Pool, secret string) *Authenticator {
-	return &Authenticator{db: db, secret: strings.TrimSpace(secret)}
+func New(db *pgxpool.Pool, secret string, directSecret string) *Authenticator {
+	return &Authenticator{db: db, secret: strings.TrimSpace(secret), directSecret: strings.TrimSpace(directSecret)}
 }
 
 func (a *Authenticator) IdentityFromRequest(r *http.Request) (Identity, error) {

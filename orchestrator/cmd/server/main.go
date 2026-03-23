@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/agent"
+	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/caddy"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/config"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/observability"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/schema"
@@ -49,40 +50,46 @@ func main() {
 	defer stop()
 
 	var mgr *agent.Manager
+	routeManager := caddy.NewRouteManager(cfg.CaddyAdminURL, cfg.DirectAgentDomain)
 	if cfg.LocalAgentURL == "" {
 		mgr, err = agent.NewManager(ctx, pool, agent.ManagerConfig{
-			Image:         cfg.AgentImage,
-			Network:       cfg.AgentNetwork,
-			IdleTimeout:   cfg.AgentIdleTimeout,
-			AgentPort:     cfg.AgentPort,
-			HealthTimeout: cfg.AgentHealthTimeout,
-			AdminToken:    cfg.AgentSecret,
-			OpenAIAPIKey:  cfg.AgentOpenAIAPIKey,
-			OpenAIBaseURL: cfg.AgentOpenAIBaseURL,
-			OpenAIModel:   cfg.AgentOpenAIModel,
-			AgentStateKey: cfg.AgentStateKey,
-			AssetsRoot:    cfg.AgentAssetsRoot,
-			VapidPublic:   cfg.VapidPublicKey,
-			VapidPrivate:  cfg.VapidPrivateKey,
-			VapidSubject:  cfg.VapidSubject,
-			S3Bucket:      cfg.S3Bucket,
-			S3Template:    cfg.S3BucketTemplate,
-			S3Region:      cfg.S3Region,
-			S3AccessKey:   cfg.S3AccessKeyID,
-			S3SecretKey:   cfg.S3SecretAccessKey,
-			S3Endpoint:    cfg.S3Endpoint,
-			S3PublicBase:  cfg.S3PublicBaseURL,
-			S3ForcePath:   cfg.S3ForcePathStyle,
-			S3PutTTL:      cfg.S3PutURLTTLSeconds,
-			S3GetTTL:      cfg.S3GetURLTTLSeconds,
-			UpdateRepo:    cfg.AgentUpdateRepo,
-			UpdateToken:   cfg.AgentUpdateToken,
-			PublicBaseURL: strings.TrimSpace(os.Getenv("AETHER_PUBLIC_BASE_URL")),
-			OAuthEnvVars:  config.CollectOAuthEnvVars(),
+			Image:             cfg.AgentImage,
+			Network:           cfg.AgentNetwork,
+			IdleTimeout:       cfg.AgentIdleTimeout,
+			AgentPort:         cfg.AgentPort,
+			HealthTimeout:     cfg.AgentHealthTimeout,
+			AdminToken:        cfg.AgentSecret,
+			DirectTokenSecret: cfg.AgentDirectTokenSecret,
+			OpenAIAPIKey:      cfg.AgentOpenAIAPIKey,
+			OpenAIBaseURL:     cfg.AgentOpenAIBaseURL,
+			OpenAIModel:       cfg.AgentOpenAIModel,
+			AgentStateKey:     cfg.AgentStateKey,
+			AssetsRoot:        cfg.AgentAssetsRoot,
+			VapidPublic:       cfg.VapidPublicKey,
+			VapidPrivate:      cfg.VapidPrivateKey,
+			VapidSubject:      cfg.VapidSubject,
+			S3Bucket:          cfg.S3Bucket,
+			S3Template:        cfg.S3BucketTemplate,
+			S3Region:          cfg.S3Region,
+			S3AccessKey:       cfg.S3AccessKeyID,
+			S3SecretKey:       cfg.S3SecretAccessKey,
+			S3Endpoint:        cfg.S3Endpoint,
+			S3PublicBase:      cfg.S3PublicBaseURL,
+			S3ForcePath:       cfg.S3ForcePathStyle,
+			S3PutTTL:          cfg.S3PutURLTTLSeconds,
+			S3GetTTL:          cfg.S3GetURLTTLSeconds,
+			UpdateRepo:        cfg.AgentUpdateRepo,
+			UpdateToken:       cfg.AgentUpdateToken,
+			PublicBaseURL:     strings.TrimSpace(os.Getenv("AETHER_PUBLIC_BASE_URL")),
+			RouteManager:      routeManager,
+			OAuthEnvVars:      config.CollectOAuthEnvVars(),
 		})
 		if err != nil {
 			log.Printf("agent manager disabled: %v", err)
 		} else {
+			if err := routeManager.SyncRoutes(ctx, pool); err != nil {
+				log.Printf("caddy route sync warning: %v", err)
+			}
 			go mgr.RunIdleReaper(ctx)
 		}
 	}

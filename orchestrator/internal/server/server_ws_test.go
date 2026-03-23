@@ -6,6 +6,7 @@ import (
 
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/agent"
 	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/auth"
+	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/config"
 )
 
 func TestBuildAgentWSURL_InjectsIdentityAndPreservesQuery(t *testing.T) {
@@ -64,5 +65,35 @@ func TestBuildAgentWSURL_LeavesTokenUnsetWhenMissing(t *testing.T) {
 	}
 	if _, ok := q["token"]; ok {
 		t.Fatal("expected token query to be omitted")
+	}
+}
+
+func TestDirectAgentURLsUsesConfiguredDomain(t *testing.T) {
+	t.Parallel()
+	s := &Server{cfg: config.Config{DirectAgentDomain: "aether.example.com"}}
+	baseURL, wsURL, err := s.directAgentURLs("abc12345")
+	if err != nil {
+		t.Fatalf("directAgentURLs: %v", err)
+	}
+	if baseURL != "https://abc12345.aether.example.com" {
+		t.Fatalf("unexpected base url: %q", baseURL)
+	}
+	if wsURL != "wss://abc12345.aether.example.com" {
+		t.Fatalf("unexpected ws url: %q", wsURL)
+	}
+}
+
+func TestDirectAgentURLsUsesLocalAgentURL(t *testing.T) {
+	t.Parallel()
+	s := &Server{cfg: config.Config{LocalAgentURL: "http://localhost:8000"}}
+	baseURL, wsURL, err := s.directAgentURLs("local")
+	if err != nil {
+		t.Fatalf("directAgentURLs: %v", err)
+	}
+	if baseURL != "http://localhost:8000" {
+		t.Fatalf("unexpected base url: %q", baseURL)
+	}
+	if wsURL != "ws://localhost:8000" {
+		t.Fatalf("unexpected ws url: %q", wsURL)
 	}
 }

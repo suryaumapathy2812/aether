@@ -1,5 +1,5 @@
 import { DefaultChatTransport } from "ai";
-import { getSessionToken } from "./api";
+import { getDirectAgentConnection, getSessionToken } from "./api";
 
 /**
  * AetherChatTransport connects useChat() to our /v1/conversations/turn endpoint.
@@ -20,13 +20,18 @@ export function createAetherTransport(opts: {
   userId: string;
   sessionId?: string;
 }) {
+  const direct = getDirectAgentConnection();
   return new DefaultChatTransport({
-    api: "/api/go/v1/conversations/turn",
+    api: direct ? `${direct.baseUrl}/v1/conversations/turn` : "/api/go/v1/conversations/turn",
     credentials: "include",
     headers: () => {
       const token = getSessionToken();
       const h: Record<string, string> = {};
-      if (token) h["Authorization"] = `Bearer ${token}`;
+      if (direct?.directToken) {
+        h["Authorization"] = `Bearer ${direct.directToken}`;
+      } else if (token) {
+        h["Authorization"] = `Bearer ${token}`;
+      }
       return h;
     },
     prepareSendMessagesRequest: async ({ messages, body }) => {

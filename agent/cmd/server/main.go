@@ -15,6 +15,7 @@ import (
 	"time"
 
 	adminhttp "github.com/suryaumapathy2812/core-ai/agent/internal/admin/httpapi"
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels"
 	channelshttp "github.com/suryaumapathy2812/core-ai/agent/internal/channels/httpapi"
@@ -142,6 +143,7 @@ func main() {
 		log.Fatalf("failed to create workspace dir: %v", err)
 	}
 	pushDeliverer := ws.NewPushDeliverer(store, pushSender, wsHub)
+	directValidator := agentauth.NewValidator(cfg.DirectTokenSecret, cfg.Channels.AgentID)
 
 	// ── Question system & WS notify ────────────────────────────────
 	// Shared WS notify callback used by both the conversation handler and
@@ -228,26 +230,26 @@ func main() {
 		Model: cfg.LLM.Model, MediaLimits: cfg.Media,
 	})
 	llmHandler.RegisterRoutes(mux)
-	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: wsNotify})
+	convHandler := convhttp.New(convhttp.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: wsNotify, Validator: directValidator})
 	// Wire the question asker bridge now that the handler (and its question manager) exist.
 	questionAskerHolder.inner = convhttp.NewQuestionAskerBridge(convHandler.QuestionManager(), wsNotify)
 	convHandler.RegisterRoutes(mux)
-	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Store: store, Limits: cfg.Media, Notify: wsNotify})
+	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Store: store, Limits: cfg.Media, Notify: wsNotify, Validator: directValidator})
 	convWSHandler.RegisterRoutes(mux)
-	dataHandler := dataapi.New(store, mediaService)
+	dataHandler := dataapi.New(dataapi.Options{Store: store, Media: mediaService, Validator: directValidator})
 	dataHandler.RegisterRoutes(mux)
-	skillsHandler := skillshttp.New(skillshttp.Options{Manager: skillsManager, Store: store})
+	skillsHandler := skillshttp.New(skillshttp.Options{Manager: skillsManager, Store: store, Validator: directValidator})
 	skillsHandler.RegisterRoutes(mux)
 
 	// WebSocket + Web Push endpoints
-	wsHandler := ws.NewHandler(wsHub)
+	wsHandler := ws.NewHandler(wsHub, directValidator)
 	wsHandler.RegisterRoutes(mux)
-	pushHandler := ws.NewPushHandler(store, pushSender)
+	pushHandler := ws.NewPushHandler(store, pushSender, directValidator)
 	pushHandler.RegisterRoutes(mux)
-	preferencesHandler := ws.NewPreferencesHandler(store)
+	preferencesHandler := ws.NewPreferencesHandler(store, directValidator)
 	preferencesHandler.RegisterRoutes(mux)
 
-	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store})
+	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store, Validator: directValidator})
 	handler.RegisterRoutes(mux)
 	if err := handler.EnsurePluginCronJobs(context.Background()); err != nil {
 		log.Printf("plugin cron schedule warning: %v", err)

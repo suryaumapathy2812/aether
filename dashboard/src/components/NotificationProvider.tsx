@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
-import { orchestratorWs } from "@/lib/api";
+import { directAgentWs, ensureDirectAgentConnection, orchestratorWs } from "@/lib/api";
 
 // ── Types ──
 
@@ -258,11 +258,11 @@ export default function NotificationProvider({
       reconnectAttemptsRef.current = attempt + 1;
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null;
-        openSocket();
+        void openSocket();
       }, delay);
     }
 
-    function openSocket() {
+    async function openSocket() {
       if (!mountedRef.current) return;
       if (wsRef.current) {
         wsRef.current.onclose = null;
@@ -270,7 +270,10 @@ export default function NotificationProvider({
         wsRef.current = null;
       }
 
-      const socket = orchestratorWs("/api/ws/notifications", token || undefined);
+      const direct = await ensureDirectAgentConnection();
+      const socket = direct
+        ? directAgentWs("/ws/notifications", direct)
+        : orchestratorWs("/api/ws/notifications", token || undefined);
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -301,7 +304,7 @@ export default function NotificationProvider({
       };
     }
 
-    openSocket();
+    void openSocket();
 
     return () => {
       mountedRef.current = false;

@@ -12,14 +12,15 @@ import (
 	"sync"
 	"time"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 type Handler struct {
@@ -32,16 +33,18 @@ type Handler struct {
 	notify    func(userID, eventType string, payload map[string]any)
 	status    *sessionStatusTracker
 	questions *questionManager
+	validator *agentauth.Validator
 }
 
 type Options struct {
-	Runtime *conversation.Runtime
-	Builder *llm.ContextBuilder
-	Memory  *memory.Service
-	Media   *media.Service
-	Store   *db.Store
-	Limits  agentcfg.MediaLimitsConfig
-	Notify  func(userID, eventType string, payload map[string]any)
+	Runtime   *conversation.Runtime
+	Builder   *llm.ContextBuilder
+	Memory    *memory.Service
+	Media     *media.Service
+	Store     *db.Store
+	Limits    agentcfg.MediaLimitsConfig
+	Notify    func(userID, eventType string, payload map[string]any)
+	Validator *agentauth.Validator
 }
 
 func New(opts Options) *Handler {
@@ -55,6 +58,7 @@ func New(opts Options) *Handler {
 		notify:    opts.Notify,
 		status:    newSessionStatusTracker(),
 		questions: newQuestionManager(),
+		validator: opts.Validator,
 	}
 }
 
@@ -136,7 +140,11 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := firstNonEmpty(strings.TrimSpace(req.User), strings.TrimSpace(req.UserID), "default")
+	userID, ok := h.resolveUserID(r, strings.TrimSpace(req.User), strings.TrimSpace(req.UserID))
+	if !ok {
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
 	sessionID := strings.TrimSpace(req.Session)
 
 	// Session management: validate existing or create new.
@@ -325,6 +333,14 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+func (h *Handler) resolveUserID(r *http.Request, candidates ...string) (string, bool) {
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, candidates...)
+	if err != nil {
+		return "", false
+	}
+	return userID, true
+}
+
 func latestUserTurnMessage(messages []map[string]any) (map[string]any, error) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		role, _ := messages[i]["role"].(string)
@@ -429,9 +445,6 @@ func extractToolCallIDs(msg map[string]any) []string {
 	}
 	return ids
 }
-
-
-
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {

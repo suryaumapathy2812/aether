@@ -58,6 +58,7 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 			id TEXT PRIMARY KEY,
 			user_id TEXT UNIQUE,
 			container_id TEXT,
+			subdomain_prefix TEXT,
 			host TEXT NOT NULL,
 			port INTEGER NOT NULL,
 			status TEXT DEFAULT 'starting',
@@ -67,8 +68,10 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 		);
 
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS subdomain_prefix TEXT;
 
 		CREATE INDEX IF NOT EXISTS idx_agents_user_status ON agents(user_id, status, last_health DESC);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_subdomain_prefix ON agents(subdomain_prefix) WHERE subdomain_prefix IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_session_token_expires ON session(token, expires_at);
 		CREATE INDEX IF NOT EXISTS idx_devices_token ON devices(token);
 		CREATE INDEX IF NOT EXISTS idx_devices_user_type ON devices(user_id, device_type, plugin_name);

@@ -26,6 +26,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/suryaumapathy2812/core-ai/orchestrator/internal/caddy"
 )
 
 type Target struct {
@@ -34,12 +35,13 @@ type Target struct {
 }
 
 type ManagerConfig struct {
-	Image         string
-	Network       string
-	IdleTimeout   time.Duration
-	AgentPort     int
-	HealthTimeout time.Duration
-	AdminToken    string
+	Image             string
+	Network           string
+	IdleTimeout       time.Duration
+	AgentPort         int
+	HealthTimeout     time.Duration
+	AdminToken        string
+	DirectTokenSecret string
 
 	OpenAIAPIKey  string
 	OpenAIBaseURL string
@@ -66,6 +68,7 @@ type ManagerConfig struct {
 	// from AETHER_PUBLIC_BASE_URL. Passed to agent containers so the agent
 	// can construct webhook callback URLs for Telegram, WhatsApp, etc.
 	PublicBaseURL string
+	RouteManager  *caddy.RouteManager
 
 	// OAuthEnvVars holds "KEY=VALUE" pairs for OAuth provider credentials
 	// (e.g. GOOGLE_CLIENT_ID=…, SPOTIFY_CLIENT_SECRET=…) that are forwarded
@@ -85,12 +88,13 @@ type Manager struct {
 }
 
 type record struct {
-	ID          string
-	UserID      string
-	ContainerID string
-	Host        string
-	Port        int
-	Status      string
+	ID              string
+	UserID          string
+	ContainerID     string
+	SubdomainPrefix string
+	Host            string
+	Port            int
+	Status          string
 }
 
 func NewManager(ctx context.Context, db *pgxpool.Pool, cfg ManagerConfig) (*Manager, error) {
@@ -151,6 +155,11 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 		return Target{}, err
 	}
 	if err == nil {
+		prefix, err := m.ensureSubdomainPrefix(ctx, userID, rec.SubdomainPrefix)
+		if err != nil {
+			return Target{}, err
+		}
+		rec.SubdomainPrefix = prefix
 		target, ok, e := m.ensureRecordRunning(ctx, rec)
 		if e != nil {
 			return Target{}, e
@@ -188,20 +197,28 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 	}
 
 	agentID := agentIDForUser(userID)
+	prefix, err := m.ensureSubdomainPrefix(ctx, userID, "")
+	if err != nil {
+		return Target{}, err
+	}
 	_, err = m.db.Exec(ctx, `
-		INSERT INTO agents (id, user_id, container_id, host, port, status, registered_at, last_health, stopped_at)
-		VALUES ($1, $2, $3, $4, $5, 'running', now(), now(), NULL)
+		INSERT INTO agents (id, user_id, container_id, subdomain_prefix, host, port, status, registered_at, last_health, stopped_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'running', now(), now(), NULL)
 		ON CONFLICT (user_id) DO UPDATE SET
 			id = EXCLUDED.id,
 			container_id = EXCLUDED.container_id,
+			subdomain_prefix = COALESCE(NULLIF(agents.subdomain_prefix, ''), EXCLUDED.subdomain_prefix),
 			host = EXCLUDED.host,
 			port = EXCLUDED.port,
 			status = 'running',
 			last_health = now(),
 			stopped_at = NULL
-	`, agentID, userID, ctrID, target.Host, target.Port)
+	`, agentID, userID, ctrID, prefix, target.Host, target.Port)
 	if err != nil {
 		return Target{}, err
+	}
+	if err := m.syncDirectRoute(prefix, target); err != nil {
+		log.Printf("direct route sync warning (new provision): user=%s prefix=%s err=%v", userID, prefix, err)
 	}
 
 	m.RecordActivity(userID)
@@ -262,6 +279,9 @@ func (m *Manager) StopForUser(ctx context.Context, userID string) error {
 	}
 	if strings.TrimSpace(rec.ContainerID) == "" {
 		_, _ = m.db.Exec(ctx, `UPDATE agents SET status = 'stopped', stopped_at = now() WHERE user_id = $1`, userID)
+		if err := m.removeDirectRoute(rec.SubdomainPrefix); err != nil {
+			log.Printf("direct route remove warning (no container): user=%s prefix=%s err=%v", userID, rec.SubdomainPrefix, err)
+		}
 		return nil
 	}
 
@@ -270,6 +290,9 @@ func (m *Manager) StopForUser(ctx context.Context, userID string) error {
 	}
 
 	_, err = m.db.Exec(ctx, `UPDATE agents SET status = 'stopped', last_health = now(), stopped_at = now() WHERE user_id = $1`, userID)
+	if routeErr := m.removeDirectRoute(rec.SubdomainPrefix); routeErr != nil {
+		log.Printf("direct route remove warning: user=%s prefix=%s err=%v", userID, rec.SubdomainPrefix, routeErr)
+	}
 	m.mu.Lock()
 	delete(m.lastActive, userID)
 	m.mu.Unlock()
@@ -327,6 +350,9 @@ func (m *Manager) ensureRecordRunning(ctx context.Context, rec record) (Target, 
 		SET host = $2, port = $3, status = 'running', last_health = now(), stopped_at = NULL
 		WHERE user_id = $1
 	`, rec.UserID, host, port)
+	if err := m.syncDirectRoute(rec.SubdomainPrefix, Target{Host: host, Port: port}); err != nil {
+		log.Printf("direct route sync warning (existing agent): user=%s prefix=%s err=%v", rec.UserID, rec.SubdomainPrefix, err)
+	}
 
 	return Target{Host: host, Port: port}, true, nil
 }
@@ -372,6 +398,9 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 	}
 	if strings.TrimSpace(m.cfg.AdminToken) != "" {
 		env = append(env, "AGENT_ADMIN_TOKEN="+strings.TrimSpace(m.cfg.AdminToken))
+	}
+	if strings.TrimSpace(m.cfg.DirectTokenSecret) != "" {
+		env = append(env, "AGENT_DIRECT_TOKEN_SECRET="+strings.TrimSpace(m.cfg.DirectTokenSecret))
 	}
 	if m.cfg.OpenAIAPIKey != "" {
 		env = append(env, "OPENAI_API_KEY="+m.cfg.OpenAIAPIKey)
@@ -650,11 +679,11 @@ func (m *Manager) detectCurrentNetwork(ctx context.Context) (string, error) {
 func (m *Manager) loadRecord(ctx context.Context, userID string) (record, error) {
 	var rec record
 	err := m.db.QueryRow(ctx, `
-		SELECT id, user_id, COALESCE(container_id,''), host, port, COALESCE(status,'')
+		SELECT id, user_id, COALESCE(container_id,''), COALESCE(subdomain_prefix,''), host, port, COALESCE(status,'')
 		FROM agents
 		WHERE user_id = $1
 		LIMIT 1
-	`, userID).Scan(&rec.ID, &rec.UserID, &rec.ContainerID, &rec.Host, &rec.Port, &rec.Status)
+	`, userID).Scan(&rec.ID, &rec.UserID, &rec.ContainerID, &rec.SubdomainPrefix, &rec.Host, &rec.Port, &rec.Status)
 	return rec, err
 }
 
@@ -681,4 +710,42 @@ func containerNameForUser(userID string) string {
 
 func agentIDForUser(userID string) string {
 	return "managed-" + shortHash(userID)
+}
+
+func subdomainPrefixForUser(userID string) string {
+	hash := shortHash(userID)
+	if len(hash) >= 8 {
+		return hash[:8]
+	}
+	return hash
+}
+
+func (m *Manager) ensureSubdomainPrefix(ctx context.Context, userID, existing string) (string, error) {
+	prefix := strings.TrimSpace(existing)
+	if prefix == "" {
+		prefix = subdomainPrefixForUser(userID)
+	}
+	_, err := m.db.Exec(ctx, `
+		UPDATE agents
+		SET subdomain_prefix = $2
+		WHERE user_id = $1 AND (subdomain_prefix IS NULL OR subdomain_prefix = '')
+	`, userID, prefix)
+	if err != nil {
+		return "", err
+	}
+	return prefix, nil
+}
+
+func (m *Manager) syncDirectRoute(prefix string, target Target) error {
+	if m.cfg.RouteManager == nil {
+		return nil
+	}
+	return m.cfg.RouteManager.AddRoute(prefix, target.Host, target.Port)
+}
+
+func (m *Manager) removeDirectRoute(prefix string) error {
+	if m.cfg.RouteManager == nil {
+		return nil
+	}
+	return m.cfg.RouteManager.RemoveRoute(prefix)
 }

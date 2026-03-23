@@ -7,18 +7,26 @@ import (
 	"strconv"
 	"strings"
 
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 )
 
 type Handler struct {
-	store *db.Store
-	media *media.Service
+	store     *db.Store
+	media     *media.Service
+	validator *agentauth.Validator
 }
 
-func New(store *db.Store, mediaSvc *media.Service) *Handler {
-	return &Handler{store: store, media: mediaSvc}
+type Options struct {
+	Store     *db.Store
+	Media     *media.Service
+	Validator *agentauth.Validator
+}
+
+func New(opts Options) *Handler {
+	return &Handler{store: opts.Store, media: opts.Media, validator: opts.Validator}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -51,9 +59,10 @@ func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request
 		httputil.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = "default"
+	userID, err := agentauth.ResolveDirectUserID(r, h.validator, req.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
 	}
 	bucket := h.media.BucketForUser(userID)
 	if strings.TrimSpace(bucket) == "" {
@@ -67,11 +76,8 @@ func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"success": true, "bucket": bucket})
 }
 
-func (h *Handler) memoryUserID(r *http.Request) string {
-	if raw := strings.TrimSpace(r.URL.Query().Get("user_id")); raw != "" {
-		return raw
-	}
-	return "default"
+func (h *Handler) memoryUserID(r *http.Request) (string, error) {
+	return agentauth.ResolveDirectUserID(r, h.validator, r.URL.Query().Get("user_id"))
 }
 
 func (h *Handler) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +85,12 @@ func (h *Handler) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	facts, err := h.store.GetMemoryFacts(r.Context(), h.memoryUserID(r))
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	facts, err := h.store.GetMemoryFacts(r.Context(), userID)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -98,7 +109,12 @@ func (h *Handler) handleMemorySessions(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	sessions, err := h.store.ListMemorySessions(r.Context(), h.memoryUserID(r), limit)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	sessions, err := h.store.ListMemorySessions(r.Context(), userID, limit)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -117,7 +133,11 @@ func (h *Handler) handleMemoryConversations(w http.ResponseWriter, r *http.Reque
 			limit = n
 		}
 	}
-	userID := h.memoryUserID(r)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	conversations, err := h.store.ListMemoryConversations(r.Context(), userID, limit)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -206,7 +226,12 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
-	recs, err := h.store.ListMemories(r.Context(), h.memoryUserID(r), category, limit)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	recs, err := h.store.ListMemories(r.Context(), userID, category, limit)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -224,7 +249,12 @@ func (h *Handler) handleMemoryDecisions(w http.ResponseWriter, r *http.Request) 
 	if raw := strings.TrimSpace(r.URL.Query().Get("active_only")); raw != "" {
 		activeOnly = !strings.EqualFold(raw, "false")
 	}
-	recs, err := h.store.ListDecisions(r.Context(), h.memoryUserID(r), category, activeOnly)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	recs, err := h.store.ListDecisions(r.Context(), userID, category, activeOnly)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -243,12 +273,17 @@ func (h *Handler) handleMemoryNotifications(w http.ResponseWriter, r *http.Reque
 			limit = n
 		}
 	}
-	notifications, err := h.store.ListMemoryNotifications(r.Context(), h.memoryUserID(r), limit)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	notifications, err := h.store.ListMemoryNotifications(r.Context(), userID, limit)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	reliability, err := h.store.GetMemoryReliabilitySnapshot(r.Context(), h.memoryUserID(r))
+	reliability, err := h.store.GetMemoryReliabilitySnapshot(r.Context(), userID)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -261,7 +296,12 @@ func (h *Handler) handleMemoryExport(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	export, err := h.store.ExportMemorySnapshot(r.Context(), h.memoryUserID(r))
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	export, err := h.store.ExportMemorySnapshot(r.Context(), userID)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -280,19 +320,23 @@ func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	userID := h.memoryUserID(r)
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 
 	var entities []db.EntityRecord
-	var err error
+	var entityErr error
 	if q != "" {
-		entities, err = h.store.SearchEntities(r.Context(), userID, q, limit)
+		entities, entityErr = h.store.SearchEntities(r.Context(), userID, q, limit)
 	} else {
 		entityType := strings.TrimSpace(r.URL.Query().Get("type"))
-		entities, err = h.store.ListEntities(r.Context(), userID, entityType, limit)
+		entities, entityErr = h.store.ListEntities(r.Context(), userID, entityType, limit)
 	}
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+	if entityErr != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, entityErr.Error())
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entities": entities, "count": len(entities)})
@@ -380,8 +424,6 @@ func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "count": len(jobs)})
 }
-
-
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {

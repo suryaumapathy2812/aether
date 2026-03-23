@@ -9,14 +9,22 @@ import (
 	"time"
 )
 
+const (
+	DefaultDirectAgentDomain = "aether.suryaumapathy.in"
+	DefaultCaddyAdminURL     = "http://localhost:2019"
+)
+
 type Config struct {
-	Port                 int
-	DatabaseURL          string
-	AgentSecret          string
-	LocalAgentURL        string
-	ProxyTimeout         time.Duration
-	DefaultAgentID       string
-	AutoAssignFirstAgent bool
+	Port                   int
+	DatabaseURL            string
+	AgentSecret            string
+	AgentDirectTokenSecret string
+	LocalAgentURL          string
+	ProxyTimeout           time.Duration
+	DefaultAgentID         string
+	AutoAssignFirstAgent   bool
+	DirectAgentDomain      string
+	CaddyAdminURL          string
 
 	AgentImage         string
 	AgentNetwork       string
@@ -58,13 +66,16 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:                 port,
-		DatabaseURL:          databaseURL,
-		AgentSecret:          stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_SECRET"))),
-		LocalAgentURL:        stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_LOCAL_AGENT_URL"))),
-		ProxyTimeout:         proxyTimeout,
-		DefaultAgentID:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_DEFAULT_AGENT_ID"))),
-		AutoAssignFirstAgent: strings.EqualFold(strings.TrimSpace(os.Getenv("AETHER_AUTO_ASSIGN_FIRST_AGENT")), "true"),
+		Port:                   port,
+		DatabaseURL:            databaseURL,
+		AgentSecret:            stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_SECRET"))),
+		AgentDirectTokenSecret: defaultString("AGENT_DIRECT_TOKEN_SECRET", stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_SECRET")))),
+		LocalAgentURL:          stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_LOCAL_AGENT_URL"))),
+		ProxyTimeout:           proxyTimeout,
+		DefaultAgentID:         stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_DEFAULT_AGENT_ID"))),
+		AutoAssignFirstAgent:   strings.EqualFold(strings.TrimSpace(os.Getenv("AETHER_AUTO_ASSIGN_FIRST_AGENT")), "true"),
+		DirectAgentDomain:      DefaultDirectAgentDomain,
+		CaddyAdminURL:          DefaultCaddyAdminURL,
 
 		AgentImage:         defaultString("AGENT_IMAGE", "suryaumapathy2812/aether-agent:latest"),
 		AgentNetwork:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_NETWORK"))),
@@ -144,6 +155,9 @@ func (c Config) Validate() error {
 	// Agent secret — required for orchestrator ↔ agent auth.
 	if c.AgentSecret == "" {
 		missing = append(missing, "AGENT_SECRET")
+	}
+	if c.AgentDirectTokenSecret == "" {
+		missing = append(missing, "AGENT_DIRECT_TOKEN_SECRET")
 	}
 
 	// S3/MinIO — required (media is a core feature).

@@ -2,7 +2,10 @@ package wsapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
@@ -170,4 +174,76 @@ func TestBuildUserMessageVoiceIncludesAudioAndMetadata(t *testing.T) {
 	if string(decoded) != "abc" {
 		t.Fatalf("unexpected decoded audio data: %q", string(decoded))
 	}
+}
+
+func TestWSConversationAcceptsDirectTokenOnLocalhost(t *testing.T) {
+	t.Parallel()
+
+	assetsDir := t.TempDir()
+	store, err := db.OpenInAssets(assetsDir, "")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	sess, err := store.CreateChatSession(context.Background(), "user-1", "chat")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	registry := tools.NewRegistry()
+	provider := &scriptedProvider{events: []providers.LLMStreamEvent{{Type: providers.EventDone, FinishReason: "stop"}}}
+	core := llm.NewCore(provider, tools.NewOrchestrator(registry, tools.ExecContext{}))
+	runtime := conversation.NewRuntime(conversation.RuntimeOptions{Core: core})
+	builder := llm.NewContextBuilder(registry, nil, nil, store, llm.ContextBuilderConfig{})
+	validator := agentauth.NewValidator("secret", "")
+
+	mux := http.NewServeMux()
+	h := New(Options{Runtime: runtime, Builder: builder, Store: store, Validator: validator})
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	token := mustDirectToken(t, agentauth.Claims{
+		UserID:    "user-1",
+		Prefix:    "local",
+		Audience:  "agent",
+		IssuedAt:  time.Now().UTC().Unix(),
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
+	}, "secret")
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/conversation?token=" + token
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	seq := 1
+	if err := conn.WriteJSON(envelope{Version: protocolVersion, Type: "session.start", EventID: newEventID("cli"), SessionID: sess.ID, TurnID: sessionControlTurnID, Seq: seq, TS: time.Now().UnixMilli()}); err != nil {
+		t.Fatalf("write session.start: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ev envelope
+	if err := conn.ReadJSON(&ev); err != nil {
+		t.Fatalf("read ack: %v", err)
+	}
+	if ev.Type != "ack" {
+		t.Fatalf("expected ack, got %q", ev.Type)
+	}
+}
+
+func mustDirectToken(t *testing.T, claims agentauth.Claims, secret string) string {
+	t.Helper()
+	b, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString(b)
+	return agentauth.DirectTokenPrefix + "." + payload + "." + signTestPayload(secret, payload)
+}
+
+func signTestPayload(secret, payload string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(payload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

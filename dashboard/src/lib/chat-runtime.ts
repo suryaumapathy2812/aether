@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import {
+	ensureDirectAgentConnection,
+	directAgentWs,
   getChatSession,
   getChatSessionStatuses,
   getSessionToken,
@@ -868,6 +870,7 @@ class ChatRuntimeStore {
       const token = getSessionToken() || undefined;
       let socket: WebSocket;
       let settled = false;
+      let fallbackPending = false;
       const resolveOnce = () => {
         if (settled) return;
         settled = true;
@@ -878,43 +881,82 @@ class ChatRuntimeStore {
         settled = true;
         reject(error);
       };
-      try {
-        socket = orchestratorWs(WS_CONVERSATION_PATH, token);
-      } catch {
-        this.conversationWSConnectPromise = null;
-        rejectOnce(new Error("Failed to create conversation websocket"));
-        return;
-      }
-
-      this.conversationWS = socket;
-
-      socket.onopen = () => {
-        this.conversationWSBackoffMs = 500;
-        this.conversationWSConnectPromise = null;
-        resolveOnce();
-      };
-
-      socket.onmessage = (message) => {
-        this.handleConversationSocketMessage(message.data);
-      };
-
-      socket.onclose = () => {
-        this.conversationWS = null;
-        this.conversationWSConnectPromise = null;
-        this.readySessions.clear();
-        this.conversationSeqByTurn.clear();
-        this.rejectSessionReadyWaiters(new Error("Conversation websocket closed"));
-        this.failAllTurns(new Error("Conversation disconnected"));
-        rejectOnce(new Error("Conversation websocket closed"));
-        this.scheduleConversationReconnect();
-      };
-
-      socket.onerror = () => {
-        rejectOnce(new Error("Conversation websocket error"));
-        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-          socket.close();
+      const connectProxyFallback = () => {
+        if (fallbackPending || settled) return;
+        fallbackPending = true;
+        try {
+          attachSocket(orchestratorWs(WS_CONVERSATION_PATH, token), false);
+        } catch {
+          this.conversationWSConnectPromise = null;
+          rejectOnce(new Error("Failed to create conversation websocket"));
         }
       };
+
+      const attachSocket = (nextSocket: WebSocket, allowFallback: boolean) => {
+        socket = nextSocket;
+        this.conversationWS = socket;
+
+        socket.onopen = () => {
+          this.conversationWSBackoffMs = 500;
+          this.conversationWSConnectPromise = null;
+          resolveOnce();
+        };
+
+        socket.onmessage = (message) => {
+          this.handleConversationSocketMessage(message.data);
+        };
+
+        socket.onclose = () => {
+          if (!settled && allowFallback) {
+            this.conversationWS = null;
+            connectProxyFallback();
+            return;
+          }
+          this.conversationWS = null;
+          this.conversationWSConnectPromise = null;
+          this.readySessions.clear();
+          this.conversationSeqByTurn.clear();
+          this.rejectSessionReadyWaiters(new Error("Conversation websocket closed"));
+          this.failAllTurns(new Error("Conversation disconnected"));
+          rejectOnce(new Error("Conversation websocket closed"));
+          this.scheduleConversationReconnect();
+        };
+
+        socket.onerror = () => {
+          if (!settled && allowFallback) {
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+              socket.close();
+            }
+            connectProxyFallback();
+            return;
+          }
+          rejectOnce(new Error("Conversation websocket error"));
+          if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+            socket.close();
+          }
+        };
+      };
+
+      void ensureDirectAgentConnection()
+        .then((direct) => {
+          try {
+            attachSocket(
+              direct ? directAgentWs("/ws/conversation", direct) : orchestratorWs(WS_CONVERSATION_PATH, token),
+              Boolean(direct)
+            );
+          } catch {
+            this.conversationWSConnectPromise = null;
+            rejectOnce(new Error("Failed to create conversation websocket"));
+          }
+        })
+        .catch(() => {
+          try {
+            attachSocket(orchestratorWs(WS_CONVERSATION_PATH, token), false);
+          } catch {
+            this.conversationWSConnectPromise = null;
+            rejectOnce(new Error("Failed to create conversation websocket"));
+          }
+        });
     });
 
     return this.conversationWSConnectPromise;
