@@ -252,11 +252,11 @@ function ChatView({
             {/* Orb / bars */}
             <div className="flex items-center justify-center h-28">
               {voiceState === "recording" ? (
-                <div className="flex items-center gap-[5px]">
+                <div className="flex items-center gap-1.25">
                   {[0, 1, 2, 3, 4].map((i) => (
                     <div
                       key={i}
-                      className="w-[7px] rounded-full bg-white"
+                      className="w-1.75 rounded-full bg-white"
                       style={{
                         height: "44px",
                         animation: "aether-vbar 1s ease-in-out infinite",
@@ -361,7 +361,7 @@ function ChatView({
         </div>*/}
 
         <Conversation className="flex-1 min-h-0">
-          <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-[720px] mx-auto w-full">
+          <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-180 mx-auto w-full">
             {loading ? (
               <div className="flex items-center justify-center h-full">
                 <p className="text-muted-foreground/60 text-xs">loading...</p>
@@ -439,7 +439,7 @@ function ChatView({
                           return (
                             <div
                               key={key}
-                              className="text-xs text-muted-foreground/60 italic border-l border-white/[0.08] pl-3 py-1"
+                              className="text-xs text-muted-foreground/60 italic border-l border-white/8 pl-3 py-1"
                             >
                               {part.text}
                             </div>
@@ -455,12 +455,12 @@ function ChatView({
         </Conversation>
 
         {error && (
-          <div className="max-w-[720px] mx-auto w-full px-6 py-1">
+          <div className="max-w-180 mx-auto w-full px-6 py-1">
             <p className="text-[11px] text-red-400/80">{error}</p>
           </div>
         )}
 
-        <div className="max-w-[720px] mx-auto w-full px-6 pb-5 pt-2">
+        <div className="max-w-180 mx-auto w-full px-6 pb-5 pt-2">
           {questionRequest ? (
             <QuestionDock
               request={questionRequest}
@@ -486,7 +486,7 @@ function ChatView({
                   value={input}
                   onChange={(e) => setInput(e.currentTarget.value)}
                   placeholder="Message aether..."
-                  className="min-h-[44px]"
+                  className="min-h-11"
                 />
               </PromptInputBody>
               <PromptInputFooter>
