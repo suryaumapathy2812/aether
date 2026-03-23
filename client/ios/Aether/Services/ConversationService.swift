@@ -11,7 +11,6 @@ struct ConversationTurnEvent {
 final class ConversationService {
     private let baseURL: String
     private let token: String
-    private let proxyPrefix = "/api/go"
 
     init(baseURL: String, token: String) {
         self.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -19,7 +18,7 @@ final class ConversationService {
     }
 
     func streamTurn(messages: [[String: Any]], sessionID: String, onEvent: @escaping (ConversationTurnEvent) -> Void) async throws {
-        guard let url = URL(string: "\(baseURL)\(proxyPrefix)/v1/conversations/turn") else {
+        guard let url = URL(string: "\(baseURL)/agent/v1/conversations/turn") else {
             throw NSError(domain: "ConversationService", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid URL"])
         }
 

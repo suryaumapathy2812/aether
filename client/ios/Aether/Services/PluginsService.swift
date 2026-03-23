@@ -8,7 +8,7 @@ final class PluginsService {
     }
 
     func listPlugins() async throws -> [PluginItem] {
-        let raw = try await api.get(path: "/api/plugins")
+        let raw = try await api.get(path: "/agent/v1/plugins")
         let rows = rootArrayValue(raw).isEmpty ? arrayValue(raw, key: "plugins") : rootArrayValue(raw)
         return rows.map { row in
             let fields: [PluginConfigField] = ((row["config_fields"] as? [[String: Any]]) ?? []).map { field in
@@ -35,19 +35,19 @@ final class PluginsService {
     }
 
     func install(name: String) async throws {
-        _ = try await api.post(path: "/api/plugins/\(name)/install")
+        _ = try await api.post(path: "/agent/v1/plugins/\(name)/install")
     }
 
     func enable(name: String) async throws {
-        _ = try await api.post(path: "/api/plugins/\(name)/enable")
+        _ = try await api.post(path: "/agent/v1/plugins/\(name)/enable")
     }
 
     func disable(name: String) async throws {
-        _ = try await api.post(path: "/api/plugins/\(name)/disable")
+        _ = try await api.post(path: "/agent/v1/plugins/\(name)/disable")
     }
 
     func getConfig(name: String) async throws -> [String: String] {
-        let raw = try await api.get(path: "/api/plugins/\(name)/config")
+        let raw = try await api.get(path: "/agent/v1/plugins/\(name)/config")
         let dict = dictValue(raw)
         var out: [String: String] = [:]
         for (k, v) in dict {
@@ -57,6 +57,6 @@ final class PluginsService {
     }
 
     func saveConfig(name: String, config: [String: String]) async throws {
-        _ = try await api.post(path: "/api/plugins/\(name)/config", body: ["config": config])
+        _ = try await api.post(path: "/agent/v1/plugins/\(name)/config", body: ["config": config])
     }
 }

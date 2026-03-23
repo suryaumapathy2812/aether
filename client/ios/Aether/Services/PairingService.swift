@@ -14,7 +14,6 @@ class PairingService: ObservableObject {
     private var cachedToken: String?
     private var pollTimer: Timer?
     private static let defaultOrchestratorURL = "https://aether.suryaumapathy.in"
-    private static let proxyPrefix = "/api/go"
 
     init() {
         // Load from UserDefaults or use default
@@ -36,7 +35,7 @@ class PairingService: ObservableObject {
     /// Generate a new pairing code and register with orchestrator.
     func startPairing() {
         let normalizedBaseURL = normalizedOrchestratorURL(orchestratorURL)
-        guard let pairURL = URL(string: "\(normalizedBaseURL)\(Self.proxyPrefix)/api/pair/request") else {
+        guard let pairURL = URL(string: "\(normalizedBaseURL)/go/v1/pair/request") else {
             DispatchQueue.main.async {
                 self.status = "invalid orchestrator URL"
             }
@@ -92,7 +91,7 @@ class PairingService: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
-            guard let url = URL(string: "\(baseURL)\(Self.proxyPrefix)/api/pair/status/\(code)") else {
+            guard let url = URL(string: "\(baseURL)/go/v1/pair/status/\(code)") else {
                 DispatchQueue.main.async {
                     self.status = "invalid orchestrator URL"
                 }

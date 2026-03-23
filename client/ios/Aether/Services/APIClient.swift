@@ -9,7 +9,6 @@ enum APIClientError: Error {
 final class APIClient {
     private let baseURL: String
     private let token: String
-    private let proxyPrefix = "/api/go"
 
     init(baseURL: String, token: String) {
         self.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -31,7 +30,7 @@ final class APIClient {
 
     private func request(path: String, method: String, body: Data?) async throws -> Any {
         let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
-        guard let url = URL(string: "\(baseURL)\(proxyPrefix)\(normalizedPath)") else {
+        guard let url = URL(string: "\(baseURL)\(normalizedPath)") else {
             throw APIClientError.invalidURL
         }
         var request = URLRequest(url: url)

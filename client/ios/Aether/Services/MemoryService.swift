@@ -8,12 +8,12 @@ final class MemoryService {
     }
 
     func fetchFacts() async throws -> [String] {
-        let raw = try await api.get(path: "/api/memory/facts")
+        let raw = try await api.get(path: "/agent/v1/memory/facts")
         return (dictValue(raw)["facts"] as? [String]) ?? []
     }
 
     func fetchConversations(limit: Int = 30) async throws -> [MemoryConversationItem] {
-        let raw = try await api.get(path: "/api/memory/conversations?limit=\(limit)")
+        let raw = try await api.get(path: "/agent/v1/memory/conversations?limit=\(limit)")
         return arrayValue(raw, key: "conversations").enumerated().map { idx, row in
             MemoryConversationItem(
                 id: intValue(row, "id", "ID") != 0 ? intValue(row, "id", "ID") : idx,
@@ -25,7 +25,7 @@ final class MemoryService {
     }
 
     func fetchMemories(limit: Int = 100) async throws -> [MemoryItem] {
-        let raw = try await api.get(path: "/api/memory/memories?limit=\(limit)")
+        let raw = try await api.get(path: "/agent/v1/memory/memories?limit=\(limit)")
         return arrayValue(raw, key: "memories").map { row in
             MemoryItem(
                 id: intValue(row, "id", "ID"),
@@ -38,7 +38,7 @@ final class MemoryService {
     }
 
     func fetchDecisions() async throws -> [DecisionItem] {
-        let raw = try await api.get(path: "/api/memory/decisions?active_only=true")
+        let raw = try await api.get(path: "/agent/v1/memory/decisions?active_only=true")
         return arrayValue(raw, key: "decisions").map { row in
             DecisionItem(
                 id: intValue(row, "id", "ID"),
@@ -53,7 +53,7 @@ final class MemoryService {
     }
 
     func fetchEntities(limit: Int = 50) async throws -> [EntityItem] {
-        let raw = try await api.get(path: "/api/memory/entities?limit=\(limit)")
+        let raw = try await api.get(path: "/agent/v1/memory/entities?limit=\(limit)")
         return arrayValue(raw, key: "entities").map { row in
             EntityItem(
                 id: stringValue(row, "id", "ID"),
@@ -70,7 +70,7 @@ final class MemoryService {
 
     func fetchEntityDetails(entityID: String) async throws -> EntityDetails {
         let encodedID = entityID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? entityID
-        let raw = try await api.get(path: "/api/memory/entities/\(encodedID)")
+        let raw = try await api.get(path: "/agent/v1/memory/entities/\(encodedID)")
         let root = dictValue(raw)
         let entityRaw = dictValue(root["entity"] as Any)
         let entity = EntityItem(
