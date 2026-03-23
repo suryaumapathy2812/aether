@@ -130,7 +130,7 @@ func TestPluginConfigMasksSecrets(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/plugins/brave-search/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/brave-search/config", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -186,7 +186,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/plugins/google-calendar/oauth/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/google-calendar/oauth/start", nil)
 	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
@@ -234,7 +234,7 @@ func TestPluginOAuthStartUsesProviderEnvCredentials(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/plugins/spotify/oauth/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/spotify/oauth/start", nil)
 	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()

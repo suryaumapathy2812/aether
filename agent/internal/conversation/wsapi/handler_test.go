@@ -74,7 +74,7 @@ func TestWSConversationTextTurnAndPersistence(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/conversation?token=test&user_id=user-1"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/agent/v1/ws/conversation?token=test&user_id=user-1"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)
@@ -211,7 +211,7 @@ func TestWSConversationAcceptsDirectTokenOnLocalhost(t *testing.T) {
 		IssuedAt:  time.Now().UTC().Unix(),
 		ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
 	}, "secret")
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/conversation?token=" + token
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/agent/v1/ws/conversation?token=" + token
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)

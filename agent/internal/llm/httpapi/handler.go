@@ -14,11 +14,11 @@ import (
 
 	"github.com/google/uuid"
 	agentcfg "github.com/suryaumapathy2812/core-ai/agent/internal/config"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
 )
 
 type Handler struct {
@@ -73,12 +73,24 @@ func New(opts Options) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/models", h.handleModels)
-	mux.HandleFunc("/v1/chat/completions", h.handleChatCompletions)
-	mux.HandleFunc("/v1/responses", h.handleResponses)
-	mux.HandleFunc("/v1/completions", h.handleCompletions)
-	mux.HandleFunc("/v1/media/upload/init", h.handleMediaUploadInit)
-	mux.HandleFunc("/v1/media/upload/complete", h.handleMediaUploadComplete)
+	for _, path := range []string{"/agent/v1/models", "/v1/models"} {
+		mux.HandleFunc(path, h.handleModels)
+	}
+	for _, path := range []string{"/agent/v1/chat/completions", "/v1/chat/completions"} {
+		mux.HandleFunc(path, h.handleChatCompletions)
+	}
+	for _, path := range []string{"/agent/v1/responses", "/v1/responses"} {
+		mux.HandleFunc(path, h.handleResponses)
+	}
+	for _, path := range []string{"/agent/v1/completions", "/v1/completions"} {
+		mux.HandleFunc(path, h.handleCompletions)
+	}
+	for _, path := range []string{"/agent/v1/media/upload/init", "/v1/media/upload/init"} {
+		mux.HandleFunc(path, h.handleMediaUploadInit)
+	}
+	for _, path := range []string{"/agent/v1/media/upload/complete", "/v1/media/upload/complete"} {
+		mux.HandleFunc(path, h.handleMediaUploadComplete)
+	}
 }
 
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -960,9 +972,6 @@ func toInt(v any) int {
 		return 0
 	}
 }
-
-
-
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {

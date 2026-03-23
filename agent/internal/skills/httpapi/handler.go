@@ -29,10 +29,18 @@ func New(opts Options) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/skills/marketplace/search", h.handleMarketplaceSearch)
-	mux.HandleFunc("/api/skills/installed", h.handleInstalled)
-	mux.HandleFunc("/api/skills/install", h.handleInstall)
-	mux.HandleFunc("/api/skills/remove", h.handleRemove)
+	for _, path := range []string{"/agent/v1/skills/marketplace/search", "/api/skills/marketplace/search"} {
+		mux.HandleFunc(path, h.handleMarketplaceSearch)
+	}
+	for _, path := range []string{"/agent/v1/skills/installed", "/api/skills/installed"} {
+		mux.HandleFunc(path, h.handleInstalled)
+	}
+	for _, path := range []string{"/agent/v1/skills/install", "/api/skills/install"} {
+		mux.HandleFunc(path, h.handleInstall)
+	}
+	for _, path := range []string{"/agent/v1/skills/remove", "/api/skills/remove"} {
+		mux.HandleFunc(path, h.handleRemove)
+	}
 }
 
 func (h *Handler) handleMarketplaceSearch(w http.ResponseWriter, r *http.Request) {

@@ -239,12 +239,12 @@ func (b *QuestionAskerBridge) AskQuestion(ctx context.Context, sessionID string,
 // ── HTTP Handlers ──────────────────────────────────────────────────────
 
 // handleQuestions routes question sub-paths:
-//   - POST /v1/questions/{id}/reply  — reply to a pending question
-//   - POST /v1/questions/{id}/reject — reject/dismiss a pending question
-//   - GET  /v1/questions/{id}        — get a specific pending question
+//   - POST /agent/v1/questions/{id}/reply  — reply to a pending question
+//   - POST /agent/v1/questions/{id}/reject — reject/dismiss a pending question
+//   - GET  /agent/v1/questions/{id}        — get a specific pending question
 func (h *Handler) handleQuestions(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v1/questions/{id}[/action]
-	trimmed := strings.TrimPrefix(r.URL.Path, "/v1/questions/")
+	// Parse path: /agent/v1/questions/{id}[/action]
+	trimmed := trimConversationPathPrefix(r.URL.Path, agentPublicPrefix+"/questions/", legacyV1Prefix+"/questions/")
 	trimmed = strings.Trim(trimmed, "/")
 	parts := strings.SplitN(trimmed, "/", 2)
 
@@ -271,7 +271,7 @@ func (h *Handler) handleQuestions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleQuestionsList handles GET /v1/questions?session_id=xxx
+// handleQuestionsList handles GET /agent/v1/questions?session_id=xxx
 func (h *Handler) handleQuestionsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")

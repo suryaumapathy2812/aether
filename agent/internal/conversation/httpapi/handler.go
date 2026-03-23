@@ -47,6 +47,20 @@ type Options struct {
 	Validator *agentauth.Validator
 }
 
+const (
+	agentPublicPrefix = "/agent/v1"
+	legacyV1Prefix    = "/v1"
+)
+
+func trimConversationPathPrefix(path string, prefixes ...string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimPrefix(path, prefix)
+		}
+	}
+	return path
+}
+
 func New(opts Options) *Handler {
 	return &Handler{
 		runtime:   opts.Runtime,
@@ -63,12 +77,24 @@ func New(opts Options) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/conversations/turn", h.handleTurn)
-	mux.HandleFunc("/v1/sessions/status", h.handleSessionStatus)
-	mux.HandleFunc("/v1/sessions", h.handleSessions)
-	mux.HandleFunc("/v1/sessions/", h.handleSessionByID)
-	mux.HandleFunc("/v1/questions/", h.handleQuestions)
-	mux.HandleFunc("/v1/questions", h.handleQuestionsList)
+	for _, path := range []string{agentPublicPrefix + "/conversations/turn", legacyV1Prefix + "/conversations/turn"} {
+		mux.HandleFunc(path, h.handleTurn)
+	}
+	for _, path := range []string{agentPublicPrefix + "/sessions/status", legacyV1Prefix + "/sessions/status"} {
+		mux.HandleFunc(path, h.handleSessionStatus)
+	}
+	for _, path := range []string{agentPublicPrefix + "/sessions", legacyV1Prefix + "/sessions"} {
+		mux.HandleFunc(path, h.handleSessions)
+	}
+	for _, path := range []string{agentPublicPrefix + "/sessions/", legacyV1Prefix + "/sessions/"} {
+		mux.HandleFunc(path, h.handleSessionByID)
+	}
+	for _, path := range []string{agentPublicPrefix + "/questions/", legacyV1Prefix + "/questions/"} {
+		mux.HandleFunc(path, h.handleQuestions)
+	}
+	for _, path := range []string{agentPublicPrefix + "/questions", legacyV1Prefix + "/questions"} {
+		mux.HandleFunc(path, h.handleQuestionsList)
+	}
 }
 
 // QuestionManager returns the handler's question manager so it can be
@@ -720,8 +746,8 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "store unavailable")
 		return
 	}
-	// Extract session ID from path: /v1/sessions/{id}
-	sessionID := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
+	// Extract session ID from path: /agent/v1/sessions/{id}
+	sessionID := trimConversationPathPrefix(r.URL.Path, agentPublicPrefix+"/sessions/", legacyV1Prefix+"/sessions/")
 	sessionID = strings.Trim(sessionID, "/")
 	if sessionID == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "session id required")

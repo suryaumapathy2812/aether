@@ -40,19 +40,31 @@ func NewHandler(store *db.Store, messageHandler channels.MessageHandler, webhook
 // RegisterRoutes registers channel routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Channel management
-	mux.HandleFunc("/api/channels", h.handleListChannels)
-	mux.HandleFunc("/api/channels/ios/connect", h.handleIOSConnect)
-	mux.HandleFunc("/api/channels/telegram/connect", h.handleTelegramConnect)
-	mux.HandleFunc("/api/channels/telegram/disconnect", h.handleTelegramDisconnect)
+	for _, path := range []string{"/agent/v1/channels", "/api/channels"} {
+		mux.HandleFunc(path, h.handleListChannels)
+	}
+	for _, path := range []string{"/agent/v1/channels/ios/connect", "/api/channels/ios/connect"} {
+		mux.HandleFunc(path, h.handleIOSConnect)
+	}
+	for _, path := range []string{"/agent/v1/channels/telegram/connect", "/api/channels/telegram/connect"} {
+		mux.HandleFunc(path, h.handleTelegramConnect)
+	}
+	for _, path := range []string{"/agent/v1/channels/telegram/disconnect", "/api/channels/telegram/disconnect"} {
+		mux.HandleFunc(path, h.handleTelegramDisconnect)
+	}
 
 	// Webhook endpoint for incoming messages
-	mux.HandleFunc("/api/channels/telegram/webhook", h.handleTelegramWebhook)
+	for _, path := range []string{"/agent/v1/channels/telegram/webhook", "/api/channels/telegram/webhook"} {
+		mux.HandleFunc(path, h.handleTelegramWebhook)
+	}
 
 	// Channel actions
-	mux.HandleFunc("/api/channels/", h.handleChannelAction)
+	for _, path := range []string{"/agent/v1/channels/", "/api/channels/"} {
+		mux.HandleFunc(path, h.handleChannelAction)
+	}
 }
 
-// handleIOSConnect handles POST /api/channels/ios/connect
+// handleIOSConnect handles POST /agent/v1/channels/ios/connect
 func (h *Handler) handleIOSConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -105,7 +117,7 @@ func (h *Handler) handleIOSConnect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleListChannels handles GET /api/channels
+// handleListChannels handles GET /agent/v1/channels
 func (h *Handler) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -129,7 +141,7 @@ func (h *Handler) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTelegramConnect handles POST /api/channels/telegram/connect
+// handleTelegramConnect handles POST /agent/v1/channels/telegram/connect
 func (h *Handler) handleTelegramConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -202,7 +214,7 @@ func (h *Handler) handleTelegramConnect(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleTelegramDisconnect handles POST /api/channels/telegram/disconnect
+// handleTelegramDisconnect handles POST /agent/v1/channels/telegram/disconnect
 func (h *Handler) handleTelegramDisconnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -251,7 +263,7 @@ func (h *Handler) handleTelegramDisconnect(w http.ResponseWriter, r *http.Reques
 // handleChannelAction handles channel-specific actions
 func (h *Handler) handleChannelAction(w http.ResponseWriter, r *http.Request) {
 	// Extract channel ID from path
-	path := strings.TrimPrefix(r.URL.Path, "/api/channels/")
+	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/agent/v1/channels/"), "/api/channels/")
 	parts := strings.Split(path, "/")
 	if len(parts) < 1 {
 		channels.JSONError(w, http.StatusBadRequest, "invalid path")
@@ -426,7 +438,7 @@ func (h *Handler) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) 
 // getWebhookURL returns the public webhook URL for a channel type.
 // Uses the configured webhookBaseURL if set, otherwise falls back to the request host.
 // Preferred URL pattern:
-// /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+// /go/v1/{user_id}/channels/{channel_type}/webhook/{agent_id}
 func (h *Handler) getWebhookURL(r *http.Request, channelType channels.ChannelType, userID string) string {
 	var base string
 	if h.webhookBaseURL != "" {
@@ -443,11 +455,11 @@ func (h *Handler) getWebhookURL(r *http.Request, channelType channels.ChannelTyp
 	uid := strings.TrimSpace(userID)
 	if uid == "" {
 		// Backward-compatible fallback when user_id is unavailable.
-		return fmt.Sprintf("%s/api/channels/%s/webhook", base, channelType)
+		return fmt.Sprintf("%s/agent/v1/channels/%s/webhook", base, channelType)
 	}
 	agentID := strings.TrimSpace(h.agentID)
 	if agentID == "" {
 		agentID = "unassigned"
 	}
-	return fmt.Sprintf("%s/api/%s/channels/%s/webhook/%s", base, url.PathEscape(uid), channelType, url.PathEscape(agentID))
+	return fmt.Sprintf("%s/go/v1/%s/channels/%s/webhook/%s", base, url.PathEscape(uid), channelType, url.PathEscape(agentID))
 }

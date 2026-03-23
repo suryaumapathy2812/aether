@@ -25,22 +25,53 @@ type Options struct {
 	Validator *agentauth.Validator
 }
 
+func trimDataAPIPathPrefix(path string, prefixes ...string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimPrefix(path, prefix)
+		}
+	}
+	return path
+}
+
 func New(opts Options) *Handler {
 	return &Handler{store: opts.Store, media: opts.Media, validator: opts.Validator}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/media/ensure-bucket", h.handleEnsureMediaBucket)
-	mux.HandleFunc("/api/memory/facts", h.handleMemoryFacts)
-	mux.HandleFunc("/api/memory/sessions", h.handleMemorySessions)
-	mux.HandleFunc("/api/memory/conversations", h.handleMemoryConversations)
-	mux.HandleFunc("/api/memory/memories", h.handleMemories)
-	mux.HandleFunc("/api/memory/decisions", h.handleMemoryDecisions)
-	mux.HandleFunc("/api/memory/notifications", h.handleMemoryNotifications)
-	mux.HandleFunc("/api/memory/export", h.handleMemoryExport)
-	mux.HandleFunc("/api/memory/entities", h.handleEntities)
-	mux.HandleFunc("/api/memory/entities/", h.handleEntityByID)
-	mux.HandleFunc("/v1/agent/jobs", h.handleJobs)
+	for _, path := range []string{"/agent/v1/media/ensure-bucket", "/api/media/ensure-bucket"} {
+		mux.HandleFunc(path, h.handleEnsureMediaBucket)
+	}
+	for _, path := range []string{"/agent/v1/memory/facts", "/api/memory/facts"} {
+		mux.HandleFunc(path, h.handleMemoryFacts)
+	}
+	for _, path := range []string{"/agent/v1/memory/sessions", "/api/memory/sessions"} {
+		mux.HandleFunc(path, h.handleMemorySessions)
+	}
+	for _, path := range []string{"/agent/v1/memory/conversations", "/api/memory/conversations"} {
+		mux.HandleFunc(path, h.handleMemoryConversations)
+	}
+	for _, path := range []string{"/agent/v1/memory/memories", "/api/memory/memories"} {
+		mux.HandleFunc(path, h.handleMemories)
+	}
+	for _, path := range []string{"/agent/v1/memory/decisions", "/api/memory/decisions"} {
+		mux.HandleFunc(path, h.handleMemoryDecisions)
+	}
+	for _, path := range []string{"/agent/v1/memory/notifications", "/api/memory/notifications"} {
+		mux.HandleFunc(path, h.handleMemoryNotifications)
+	}
+	for _, path := range []string{"/agent/v1/memory/export", "/api/memory/export"} {
+		mux.HandleFunc(path, h.handleMemoryExport)
+	}
+	for _, path := range []string{"/agent/v1/memory/entities", "/api/memory/entities"} {
+		mux.HandleFunc(path, h.handleEntities)
+	}
+	for _, path := range []string{"/agent/v1/memory/entities/", "/api/memory/entities/"} {
+		mux.HandleFunc(path, h.handleEntityByID)
+	}
+	for _, path := range []string{"/agent/v1/agent/jobs", "/v1/agent/jobs"} {
+		mux.HandleFunc(path, h.handleJobs)
+	}
 }
 
 func (h *Handler) handleEnsureMediaBucket(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +378,7 @@ func (h *Handler) handleEntityByID(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	entityID := strings.TrimPrefix(r.URL.Path, "/api/memory/entities/")
+	entityID := trimDataAPIPathPrefix(r.URL.Path, "/agent/v1/memory/entities/", "/api/memory/entities/")
 	entityID = strings.Trim(entityID, "/")
 	if entityID == "" {
 		httputil.WriteError(w, http.StatusNotFound, "entity id is required")

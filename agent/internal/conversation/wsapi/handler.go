@@ -119,7 +119,9 @@ func New(opts Options) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/ws/conversation", h.handleWS)
+	for _, path := range []string{"/agent/v1/ws/conversation", "/ws/conversation"} {
+		mux.HandleFunc(path, h.handleWS)
+	}
 }
 
 func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {

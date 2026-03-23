@@ -23,9 +23,15 @@ func NewPreferencesHandler(store *db.Store, validator *agentauth.Validator) *Pre
 }
 
 func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/preferences/get", h.handleGet)
-	mux.HandleFunc("/api/preferences/set", h.handleSet)
-	mux.HandleFunc("/api/preferences/delete", h.handleDelete)
+	for _, path := range []string{"/agent/v1/preferences/get", "/api/preferences/get"} {
+		mux.HandleFunc(path, h.handleGet)
+	}
+	for _, path := range []string{"/agent/v1/preferences/set", "/api/preferences/set"} {
+		mux.HandleFunc(path, h.handleSet)
+	}
+	for _, path := range []string{"/agent/v1/preferences/delete", "/api/preferences/delete"} {
+		mux.HandleFunc(path, h.handleDelete)
+	}
 }
 
 func (h *PreferencesHandler) handleGet(w http.ResponseWriter, r *http.Request) {

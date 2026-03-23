@@ -24,9 +24,15 @@ func NewPushHandler(store *db.Store, sender *PushSender, validator *agentauth.Va
 
 // RegisterRoutes registers push-related HTTP endpoints.
 func (h *PushHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/push/vapid-key", h.handleVAPIDKey)
-	mux.HandleFunc("/api/push/subscribe", h.handleSubscription)
-	mux.HandleFunc("/api/push/test", h.handleTestPush)
+	for _, path := range []string{"/agent/v1/push/vapid-key", "/api/push/vapid-key"} {
+		mux.HandleFunc(path, h.handleVAPIDKey)
+	}
+	for _, path := range []string{"/agent/v1/push/subscribe", "/api/push/subscribe"} {
+		mux.HandleFunc(path, h.handleSubscription)
+	}
+	for _, path := range []string{"/agent/v1/push/test", "/api/push/test"} {
+		mux.HandleFunc(path, h.handleTestPush)
+	}
 }
 
 func (h *PushHandler) handleVAPIDKey(w http.ResponseWriter, r *http.Request) {

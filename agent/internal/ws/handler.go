@@ -32,7 +32,9 @@ func NewHandler(hub *Hub, validator *agentauth.Validator) *Handler {
 
 // RegisterRoutes registers the WebSocket endpoint on the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/ws/notifications", h.handleWS)
+	for _, path := range []string{"/agent/v1/ws/notifications", "/ws/notifications"} {
+		mux.HandleFunc(path, h.handleWS)
+	}
 }
 
 func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {

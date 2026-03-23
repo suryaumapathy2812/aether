@@ -70,8 +70,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/internal/tools/execute", h.handleExecute)
 	mux.HandleFunc("/internal/hooks/", h.handleInternalHooks)
 	mux.HandleFunc("/internal/plugins/status", h.handlePluginsStatus)
-	mux.HandleFunc("/api/plugins", h.handlePluginsAPI)
-	mux.HandleFunc("/api/plugins/", h.handlePluginsAPI)
+	for _, path := range []string{"/agent/v1/plugins", "/api/plugins"} {
+		mux.HandleFunc(path, h.handlePluginsAPI)
+	}
+	for _, path := range []string{"/agent/v1/plugins/", "/api/plugins/"} {
+		mux.HandleFunc(path, h.handlePluginsAPI)
+	}
 }
 
 func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +302,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	_, _ = h.plugins.Discover(ctx)
 
-	if r.URL.Path == "/api/plugins" {
+	if r.URL.Path == "/api/plugins" || r.URL.Path == "/agent/v1/plugins" {
 		if r.Method != http.MethodGet {
 			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -307,7 +311,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/api/plugins/")
+	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/agent/v1/plugins/"), "/api/plugins/")
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {

@@ -26,7 +26,9 @@ func NewHTTPHandler(manager *Manager, webhookSecret string) *HTTPHandler {
 
 // RegisterRoutes registers the webhook routes to the given mux
 func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/channels/telegram/webhook", h.handleTelegramWebhook)
+	for _, path := range []string{"/agent/v1/channels/telegram/webhook", "/api/channels/telegram/webhook"} {
+		mux.HandleFunc(path, h.handleTelegramWebhook)
+	}
 }
 
 // handleTelegramWebhook handles incoming Telegram updates
