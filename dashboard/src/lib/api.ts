@@ -1,17 +1,26 @@
 /**
  * Agent / Orchestrator API client.
  *
- * Browser-based calls use same-origin URLs which Traefik proxies to the orchestrator.
- * In production: /api/* routes → Traefik → orchestrator
- * In development: /api/* routes → Caddy → orchestrator
+ * Browser-based calls use same-origin URLs.
+ * In production: /go/v1/* and /agent/v1/* routes are reverse proxied.
+ * In development: Caddy exposes the same public paths.
  *
  * Auth: session token from better-auth sent as Authorization: Bearer header.
  */
 
 // ── Base URL ──
-// Client-side calls go through the Next.js proxy at /api/go.
-// This keeps the actual upstream URL server-side only.
-const API_BASE = "/api/go";
+// Client-side calls use the public API paths directly.
+const API_BASE = "";
+const GO_API_BASE = "/go/v1";
+const AGENT_API_BASE = "/agent/v1";
+
+function goPath(path: string): string {
+  return `${GO_API_BASE}${path}`;
+}
+
+function agentPath(path: string): string {
+  return `${AGENT_API_BASE}${path}`;
+}
 
 // ── Session token management ──
 // Set by SessionSync component which reads from useSession().
@@ -50,7 +59,7 @@ export function getDirectAgentConnection(): DirectAgentConnection | null {
 }
 
 export async function ensureDirectAgentConnection(
-  force = false
+  force = false,
 ): Promise<DirectAgentConnection | null> {
   if (!getSessionToken()) return null;
   if (!force) {
@@ -61,7 +70,7 @@ export async function ensureDirectAgentConnection(
 
   _directAgentPromise = (async () => {
     try {
-      const res = await fetchWithAuth("/api/agent/subdomain");
+      const res = await fetchWithAuth(goPath("/agent/subdomain"));
       if (!res.ok) {
         _directAgentConnection = null;
         return null;
@@ -102,10 +111,7 @@ export async function ensureDirectAgentConnection(
 // Central fetch wrapper. Every API call to the agent/orchestrator
 // should use this. Attaches the auth token and base URL automatically.
 
-export async function fetchWithAuth(
-  path: string,
-  options?: RequestInit
-): Promise<Response> {
+export async function fetchWithAuth(path: string, options?: RequestInit): Promise<Response> {
   const token = _sessionToken;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -137,22 +143,18 @@ export async function fetchWithAuth(
 }
 
 // ── Orchestrator Direct API ──
-// These functions connect directly to the orchestrator (via same-origin proxy in production).
-// In production, Traefik proxies /api/* to the orchestrator, so we use relative URLs.
+// These functions connect directly to the public orchestrator paths.
 // This avoids hardcoding hostnames that differ between dev/prod.
 
 function getOrchestratorBaseUrl(): string {
   if (typeof window !== "undefined") {
-    return ""; // Same-origin - Traefik proxies /api/* to orchestrator in production
+    return "";
   }
   // SSR fallback
   return process.env.ORCHESTRATOR_BASE_URL || process.env.AGENT_BASE_URL || "http://localhost:4000";
 }
 
-export async function orchestratorFetch(
-  path: string,
-  options?: RequestInit
-): Promise<Response> {
+export async function orchestratorFetch(path: string, options?: RequestInit): Promise<Response> {
   const token = getSessionToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -165,10 +167,7 @@ export async function orchestratorFetch(
   return fetch(`${baseUrl}${path}`, { ...options, headers });
 }
 
-export async function directAgentFetch(
-  path: string,
-  options?: RequestInit
-): Promise<Response> {
+export async function directAgentFetch(path: string, options?: RequestInit): Promise<Response> {
   const direct = await ensureDirectAgentConnection();
   if (!direct) {
     return fetchWithAuth(path, options);
@@ -220,8 +219,7 @@ export function orchestratorWs(path: string, token?: string): WebSocket {
         ? "wss:"
         : "ws:"
       : "ws:";
-  const host =
-    typeof window !== "undefined" ? window.location.host : "localhost:3000";
+  const host = typeof window !== "undefined" ? window.location.host : "localhost:3000";
 
   const params = token ? `?token=${encodeURIComponent(token)}` : "";
   return new WebSocket(`${protocol}//${host}${baseUrl}${path}${params}`);
@@ -234,7 +232,7 @@ export function directAgentWs(path: string, direct?: DirectAgentConnection): Web
   }
   const separator = path.includes("?") ? "&" : "?";
   return new WebSocket(
-    `${connection.wsUrl}${path}${separator}token=${encodeURIComponent(connection.directToken)}`
+    `${connection.wsUrl}${path}${separator}token=${encodeURIComponent(connection.directToken)}`,
   );
 }
 
@@ -250,7 +248,7 @@ export interface Device {
 }
 
 export async function listDevices(): Promise<Device[]> {
-  const res = await orchestratorFetch("/api/devices");
+  const res = await orchestratorFetch(goPath("/devices"));
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error((err as { detail?: string }).detail || "Failed to list devices");
@@ -276,9 +274,9 @@ export interface RegisterTelegramResponse {
 export async function registerTelegramDevice(
   botToken: string,
   allowedChatIDs?: string,
-  name?: string
+  name?: string,
 ): Promise<RegisterTelegramResponse> {
-  const res = await orchestratorFetch("/api/devices/telegram", {
+  const res = await orchestratorFetch(goPath("/devices/telegram"), {
     method: "POST",
     body: JSON.stringify({
       bot_token: botToken,
@@ -294,7 +292,7 @@ export async function registerTelegramDevice(
 }
 
 export async function deleteDevice(deviceId: string): Promise<void> {
-  const res = await orchestratorFetch(`/api/devices/${deviceId}`, {
+  const res = await orchestratorFetch(goPath(`/devices/${deviceId}`), {
     method: "DELETE",
   });
   if (!res.ok) {
@@ -314,15 +312,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-const DIRECT_AGENT_PREFIXES = [
-  "/api/memory/",
-  "/api/preferences",
-  "/api/preferences/",
-  "/api/push/",
-  "/api/plugins",
-  "/api/plugins/",
-  "/api/skills/",
-];
+const DIRECT_AGENT_PREFIXES = [AGENT_API_BASE, `${AGENT_API_BASE}/`];
 
 async function agentFetch(path: string, options?: RequestInit): Promise<Response> {
   if (DIRECT_AGENT_PREFIXES.some((prefix) => path.startsWith(prefix))) {
@@ -368,13 +358,15 @@ export interface LatencyMetrics {
 }
 
 export async function getLatencyMetrics() {
-  return api<LatencyMetrics>("/api/metrics/latency");
+  return api<LatencyMetrics>(goPath("/metrics/latency"));
 }
 
 // ── Memory ──
 
 export async function getMemoryFacts(userId: string) {
-  return api<{ facts: string[] }>(`/api/memory/facts?user_id=${encodeURIComponent(userId)}`);
+  return api<{ facts: string[] }>(
+    `${agentPath("/memory/facts")}?user_id=${encodeURIComponent(userId)}`,
+  );
 }
 
 export async function getMemorySessions(userId: string) {
@@ -393,7 +385,7 @@ export async function getMemorySessions(userId: string) {
       Turns?: number;
       ToolsUsed?: string[];
     }[];
-  }>(`/api/memory/sessions?user_id=${encodeURIComponent(userId)}`);
+  }>(`${agentPath("/memory/sessions")}?user_id=${encodeURIComponent(userId)}`);
   return {
     sessions: (res.sessions || []).map((s) => ({
       session_id: s.session_id || s.SessionID || "",
@@ -420,7 +412,7 @@ export async function getMemoryConversations(userId: string, limit = 20) {
       user_content?: ChatContentPart[];
       UserContent?: ChatContentPart[];
     }[];
-  }>(`/api/memory/conversations?user_id=${encodeURIComponent(userId)}&limit=${limit}`);
+  }>(`${agentPath("/memory/conversations")}?user_id=${encodeURIComponent(userId)}&limit=${limit}`);
   return {
     conversations: (res.conversations || []).map((c, idx) => ({
       id: c.id ?? c.ID ?? idx,
@@ -452,7 +444,7 @@ export async function getMemories(userId: string, limit = 100, category?: string
       CreatedAt?: string;
       ExpiresAt?: string | null;
     }[];
-  }>(`/api/memory/memories?${params.toString()}`);
+  }>(`${agentPath("/memory/memories")}?${params.toString()}`);
   return {
     memories: (res.memories || []).map((m) => ({
       id: m.id ?? m.ID ?? 0,
@@ -489,7 +481,7 @@ export async function getDecisions(userId: string, category?: string, activeOnly
       CreatedAt?: string;
       UpdatedAt?: string;
     }[];
-  }>(`/api/memory/decisions?${params.toString()}`);
+  }>(`${agentPath("/memory/decisions")}?${params.toString()}`);
   return {
     decisions: (res.decisions || []).map((d) => ({
       id: d.id ?? d.ID ?? 0,
@@ -523,7 +515,7 @@ export async function getMemoryNotifications(userId: string, limit = 200) {
       }
     >;
     reliability: Record<string, unknown>;
-  }>(`/api/memory/notifications?user_id=${encodeURIComponent(userId)}&limit=${limit}`);
+  }>(`${agentPath("/memory/notifications")}?user_id=${encodeURIComponent(userId)}&limit=${limit}`);
   return {
     notifications: (res.notifications || []).map((n) => ({
       ...n,
@@ -539,7 +531,9 @@ export async function getMemoryNotifications(userId: string, limit = 200) {
 }
 
 export async function exportMemory(userId: string) {
-  return api<{ export: Record<string, unknown> }>(`/api/memory/export?user_id=${encodeURIComponent(userId)}`);
+  return api<{ export: Record<string, unknown> }>(
+    `${agentPath("/memory/export")}?user_id=${encodeURIComponent(userId)}`,
+  );
 }
 
 // ── Entities ──
@@ -564,21 +558,34 @@ export async function getEntities(userId: string, entityType?: string, limit = 5
     params.set("type", entityType.trim());
   }
   const res = await api<{
-    entities: Array<Record<string, unknown> & {
-      id?: string; ID?: string;
-      entity_type?: string; EntityType?: string;
-      name?: string; Name?: string;
-      aliases?: string[]; Aliases?: string[];
-      summary?: string; Summary?: string;
-      properties?: Record<string, unknown>; Properties?: Record<string, unknown>;
-      first_seen_at?: string; FirstSeenAt?: string;
-      last_seen_at?: string; LastSeenAt?: string;
-      interaction_count?: number; InteractionCount?: number;
-      created_at?: string; CreatedAt?: string;
-      updated_at?: string; UpdatedAt?: string;
-    }>;
+    entities: Array<
+      Record<string, unknown> & {
+        id?: string;
+        ID?: string;
+        entity_type?: string;
+        EntityType?: string;
+        name?: string;
+        Name?: string;
+        aliases?: string[];
+        Aliases?: string[];
+        summary?: string;
+        Summary?: string;
+        properties?: Record<string, unknown>;
+        Properties?: Record<string, unknown>;
+        first_seen_at?: string;
+        FirstSeenAt?: string;
+        last_seen_at?: string;
+        LastSeenAt?: string;
+        interaction_count?: number;
+        InteractionCount?: number;
+        created_at?: string;
+        CreatedAt?: string;
+        updated_at?: string;
+        UpdatedAt?: string;
+      }
+    >;
     count: number;
-  }>(`/api/memory/entities?${params.toString()}`);
+  }>(`${agentPath("/memory/entities")}?${params.toString()}`);
   return {
     entities: (res.entities || []).map((e) => ({
       id: e.id || e.ID || "",
@@ -642,7 +649,7 @@ export async function getEntityDetails(entityId: string) {
     observations: Array<Record<string, unknown>>;
     interactions: Array<Record<string, unknown>>;
     relations: Array<Record<string, unknown>>;
-  }>(`/api/memory/entities/${encodeURIComponent(entityId)}`);
+  }>(`${agentPath("/memory/entities")}/${encodeURIComponent(entityId)}`);
 
   const e = res.entity || {};
   const entity: EntityRow = {
@@ -659,37 +666,43 @@ export async function getEntityDetails(entityId: string) {
     updated_at: (e.updated_at || e.UpdatedAt || "") as string,
   };
 
-  const observations: EntityObservationRow[] = (res.observations || []).map((o: Record<string, unknown>) => ({
-    id: (o.id ?? o.ID ?? 0) as number,
-    entity_id: (o.entity_id || o.EntityID || "") as string,
-    observation: (o.observation || o.Observation || "") as string,
-    category: (o.category || o.Category || "trait") as string,
-    confidence: (o.confidence ?? o.Confidence ?? 1) as number,
-    source: (o.source || o.Source || "extracted") as string,
-    created_at: (o.created_at || o.CreatedAt || "") as string,
-    updated_at: (o.updated_at || o.UpdatedAt || "") as string,
-  }));
+  const observations: EntityObservationRow[] = (res.observations || []).map(
+    (o: Record<string, unknown>) => ({
+      id: (o.id ?? o.ID ?? 0) as number,
+      entity_id: (o.entity_id || o.EntityID || "") as string,
+      observation: (o.observation || o.Observation || "") as string,
+      category: (o.category || o.Category || "trait") as string,
+      confidence: (o.confidence ?? o.Confidence ?? 1) as number,
+      source: (o.source || o.Source || "extracted") as string,
+      created_at: (o.created_at || o.CreatedAt || "") as string,
+      updated_at: (o.updated_at || o.UpdatedAt || "") as string,
+    }),
+  );
 
-  const interactions: EntityInteractionRow[] = (res.interactions || []).map((i: Record<string, unknown>) => ({
-    id: (i.id ?? i.ID ?? 0) as number,
-    entity_id: (i.entity_id || i.EntityID || "") as string,
-    summary: (i.summary || i.Summary || "") as string,
-    source: (i.source || i.Source || "") as string,
-    source_ref: (i.source_ref || i.SourceRef || "") as string,
-    interaction_at: (i.interaction_at || i.InteractionAt || "") as string,
-    created_at: (i.created_at || i.CreatedAt || "") as string,
-  }));
+  const interactions: EntityInteractionRow[] = (res.interactions || []).map(
+    (i: Record<string, unknown>) => ({
+      id: (i.id ?? i.ID ?? 0) as number,
+      entity_id: (i.entity_id || i.EntityID || "") as string,
+      summary: (i.summary || i.Summary || "") as string,
+      source: (i.source || i.Source || "") as string,
+      source_ref: (i.source_ref || i.SourceRef || "") as string,
+      interaction_at: (i.interaction_at || i.InteractionAt || "") as string,
+      created_at: (i.created_at || i.CreatedAt || "") as string,
+    }),
+  );
 
-  const relations: EntityRelationRow[] = (res.relations || []).map((r: Record<string, unknown>) => ({
-    id: (r.id ?? r.ID ?? 0) as number,
-    source_entity_id: (r.source_entity_id || r.SourceEntityID || "") as string,
-    relation: (r.relation || r.Relation || "") as string,
-    target_entity_id: (r.target_entity_id || r.TargetEntityID || "") as string,
-    context: (r.context || r.Context || "") as string,
-    confidence: (r.confidence ?? r.Confidence ?? 1) as number,
-    created_at: (r.created_at || r.CreatedAt || "") as string,
-    updated_at: (r.updated_at || r.UpdatedAt || "") as string,
-  }));
+  const relations: EntityRelationRow[] = (res.relations || []).map(
+    (r: Record<string, unknown>) => ({
+      id: (r.id ?? r.ID ?? 0) as number,
+      source_entity_id: (r.source_entity_id || r.SourceEntityID || "") as string,
+      relation: (r.relation || r.Relation || "") as string,
+      target_entity_id: (r.target_entity_id || r.TargetEntityID || "") as string,
+      context: (r.context || r.Context || "") as string,
+      confidence: (r.confidence ?? r.Confidence ?? 1) as number,
+      created_at: (r.created_at || r.CreatedAt || "") as string,
+      updated_at: (r.updated_at || r.UpdatedAt || "") as string,
+    }),
+  );
 
   return { entity, observations, interactions, relations } as EntityDetails;
 }
@@ -724,36 +737,39 @@ export interface PluginInfo {
 }
 
 export async function listPlugins() {
-  return api<PluginInfo[]>("/api/plugins");
+  return api<PluginInfo[]>(agentPath("/plugins"));
 }
 
 export async function installPlugin(name: string) {
-  return api<{ plugin_id: string; status: string }>(`/api/plugins/${name}/install`, {
+  return api<{ plugin_id: string; status: string }>(`${agentPath("/plugins")}/${name}/install`, {
     method: "POST",
   });
 }
 
 export async function enablePlugin(name: string) {
-  return api<{ status: string }>(`/api/plugins/${name}/enable`, { method: "POST" });
+  return api<{ status: string }>(`${agentPath("/plugins")}/${name}/enable`, { method: "POST" });
 }
 
 export async function disablePlugin(name: string) {
-  return api<{ status: string }>(`/api/plugins/${name}/disable`, { method: "POST" });
+  return api<{ status: string }>(`${agentPath("/plugins")}/${name}/disable`, { method: "POST" });
 }
 
 export async function savePluginConfig(name: string, config: Record<string, string>) {
-  return api<{ status: string; auto_enabled?: boolean }>(`/api/plugins/${name}/config`, {
-    method: "POST",
-    body: JSON.stringify({ config }),
-  });
+  return api<{ status: string; auto_enabled?: boolean }>(
+    `${agentPath("/plugins")}/${name}/config`,
+    {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    },
+  );
 }
 
 export async function getPluginConfig(name: string) {
-  return api<Record<string, string>>(`/api/plugins/${name}/config`);
+  return api<Record<string, string>>(`${agentPath("/plugins")}/${name}/config`);
 }
 
 export async function uninstallPlugin(name: string) {
-  return api(`/api/plugins/${name}`, { method: "DELETE" });
+  return api(`${agentPath("/plugins")}/${name}`, { method: "DELETE" });
 }
 
 // ── Skills ──
@@ -775,23 +791,23 @@ export interface SkillMeta {
 
 export async function searchMarketplaceSkills(query: string, limit = 10) {
   return api<{ query: string; search_type: string; skills: MarketplaceSkill[]; count: number }>(
-    `/api/skills/marketplace/search?q=${encodeURIComponent(query)}&limit=${limit}`
+    `${agentPath("/skills/marketplace/search")}?q=${encodeURIComponent(query)}&limit=${limit}`,
   );
 }
 
 export async function listInstalledSkills() {
-  return api<{ skills: SkillMeta[]; count: number }>("/api/skills/installed");
+  return api<{ skills: SkillMeta[]; count: number }>(agentPath("/skills/installed"));
 }
 
 export async function installSkill(source: string, skillName?: string) {
-  return api<{ installed: SkillMeta; remote_url: string }>("/api/skills/install", {
+  return api<{ installed: SkillMeta; remote_url: string }>(agentPath("/skills/install"), {
     method: "POST",
     body: JSON.stringify({ source, skill_name: skillName }),
   });
 }
 
 export async function removeSkill(name: string) {
-  return api<{ removed: boolean; name: string }>("/api/skills/remove", {
+  return api<{ removed: boolean; name: string }>(agentPath("/skills/remove"), {
     method: "POST",
     body: JSON.stringify({ name }),
   });
@@ -809,45 +825,46 @@ export interface ChatSession {
 
 export async function listChatSessions(userId: string, limit = 50) {
   return api<{ sessions: ChatSession[] }>(
-    `/v1/sessions?user_id=${encodeURIComponent(userId)}&limit=${limit}`
+    `${agentPath("/sessions")}?user_id=${encodeURIComponent(userId)}&limit=${limit}`,
   );
 }
 
 export async function getChatSessionStatuses(userId: string) {
   return api<{ statuses: Record<string, "idle" | "streaming" | "error"> }>(
-    `/v1/sessions/status?user_id=${encodeURIComponent(userId)}`
+    `${agentPath("/sessions/status")}?user_id=${encodeURIComponent(userId)}`,
   );
 }
 
 export async function createChatSession(userId: string, title = "New chat") {
-  return api<ChatSession>("/v1/sessions", {
+  return api<ChatSession>(agentPath("/sessions"), {
     method: "POST",
     body: JSON.stringify({ user_id: userId, title }),
   });
 }
 
 export async function getChatSession(sessionId: string) {
-  return api<{ session: ChatSession; messages: Array<{ id: number; role?: string; content: unknown; created_at?: string }> }>(
-    `/v1/sessions/${encodeURIComponent(sessionId)}`
-  );
+  return api<{
+    session: ChatSession;
+    messages: Array<{ id: number; role?: string; content: unknown; created_at?: string }>;
+  }>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`);
 }
 
 export async function updateChatSessionTitle(sessionId: string, title: string) {
-  return api<ChatSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+  return api<ChatSession>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });
 }
 
 export async function archiveChatSession(sessionId: string) {
-  return api<ChatSession>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+  return api<ChatSession>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ archive: true }),
   });
 }
 
 export async function deleteChatSession(sessionId: string) {
-  return api<{ deleted: boolean }>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+  return api<{ deleted: boolean }>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
 }
@@ -910,7 +927,7 @@ export async function initMediaUpload(input: {
     upload_url: string;
     headers: Record<string, string>;
     expires_at: number;
-  }>("/v1/media/upload/init", {
+  }>(agentPath("/media/upload/init"), {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -927,7 +944,7 @@ export async function completeMediaUpload(input: {
 }) {
   return api<{
     media: MediaRef;
-  }>("/v1/media/upload/complete", {
+  }>(agentPath("/media/upload/complete"), {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -944,8 +961,6 @@ export interface ChatCompletionResponse {
     finish_reason: string;
   }[];
 }
-
-
 
 export async function chatCompletions(input: {
   model?: string;
@@ -964,15 +979,11 @@ export async function chatCompletions(input: {
   if (input.model && input.model.trim()) {
     body.model = input.model.trim();
   }
-  return api<ChatCompletionResponse>("/v1/chat/completions", {
+  return api<ChatCompletionResponse>(agentPath("/chat/completions"), {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
-
-
-
-
 
 // ── OAuth / WebSocket URLs ──
 
@@ -1012,7 +1023,7 @@ export interface TelegramBotInfo {
 
 export async function listChannels(userId?: string): Promise<ChannelInfo[]> {
   const params = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
-  const data = await api<{ channels: ChannelInfo[] }>(`/api/channels${params}`);
+  const data = await api<{ channels: ChannelInfo[] }>(`${agentPath("/channels")}${params}`);
   return data.channels ?? [];
 }
 
@@ -1021,40 +1032,43 @@ export async function connectTelegram(request: TelegramConnectRequest): Promise<
   channel: ChannelInfo;
   bot_info: TelegramBotInfo;
 }> {
-  return api("/api/channels/telegram/connect", {
+  return api(agentPath("/channels/telegram/connect"), {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
 export async function disconnectChannel(channelId: string): Promise<{ success: boolean }> {
-  return api("/api/channels/telegram/disconnect", {
+  return api(agentPath("/channels/telegram/disconnect"), {
     method: "POST",
     body: JSON.stringify({ channel_id: channelId }),
   });
 }
 
 export async function enableChannel(channelId: string): Promise<{ success: boolean }> {
-  return api(`/api/channels/${encodeURIComponent(channelId)}/enable`, {
+  return api(`${agentPath("/channels")}/${encodeURIComponent(channelId)}/enable`, {
     method: "POST",
   });
 }
 
 export async function disableChannel(channelId: string): Promise<{ success: boolean }> {
-  return api(`/api/channels/${encodeURIComponent(channelId)}/disable`, {
+  return api(`${agentPath("/channels")}/${encodeURIComponent(channelId)}/disable`, {
     method: "POST",
   });
 }
 
-export async function sendChannelMessage(channelId: string, text: string): Promise<{ success: boolean }> {
-  return api(`/api/channels/${encodeURIComponent(channelId)}/send`, {
+export async function sendChannelMessage(
+  channelId: string,
+  text: string,
+): Promise<{ success: boolean }> {
+  return api(`${agentPath("/channels")}/${encodeURIComponent(channelId)}/send`, {
     method: "POST",
     body: JSON.stringify({ text }),
   });
 }
 
 export async function claimPairingCode(code: string): Promise<{ status: string }> {
-  return api<{ status: string }>("/api/pair/claim", {
+  return api<{ status: string }>(goPath("/pair/claim"), {
     method: "POST",
     body: JSON.stringify({ code }),
   });
@@ -1063,14 +1077,20 @@ export async function claimPairingCode(code: string): Promise<{ status: string }
 // ── Questions (ask_user tool) ──
 
 export async function replyToQuestion(questionId: string, answers: string[]) {
-  return api<{ ok: boolean }>(`/v1/questions/${encodeURIComponent(questionId)}/reply`, {
-    method: "POST",
-    body: JSON.stringify({ answers }),
-  });
+  return api<{ ok: boolean }>(
+    `${agentPath("/questions")}/${encodeURIComponent(questionId)}/reply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    },
+  );
 }
 
 export async function rejectQuestion(questionId: string) {
-  return api<{ ok: boolean }>(`/v1/questions/${encodeURIComponent(questionId)}/reject`, {
-    method: "POST",
-  });
+  return api<{ ok: boolean }>(
+    `${agentPath("/questions")}/${encodeURIComponent(questionId)}/reject`,
+    {
+      method: "POST",
+    },
+  );
 }

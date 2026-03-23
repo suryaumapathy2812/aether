@@ -1,25 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Edge runtime streams ReadableStream bodies properly.
-// Node.js runtime buffers the entire response before sending.
 export const runtime = "edge";
 
-/**
- * Legacy proxy route: forwards /api/go/* to the orchestrator upstream.
- *
- * Set ORCHESTRATOR_BASE_URL in your .env (optional):
- *   - ORCHESTRATOR_BASE_URL=http://localhost:4000
- *
- * The proxy strips the /api/go prefix and forwards the rest as-is.
- */
 const ORCHESTRATOR_BASE_URL = (
   process.env.ORCHESTRATOR_BASE_URL || "http://localhost:4000"
 ).replace(/\/$/, "");
 
+const PUBLIC_PREFIX = "/go/v1";
+
 async function proxy(request: NextRequest, params: { path?: string[] }) {
   const segments = params.path || [];
-  const upstreamPath = segments.join("/");
-  const url = new URL(`${ORCHESTRATOR_BASE_URL}/${upstreamPath}`);
+  const upstreamPath =
+    segments.length > 0 ? `${PUBLIC_PREFIX}/${segments.join("/")}` : PUBLIC_PREFIX;
+  const url = new URL(`${ORCHESTRATOR_BASE_URL}${upstreamPath}`);
   request.nextUrl.searchParams.forEach((value, key) => {
     url.searchParams.append(key, value);
   });
@@ -76,9 +69,6 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
     const setCookie = response.headers.get("set-cookie");
     if (setCookie) responseHeaders.set("set-cookie", setCookie);
 
-    // For SSE responses, explicitly pipe through a TransformStream to ensure
-    // chunk-by-chunk delivery even when Next.js standalone mode runs edge
-    // routes on Node.js (which can buffer ReadableStream bodies).
     if (isSSE && response.body) {
       const { readable, writable } = new TransformStream();
       const upstream = response.body;
@@ -127,7 +117,7 @@ async function proxy(request: NextRequest, params: { path?: string[] }) {
         ? "ECONNREFUSED"
         : "UPSTREAM_ERROR";
 
-    console.error(`[api/go proxy] ${method} ${url.toString()} failed: ${code} — ${message}`);
+    console.error(`[go/v1 proxy] ${method} ${url.toString()} failed: ${code} — ${message}`);
 
     return NextResponse.json(
       {

@@ -8,6 +8,7 @@ import NotificationProvider from "@/components/NotificationProvider";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
 import Sidebar from "@/components/Sidebar";
 import KeyboardShortcutsProvider from "@/components/KeyboardShortcutsProvider";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { UIPreferencesProvider } from "@/lib/ui-preferences";
 import "./globals.css";
 
@@ -28,15 +29,14 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={jakarta.variable}>
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+        />
         <meta name="theme-color" content="#0a0a0a" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
         <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -49,14 +49,14 @@ export default function RootLayout({
             <ServiceWorkerRegistrar />
             <NotificationProvider>
               <KeyboardShortcutsProvider>
-               <div className="app-layout">
-                <Suspense>
-                  <Sidebar />
-                </Suspense>
-                <main id="app-main" className="flex-1 min-w-0 min-h-0 overflow-hidden">
+                <SidebarProvider className="flex-col md:flex-row">
+                  <Suspense>
+                    <Sidebar variant="sidebar" />
+                  </Suspense>
+                  <SidebarInset id="app-main" className="overflow-hidden">
                     {children}
-                  </main>
-                </div>
+                  </SidebarInset>
+                </SidebarProvider>
               </KeyboardShortcutsProvider>
             </NotificationProvider>
             <Toaster />

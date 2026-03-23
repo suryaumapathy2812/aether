@@ -348,12 +348,12 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
 
       {/* ── Main chat view ──────────────────────────────────────────── */}
       <div className="h-full flex flex-col">
-        <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
+        {/*<div className="absolute top-5 right-5 z-10 flex items-center gap-2">
           {loopLabel && (
             <span className="text-[10px] text-muted-foreground/60 animate-pulse">{loopLabel}</span>
           )}
           <StatusOrb status={isStreaming ? "thinking" : "connected"} size={8} />
-        </div>
+        </div>*/}
 
         <Conversation className="flex-1 min-h-0">
           <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-[720px] mx-auto w-full">

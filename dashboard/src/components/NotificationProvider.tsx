@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
 import { directAgentWs, ensureDirectAgentConnection, orchestratorWs } from "@/lib/api";
@@ -63,11 +56,7 @@ function openApprovalScreen(taskId?: string): void {
 
 // ── Provider ──
 
-export default function NotificationProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function NotificationProvider({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const userId = session?.user?.id || "";
   const token = session?.session?.token || "";
@@ -89,9 +78,7 @@ export default function NotificationProvider({
       return;
     }
     try {
-      const raw = window.localStorage.getItem(
-        `${NOTIFICATIONS_STORAGE_PREFIX}.${userId}`
-      );
+      const raw = window.localStorage.getItem(`${NOTIFICATIONS_STORAGE_PREFIX}.${userId}`);
       if (!raw) {
         setNotifications([]);
         return;
@@ -127,7 +114,7 @@ export default function NotificationProvider({
     try {
       window.localStorage.setItem(
         `${NOTIFICATIONS_STORAGE_PREFIX}.${userId}`,
-        JSON.stringify(notifications)
+        JSON.stringify(notifications),
       );
     } catch {
       // Ignore storage errors; runtime notifications still work.
@@ -138,19 +125,17 @@ export default function NotificationProvider({
 
   const addNotification = useCallback(
     (notif: AgentNotification, options?: NotificationToastOptions) => {
-    setNotifications((prev) => {
-      const next = [notif, ...prev];
-      return next.length > MAX_NOTIFICATIONS
-        ? next.slice(0, MAX_NOTIFICATIONS)
-        : next;
-    });
-    toast(notif.title, {
-      description: notif.body,
-      duration: options?.duration ?? 5000,
-      action: options?.action,
-    });
+      setNotifications((prev) => {
+        const next = [notif, ...prev];
+        return next.length > MAX_NOTIFICATIONS ? next.slice(0, MAX_NOTIFICATIONS) : next;
+      });
+      toast(notif.title, {
+        description: notif.body,
+        duration: options?.duration ?? 5000,
+        action: options?.action,
+      });
     },
-    []
+    [],
   );
 
   const addNotificationRef = useRef(addNotification);
@@ -174,25 +159,18 @@ export default function NotificationProvider({
         const event = String(p.event || "");
         const title = String(p.title || "Task update");
         const status = String(p.status || "");
-        if (
-          event === "waiting_input" ||
-          event === "completed" ||
-          event === "failed"
-        ) {
+        if (event === "waiting_input" || event === "completed" || event === "failed") {
           const taskId = String(p.task_id || "").trim();
           const isWaitingInput = event === "waiting_input";
           add(
             {
-            id: randomId(),
-            type: "task_update",
-            title,
-            body:
-              isWaitingInput
-                ? "Waiting for your input"
-                : `Task ${status}`,
-            timestamp: Date.now(),
-            read: false,
-            payload: p,
+              id: randomId(),
+              type: "task_update",
+              title,
+              body: isWaitingInput ? "Waiting for your input" : `Task ${status}`,
+              timestamp: Date.now(),
+              read: false,
+              payload: p,
             },
             isWaitingInput
               ? {
@@ -202,7 +180,7 @@ export default function NotificationProvider({
                     onClick: () => openApprovalScreen(taskId || undefined),
                   },
                 }
-              : undefined
+              : undefined,
           );
         }
         break;
@@ -272,8 +250,8 @@ export default function NotificationProvider({
 
       const direct = await ensureDirectAgentConnection();
       const socket = direct
-        ? directAgentWs("/ws/notifications", direct)
-        : orchestratorWs("/api/ws/notifications", token || undefined);
+        ? directAgentWs("/agent/v1/ws/notifications", direct)
+        : orchestratorWs("/agent/v1/ws/notifications", token || undefined);
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -313,14 +291,10 @@ export default function NotificationProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, token]);
 
-
-
   // ── Actions ──
 
   const markRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
   }, []);
 
   const markAllRead = useCallback(() => {
@@ -354,9 +328,7 @@ export default function NotificationProvider({
 export function useNotifications(): NotificationContextValue {
   const ctx = useContext(NotificationContext);
   if (!ctx) {
-    throw new Error(
-      "useNotifications must be used inside NotificationProvider"
-    );
+    throw new Error("useNotifications must be used inside NotificationProvider");
   }
   return ctx;
 }

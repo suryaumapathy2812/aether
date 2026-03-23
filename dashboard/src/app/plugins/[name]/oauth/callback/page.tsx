@@ -35,7 +35,7 @@ export default function PluginOAuthCallbackPage() {
 
     const run = async () => {
       try {
-        const res = await fetchWithAuth(`/api/plugins/${pluginName}/oauth/callback`, {
+        const res = await fetchWithAuth(`/agent/v1/plugins/${pluginName}/oauth/callback`, {
           method: "POST",
           body: JSON.stringify({ code, state }),
         });

@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export async function GET(
-  request: NextRequest,
-  context: { params: Promise<{ name: string }> }
-) {
+export async function GET(request: NextRequest, context: { params: Promise<{ name: string }> }) {
   const { name } = await context.params;
   const pluginName = encodeURIComponent(name);
   const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
@@ -12,7 +9,7 @@ export async function GET(
     .split(",")[0]
     .trim();
   const origin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : request.nextUrl.origin;
-  const localTarget = new URL(`/api/go/api/plugins/${pluginName}/oauth/start`, origin);
+  const localTarget = new URL(`/agent/v1/plugins/${pluginName}/oauth/start`, origin);
   request.nextUrl.searchParams.forEach((value, key) => {
     localTarget.searchParams.append(key, value);
   });
@@ -52,7 +49,10 @@ export async function GET(
       `${res.status} ${res.statusText}`;
     if (msg) {
       const normalized = msg.toLowerCase();
-      if (normalized.includes("missing oauth client_id") || normalized.includes("missing oauth client_secret")) {
+      if (
+        normalized.includes("missing oauth client_id") ||
+        normalized.includes("missing oauth client_secret")
+      ) {
         lastError = "This connection needs setup details before it can be connected.";
       } else {
         lastError = "Could not start connection. Please try again.";

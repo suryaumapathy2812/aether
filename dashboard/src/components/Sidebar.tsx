@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, Suspense } from "react";
+import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -21,19 +21,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
-  MessageCircle,
   Brain,
   Zap,
   Smartphone,
   Sparkles,
-  PanelLeftClose,
-  PanelLeft,
   Plus,
   MoreHorizontal,
   Pencil,
@@ -41,52 +34,65 @@ import {
   Trash2,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Sidebar as SidebarShell,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
 import { chatRuntime, useChatStatusMap } from "@/lib/chat-runtime";
+import { Separator } from "./ui/separator";
 
-export default function Sidebar() {
+type AppSidebarProps = {
+  variant?: "sidebar" | "floating" | "inset";
+};
+
+export default function Sidebar({ variant = "floating" }: AppSidebarProps) {
   return (
     <Suspense>
-      <SidebarInner />
+      <SidebarInner variant={variant} />
     </Suspense>
   );
 }
 
-function SidebarInner() {
+function SidebarInner({ variant }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session } = useSession();
   const { setSidebarToggle } = useShortcutsContext();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const { state, isMobile, setOpenMobile, toggleSidebar } = useSidebar();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const editInputRef = useRef<HTMLInputElement>(null);
 
+  const collapsed = state === "collapsed";
   const activeSessionId = searchParams.get("s") || "";
   const statusMap = useChatStatusMap();
 
-  const toggle = useCallback(() => setCollapsed((c) => !c), []);
-
-  // Hide main content when mobile sidebar is open
   useEffect(() => {
-    const main = document.getElementById("app-main");
-    if (!main) return;
-    if (mobileOpen) {
-      main.style.display = "none";
-    } else {
-      main.style.display = "";
+    setSidebarToggle(toggleSidebar);
+  }, [setSidebarToggle, toggleSidebar]);
+
+  const closeMobileSidebar = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
     }
-    return () => { main.style.display = ""; };
-  }, [mobileOpen]);
-
-  useEffect(() => {
-    setSidebarToggle(toggle);
-  }, [toggle, setSidebarToggle]);
+  }, [isMobile, setOpenMobile]);
 
   const loadSessions = useCallback(() => {
     if (!session?.user?.id) return;
+
     listChatSessions(session.user.id, 30)
       .then((res) => setSessions(res.sessions || []))
       .catch(() => {});
@@ -99,11 +105,13 @@ function SidebarInner() {
   useEffect(() => {
     const userId = session?.user?.id?.trim();
     if (!userId) return;
+
     void chatRuntime.bootstrapForUser(userId);
   }, [session?.user?.id]);
 
   async function handleNewChat() {
     if (!session?.user?.id) return;
+
     try {
       const newSess = await createChatSession(session.user.id);
       setSessions((prev) => [newSess, ...prev]);
@@ -111,30 +119,36 @@ function SidebarInner() {
     } catch {
       router.push("/chat");
     }
-    setMobileOpen(false);
+
+    closeMobileSidebar();
   }
 
-  function startRename(s: ChatSession) {
-    setEditingId(s.id);
-    setEditTitle(s.title);
+  function startRename(sessionToRename: ChatSession) {
+    setEditingId(sessionToRename.id);
+    setEditTitle(sessionToRename.title);
     setTimeout(() => editInputRef.current?.focus(), 50);
   }
 
   async function commitRename() {
     if (!editingId) return;
+
     const trimmed = editTitle.trim();
     if (trimmed) {
       await updateChatSessionTitle(editingId, trimmed).catch(() => {});
       setSessions((prev) =>
-        prev.map((s) => (s.id === editingId ? { ...s, title: trimmed } : s))
+        prev.map((sessionItem) =>
+          sessionItem.id === editingId ? { ...sessionItem, title: trimmed } : sessionItem,
+        ),
       );
     }
+
     setEditingId(null);
   }
 
   async function handleArchive(id: string) {
     await archiveChatSession(id).catch(() => {});
-    setSessions((prev) => prev.filter((s) => s.id !== id));
+    setSessions((prev) => prev.filter((sessionItem) => sessionItem.id !== id));
+
     if (activeSessionId === id) {
       router.push("/chat");
     }
@@ -142,7 +156,8 @@ function SidebarInner() {
 
   async function handleDelete(id: string) {
     await deleteChatSession(id).catch(() => {});
-    setSessions((prev) => prev.filter((s) => s.id !== id));
+    setSessions((prev) => prev.filter((sessionItem) => sessionItem.id !== id));
+
     if (activeSessionId === id) {
       router.push("/chat");
     }
@@ -159,322 +174,261 @@ function SidebarInner() {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
-  const todaySessions = sessions.filter((s) => new Date(s.updated_at) >= today);
-  const yesterdaySessions = sessions.filter((s) => {
-    const d = new Date(s.updated_at);
-    return d >= yesterday && d < today;
+  const todaySessions = sessions.filter((sessionItem) => new Date(sessionItem.updated_at) >= today);
+  const yesterdaySessions = sessions.filter((sessionItem) => {
+    const updatedAt = new Date(sessionItem.updated_at);
+    return updatedAt >= yesterday && updatedAt < today;
   });
-  const olderSessions = sessions.filter((s) => new Date(s.updated_at) < yesterday);
+  const olderSessions = sessions.filter(
+    (sessionItem) => new Date(sessionItem.updated_at) < yesterday,
+  );
 
-  const renderSession = (s: ChatSession) => {
-    const isActive = s.id === activeSessionId;
-    const isEditing = s.id === editingId;
-    const isRunning = statusMap[s.id] === "streaming";
+  const renderSession = (sessionItem: ChatSession) => {
+    const isActive = sessionItem.id === activeSessionId;
+    const isEditing = sessionItem.id === editingId;
+    const isRunning = statusMap[sessionItem.id] === "streaming";
 
     return (
-      <div
-        key={s.id}
+      <SidebarMenuItem
+        key={sessionItem.id}
         className={cn(
-          "group flex items-center gap-1 rounded-md transition-colors",
-          isActive ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
+          "group/menu-item rounded-md transition-colors",
+          isActive ? "bg-white/[0.06]" : "hover:bg-white/[0.04]",
         )}
       >
         {isEditing ? (
           <input
             ref={editInputRef}
             value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
+            onChange={(event) => setEditTitle(event.target.value)}
             onBlur={commitRename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitRename();
-              if (e.key === "Escape") setEditingId(null);
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void commitRename();
+              if (event.key === "Escape") setEditingId(null);
             }}
-            className="flex-1 min-w-0 px-3 py-1.5 text-[13px] bg-transparent text-foreground outline-none"
+            className="h-8 min-w-0 w-full bg-transparent px-3 text-sm font-bold text-foreground outline-none cursor-pointer"
           />
         ) : (
-          <button
+          <SidebarMenuButton
+            isActive={isActive}
+            tooltip={sessionItem.title || "New chat"}
+            onDoubleClick={() => startRename(sessionItem)}
             onClick={() => {
-              router.push(`/chat?s=${s.id}`);
-              setMobileOpen(false);
+              router.push(`/chat?s=${sessionItem.id}`);
+              closeMobileSidebar();
             }}
-            onDoubleClick={() => startRename(s)}
-            className="flex-1 min-w-0 text-left px-3 py-2.5 text-[13px] text-foreground/60 truncate"
+            className={cn(
+              "h-8 px-3 text-sm font-bold cursor-pointer",
+              isActive
+                ? "bg-transparent text-foreground hover:bg-transparent hover:text-foreground"
+                : "text-foreground/60 hover:bg-transparent hover:text-foreground",
+            )}
           >
-            {s.title || "New chat"}
-          </button>
-        )}
-
-        {isRunning && !isEditing && (
-          <span className="shrink-0 mr-1 inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            <span>{sessionItem.title || "New chat"}</span>
+          </SidebarMenuButton>
         )}
 
         {!isEditing && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="shrink-0 w-6 h-6 flex items-center justify-center rounded opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground">
-                <MoreHorizontal className="size-3.5" />
-              </button>
+              <SidebarMenuAction
+                showOnHover
+                className=" text-muted-foreground/50 hover:bg-white/6 hover:text-muted-foreground"
+              >
+                {isRunning ? (
+                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                ) : (
+                  <MoreHorizontal className="size-3.5" />
+                )}
+              </SidebarMenuAction>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-36">
-              <DropdownMenuItem onClick={() => startRename(s)} className="text-xs">
-                <Pencil className="size-3 mr-2" />
+              <DropdownMenuItem onClick={() => startRename(sessionItem)} className="text-xs">
+                <Pencil className="mr-2 size-3" />
                 Rename
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleArchive(s.id)} className="text-xs">
-                <Archive className="size-3 mr-2" />
+              <DropdownMenuItem onClick={() => handleArchive(sessionItem.id)} className="text-xs">
+                <Archive className="mr-2 size-3" />
                 Archive
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => handleDelete(s.id)} className="text-xs text-red-400 focus:text-red-400">
-                <Trash2 className="size-3 mr-2" />
+              <DropdownMenuItem
+                onClick={() => handleDelete(sessionItem.id)}
+                className="text-xs text-red-400 focus:text-red-400"
+              >
+                <Trash2 className="mr-2 size-3" />
                 Delete
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-      </div>
+      </SidebarMenuItem>
     );
   };
 
-  const renderCollapsedSession = (s: ChatSession) => {
-    const isActive = s.id === activeSessionId;
-    const isRunning = statusMap[s.id] === "streaming";
-    const label = (s.title || "New chat").trim();
+  const renderCollapsedSession = (sessionItem: ChatSession) => {
+    const isActive = sessionItem.id === activeSessionId;
+    const isRunning = statusMap[sessionItem.id] === "streaming";
+    const label = (sessionItem.title || "New chat").trim();
     const glyph = label.charAt(0).toUpperCase() || "C";
 
     return (
-      <Tooltip key={s.id}>
+      <Tooltip key={sessionItem.id}>
         <TooltipTrigger asChild>
-          <button
+          <SidebarMenuButton
+            isActive={isActive}
             onClick={() => {
-              router.push(`/chat?s=${s.id}`);
-              setMobileOpen(false);
+              router.push(`/chat?s=${sessionItem.id}`);
+              closeMobileSidebar();
             }}
             className={cn(
-              "w-8 h-8 rounded-md flex items-center justify-center text-[11px] font-medium transition-colors",
+              "justify-center text-xs font-bold tracking-tight cursor-pointer",
               isActive
-                ? "bg-white/[0.1] text-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-white/[0.06]"
+                ? "bg-white/[0.1] text-foreground hover:bg-white/[0.1]"
+                : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
             )}
             aria-label={label}
           >
             <span className="relative inline-flex items-center justify-center">
-              {glyph}
+              <span>{glyph}</span>
               {isRunning && (
-                <span className="absolute -top-1 -right-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
               )}
             </span>
-          </button>
+          </SidebarMenuButton>
         </TooltipTrigger>
         <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
     );
   };
 
-  const renderGroup = (label: string, items: ChatSession[]) => {
+  const renderSessionGroup = (label: string, items: ChatSession[]) => {
     if (items.length === 0) return null;
+
     return (
-      <div className="mb-3">
-        <p className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-foreground/40 font-medium">
-          {label}
-        </p>
-        <div className="space-y-0.5">{items.map(renderSession)}</div>
-      </div>
+      <SidebarGroup className="mb-3">
+        <SidebarGroupLabel>{label}</SidebarGroupLabel>
+        <SidebarGroupContent className="space-y-0.5">
+          <SidebarMenu className="gap-y-1.5">{items.map(renderSession)}</SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
     );
   };
 
-    return (
+  return (
     <>
-      {/* ── Mobile: header + full-screen sidebar ── */}
-      {pathname !== "/" && (
-        <div className="md:hidden shrink-0 h-12 flex items-center justify-between px-4 bg-[#0a0a0a] border-b border-white/[0.06]">
-          <span className="logo-wordmark text-[11px] text-foreground/70 font-medium">aether</span>
-          <button
-            onClick={() => setMobileOpen((o) => !o)}
-            className="w-8 h-8 flex items-center justify-center rounded-lg text-foreground/70"
-          >
-            {mobileOpen ? <PanelLeftClose className="size-4" /> : <PanelLeft className="size-4" />}
-          </button>
+      <div className="border-b border-white/[0.06] bg-[#0a0a0a] md:hidden">
+        <div className="flex h-12 items-center justify-between px-4">
+          <span className="logo-wordmark text-base font-bold text-foreground/70">aether</span>
+          <SidebarTrigger className="h-8 w-8 rounded-lg text-foreground/70 hover:bg-white/[0.04] hover:text-foreground" />
         </div>
-      )}
+      </div>
 
-      {mobileOpen && (
-        <aside className="md:hidden flex-1 min-h-0 overflow-y-auto bg-[#0a0a0a]">
-          <div className="flex flex-col h-full">
-            {/* New Chat */}
-            <div className="px-3 pt-3 pb-2">
-              <button
-                onClick={handleNewChat}
-                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium text-foreground hover:bg-white/[0.06] transition-colors"
-                aria-label="New Chat"
-              >
-                <Plus className="size-4 shrink-0" />
-                New Chat
-              </button>
-            </div>
+      <SidebarShell collapsible="icon" variant={variant}>
+        <SidebarHeader className="flex items-center justify-between px-4 pb-3 pt-4 md:hidden">
+          <span className="logo-wordmark text-base font-bold text-foreground/70">aether</span>
+          <SidebarTrigger className="h-8 w-8 rounded-lg text-foreground/70 hover:bg-white/[0.04] hover:text-foreground" />
+        </SidebarHeader>
 
-            {/* Top Nav */}
-            <div className="px-3 pb-2 space-y-0.5">
-              {topNavItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMobileOpen(false)}
-                  className={cn(
-                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
-                    pathname.startsWith(item.href)
-                      ? "text-foreground bg-white/[0.06]"
-                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]"
-                  )}
-                >
-                  <item.icon className="size-4 shrink-0" />
-                  {item.label}
-                </Link>
-              ))}
-            </div>
+        <SidebarHeader
+          className={cn(
+            "hidden min-w-0 items-center px-2 pb-4 pt-5 md:flex flex-row",
+            collapsed ? "justify-center" : "justify-between",
+          )}
+        >
+          {!collapsed && (
+            <span className="logo-wordmark truncate text-sm font-bold text-foreground/70">
+              aether
+            </span>
+          )}
+          <SidebarTrigger className="h-7 w-7 rounded-md text-foreground/40 hover:bg-white/[0.04] hover:text-foreground/70" />
+        </SidebarHeader>
 
-            {/* Sessions */}
-            {sessions.length > 0 && (
-              <div className="flex-1 overflow-y-auto px-3 pt-2">
-                {renderGroup("Today", todaySessions)}
-                {renderGroup("Yesterday", yesterdaySessions)}
-                {renderGroup("Previous", olderSessions)}
-              </div>
-            )}
+        <SidebarContent className="p-0">
+          <SidebarGroup className="pt-3 md:pt-0">
+            <SidebarGroupContent>
+              <SidebarMenu className="space-y-1.5">
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={handleNewChat}
+                    tooltip="New Chat"
+                    className={cn(
+                      "h-auto px-3 text-sm font-bold text-foreground",
+                      collapsed && "justify-center px-2",
+                    )}
+                    aria-label="New Chat"
+                  >
+                    <Plus className="size-4 shrink-0" />
+                    {!collapsed && <span>New Chat</span>}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
 
-            {/* Profile */}
-            <div className="mt-auto border-t border-white/[0.06] px-3 py-3">
-              <Link
-                href="/account"
-                onClick={() => setMobileOpen(false)}
+                {topNavItems.map((item) => (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname.startsWith(item.href)}
+                      tooltip={item.label}
+                      className={cn(
+                        "px-3 py-2.5 text-sm font-bold",
+                        pathname.startsWith(item.href)
+                          ? "bg-white/[0.06] text-foreground hover:bg-white/[0.06]"
+                          : "text-foreground/70 hover:bg-white/[0.04] hover:text-foreground",
+                        collapsed && "justify-center px-2",
+                      )}
+                    >
+                      <Link href={item.href} onClick={closeMobileSidebar} aria-label={item.label}>
+                        <item.icon className="size-4 shrink-0" />
+                        {!collapsed && <span>{item.label}</span>}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <Separator />
+
+          {!collapsed && sessions.length > 0 && (
+            <SidebarGroup className="flex-1 pt-2">
+              <SidebarGroupContent>
+                {renderSessionGroup("Today", todaySessions)}
+                {renderSessionGroup("Yesterday", yesterdaySessions)}
+                {renderSessionGroup("Previous", olderSessions)}
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
+
+          {collapsed && (
+            <SidebarGroup className="flex-1 pt-2">
+              <SidebarGroupContent>
+                <SidebarMenu>{sessions.slice(0, 12).map(renderCollapsedSession)}</SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
+        </SidebarContent>
+
+        <SidebarFooter className="mt-auto border-t border-white/6 py-4">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={pathname.startsWith("/account")}
+                tooltip={session?.user?.name || "Profile"}
                 className={cn(
-                  "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
+                  "text-sm font-bold",
                   pathname.startsWith("/account")
-                    ? "text-foreground bg-white/[0.06]"
-                    : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]"
+                    ? "bg-white/6 text-foreground hover:bg-white/6"
+                    : "text-foreground/70 hover:bg-white/4 hover:text-foreground",
+                  collapsed && "justify-center",
                 )}
               >
-                <Avatar size="sm">
-                  {session?.user?.image && (
-                    <AvatarImage src={session.user.image} alt={session?.user?.name || ""} />
-                  )}
-                  <AvatarFallback>
-                    {(session?.user?.name || session?.user?.email || "U").charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="truncate">{session?.user?.name || "Profile"}</span>
-              </Link>
-            </div>
-          </div>
-        </aside>
-      )}
-
-      {/* ── Desktop: standard sidebar ── */}
-      <aside
-        className={cn(
-          "h-full shrink-0 bg-white/[0.02] border-r border-white/[0.06] transition-all duration-200",
-          "hidden md:block",
-          collapsed ? "w-[60px]" : "w-[240px]"
-        )}
-      >
-        <div className="flex flex-col h-full">
-          {/* Header — hidden on mobile since the fixed top bar handles it */}
-          <div className={cn("hidden md:flex items-center px-4 pt-5 pb-4 min-w-0", collapsed ? "justify-center" : "justify-between")}>
-            {!collapsed && (
-              <span className="logo-wordmark text-[11px] text-foreground/70 font-medium truncate">
-                aether
-              </span>
-            )}
-            <button
-              onClick={toggle}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-foreground/40 hover:text-foreground/70 hover:bg-white/[0.04] transition-colors"
-            >
-              {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
-            </button>
-          </div>
-
-          {/* New Chat */}
-          <div className="px-3 pb-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={handleNewChat}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors",
-                    "text-foreground hover:bg-white/[0.06]",
-                    collapsed && "justify-center px-0"
-                  )}
-                  aria-label="New Chat"
-                >
-                  <Plus className="size-4 shrink-0" />
-                  {!collapsed && "New Chat"}
-                </button>
-              </TooltipTrigger>
-              {collapsed && <TooltipContent side="right">New Chat</TooltipContent>}
-            </Tooltip>
-          </div>
-
-          {/* Top Nav */}
-          <div className={cn("px-3 pb-2 space-y-0.5", collapsed && "flex flex-col items-center")}>
-            {topNavItems.map((item) => (
-              <Tooltip key={item.href}>
-                <TooltipTrigger asChild>
-                  <Link
-                    href={item.href}
-                    onClick={() => setMobileOpen(false)}
-                    className={cn(
-                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
-                    pathname.startsWith(item.href)
-                      ? "text-foreground bg-white/[0.06]"
-                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]",
-                      collapsed && "justify-center px-0"
-                    )}
-                    aria-label={item.label}
-                  >
-                    <item.icon className="size-4 shrink-0" />
-                    {!collapsed && item.label}
-                  </Link>
-                </TooltipTrigger>
-                {collapsed && <TooltipContent side="right">{item.label}</TooltipContent>}
-              </Tooltip>
-            ))}
-          </div>
-
-          {/* Sessions */}
-          {!collapsed && sessions.length > 0 && (
-            <div className="flex-1 overflow-y-auto px-3 pt-2">
-              {renderGroup("Today", todaySessions)}
-              {renderGroup("Yesterday", yesterdaySessions)}
-              {renderGroup("Previous", olderSessions)}
-            </div>
-          )}
-          {collapsed && (
-            <div className="flex-1 overflow-y-auto px-3 pt-2">
-              <div className="space-y-1.5">
-                {sessions.slice(0, 12).map(renderCollapsedSession)}
-              </div>
-            </div>
-          )}
-
-          {/* Profile */}
-          <div className="mt-auto border-t border-white/[0.06] px-3 py-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href="/account"
-                  onClick={() => setMobileOpen(false)}
-                  className={cn(
-                    "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-colors",
-                    pathname.startsWith("/account")
-                      ? "text-foreground bg-white/[0.06]"
-                      : "text-foreground/70 hover:text-foreground hover:bg-white/[0.04]",
-                    collapsed && "justify-center px-0"
-                  )}
-                  aria-label="Profile"
-                >
+                <Link href="/account" onClick={closeMobileSidebar} aria-label="Profile">
                   <Avatar size="sm">
                     {session?.user?.image && (
                       <AvatarImage src={session.user.image} alt={session?.user?.name || ""} />
@@ -487,16 +441,11 @@ function SidebarInner() {
                     <span className="truncate">{session?.user?.name || "Profile"}</span>
                   )}
                 </Link>
-              </TooltipTrigger>
-              {collapsed && (
-                <TooltipContent side="right">
-                  {session?.user?.name || "Profile"}
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </div>
-        </div>
-      </aside>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      </SidebarShell>
     </>
   );
 }

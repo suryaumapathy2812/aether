@@ -42,7 +42,7 @@ export async function requestPermission(): Promise<NotificationPermission> {
  * Get the VAPID public key from the agent.
  */
 async function getVapidKey(): Promise<string> {
-  const res = await directAgentFetch("/api/push/vapid-key");
+  const res = await directAgentFetch("/agent/v1/push/vapid-key");
   if (!res.ok) throw new Error("Failed to get VAPID key");
   const data = await res.json();
   return data.public_key || "";
@@ -88,7 +88,7 @@ export async function subscribeToPush(userId: string): Promise<boolean> {
 
     const subJSON = subscription.toJSON();
 
-    const res = await directAgentFetch("/api/push/subscribe", {
+    const res = await directAgentFetch("/agent/v1/push/subscribe", {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,
@@ -120,7 +120,7 @@ export async function unsubscribeFromPush(userId: string): Promise<boolean> {
     const subscription = await registration.pushManager.getSubscription();
     if (subscription) {
       // Tell the agent to remove this subscription
-      await directAgentFetch("/api/push/subscribe", {
+      await directAgentFetch("/agent/v1/push/subscribe", {
         method: "DELETE",
         body: JSON.stringify({
           user_id: userId,

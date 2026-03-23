@@ -1,12 +1,9 @@
 import { directAgentFetch } from "@/lib/api";
 
-export async function getUserPreference(
-  userId: string,
-  key: string
-): Promise<string | null> {
+export async function getUserPreference(userId: string, key: string): Promise<string | null> {
   try {
     const res = await directAgentFetch(
-      `/api/preferences/get?user_id=${encodeURIComponent(userId)}&key=${encodeURIComponent(key)}`
+      `/agent/v1/preferences/get?user_id=${encodeURIComponent(userId)}&key=${encodeURIComponent(key)}`,
     );
     if (!res.ok) {
       if (res.status === 404) return null;
@@ -22,10 +19,10 @@ export async function getUserPreference(
 export async function setUserPreference(
   userId: string,
   key: string,
-  value: string
+  value: string,
 ): Promise<boolean> {
   try {
-    const res = await directAgentFetch("/api/preferences/set", {
+    const res = await directAgentFetch("/agent/v1/preferences/set", {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,
@@ -39,12 +36,9 @@ export async function setUserPreference(
   }
 }
 
-export async function deleteUserPreference(
-  userId: string,
-  key: string
-): Promise<boolean> {
+export async function deleteUserPreference(userId: string, key: string): Promise<boolean> {
   try {
-    const res = await directAgentFetch("/api/preferences/delete", {
+    const res = await directAgentFetch("/agent/v1/preferences/delete", {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,

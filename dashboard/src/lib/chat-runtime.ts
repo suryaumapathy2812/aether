@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import {
-	ensureDirectAgentConnection,
-	directAgentWs,
+  ensureDirectAgentConnection,
+  directAgentWs,
   getChatSession,
   getChatSessionStatuses,
   getSessionToken,
@@ -34,7 +34,13 @@ type NormalizedGlobalEvent =
   | { kind: "session-created"; sessionID: string; version: number }
   | { kind: "session-updated"; sessionID: string; archived?: boolean; version: number }
   | { kind: "session-deleted"; sessionID: string; version: number }
-  | { kind: "message-updated"; sessionID: string; messageID: string; role?: string; version: number }
+  | {
+      kind: "message-updated";
+      sessionID: string;
+      messageID: string;
+      role?: string;
+      version: number;
+    }
   | { kind: "message-removed"; sessionID: string; messageID: string; version: number }
   | {
       kind: "part-updated";
@@ -139,7 +145,12 @@ type SessionAction =
     }
   | { type: "session-status"; status: SessionStatus }
   | { type: "loop-state-update"; loopState: string; loopReason: string }
-  | { type: "message-upsert-from-event"; messageID: string; role: "assistant" | "user"; text?: string }
+  | {
+      type: "message-upsert-from-event";
+      messageID: string;
+      role: "assistant" | "user";
+      text?: string;
+    }
   | { type: "message-remove"; messageID: string }
   | { type: "part-upsert-delta"; messageID: string; partID: string; delta?: string; text?: string }
   | { type: "part-remove"; messageID: string; partID: string }
@@ -147,7 +158,7 @@ type SessionAction =
   | { type: "question-answered" };
 
 const RUNNING_SESSIONS_KEY = "aether.chat.runtime.running.v1";
-const WS_CONVERSATION_PATH = "/api/ws/conversation";
+const WS_CONVERSATION_PATH = "/agent/v1/ws/conversation";
 const WS_CONVERSATION_VERSION = 1;
 const SESSION_CONTROL_TURN_ID = "session";
 const SESSION_READY_TIMEOUT_MS = 10_000;
@@ -175,7 +186,7 @@ function textFromStoredMessageContent(content: unknown): string {
 }
 
 function buildHistoryMessages(
-  rows: Array<{ id: number; role?: string; content: unknown }>
+  rows: Array<{ id: number; role?: string; content: unknown }>,
 ): UIMessage[] {
   const restored: UIMessage[] = [];
   for (const row of rows) {
@@ -226,7 +237,14 @@ function envelopeFromUnknown(value: unknown): ConversationEnvelope | null {
 }
 
 function parseEventVersion(payload: Record<string, unknown>): number {
-  const candidates = [payload.sequence, payload.seq, payload.version, payload.updatedAt, payload.updated_at, payload.timestamp];
+  const candidates = [
+    payload.sequence,
+    payload.seq,
+    payload.version,
+    payload.updatedAt,
+    payload.updated_at,
+    payload.timestamp,
+  ];
   for (const value of candidates) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "") {
@@ -246,9 +264,17 @@ function normalizeStatus(value: unknown): SessionStatus {
   return "idle";
 }
 
-function normalizeGlobalEvent(eventType: string, payload: Record<string, unknown>): NormalizedGlobalEvent | null {
+function normalizeGlobalEvent(
+  eventType: string,
+  payload: Record<string, unknown>,
+): NormalizedGlobalEvent | null {
   const normalizedType = String(eventType || "").toLowerCase();
-  const sessionID = typeof payload.sessionID === "string" ? payload.sessionID : typeof payload.session_id === "string" ? payload.session_id : "";
+  const sessionID =
+    typeof payload.sessionID === "string"
+      ? payload.sessionID
+      : typeof payload.session_id === "string"
+        ? payload.session_id
+        : "";
   if (!sessionID) return null;
   const version = parseEventVersion(payload);
 
@@ -281,7 +307,8 @@ function normalizeGlobalEvent(eventType: string, payload: Record<string, unknown
     return { kind: "message-removed", sessionID, messageID, version };
   }
   if (normalizedType === "message.part.updated" || normalizedType === "message.part.delta") {
-    const messageID = typeof payload.messageID === "string" ? payload.messageID : "assistant-current";
+    const messageID =
+      typeof payload.messageID === "string" ? payload.messageID : "assistant-current";
     const partID = typeof payload.partID === "string" ? payload.partID : "text";
     const delta = typeof payload.delta === "string" ? payload.delta : undefined;
     const text = typeof payload.text === "string" ? payload.text : undefined;
@@ -337,7 +364,15 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     case "history-error":
       return { ...current, loading: false, error: action.error, status: "error" };
     case "stream-start":
-      return { ...current, loaded: true, loading: false, status: "streaming", error: null, loopState: null, loopReason: null };
+      return {
+        ...current,
+        loaded: true,
+        loading: false,
+        status: "streaming",
+        error: null,
+        loopState: null,
+        loopReason: null,
+      };
     case "stream-end":
       return {
         ...current,
@@ -444,22 +479,35 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
       const existing = current.messages[idx];
       const nextMessages = [...current.messages];
       if (action.text) {
-        nextMessages[idx] = { ...existing, role: action.role, parts: [{ type: "text", text: action.text }] };
+        nextMessages[idx] = {
+          ...existing,
+          role: action.role,
+          parts: [{ type: "text", text: action.text }],
+        };
       } else {
         nextMessages[idx] = { ...existing, role: action.role };
       }
       return { ...current, messages: nextMessages };
     }
     case "message-remove":
-      return { ...current, messages: current.messages.filter((message) => message.id !== action.messageID) };
+      return {
+        ...current,
+        messages: current.messages.filter((message) => message.id !== action.messageID),
+      };
     case "part-upsert-delta": {
       const messages = current.messages.map((message) => {
         if (message.id !== action.messageID) return message;
         const parts = [...message.parts];
-        const existingIndex = parts.findIndex((part) => String((part as Record<string, unknown>).partId || "") === action.partID);
+        const existingIndex = parts.findIndex(
+          (part) => String((part as Record<string, unknown>).partId || "") === action.partID,
+        );
         const incomingText = action.text ?? action.delta ?? "";
         if (existingIndex === -1) {
-          parts.push({ type: "text", text: incomingText, partId: action.partID } as UIMessage["parts"][number]);
+          parts.push({
+            type: "text",
+            text: incomingText,
+            partId: action.partID,
+          } as UIMessage["parts"][number]);
           return { ...message, parts };
         }
         const part = parts[existingIndex] as Record<string, unknown>;
@@ -473,7 +521,9 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     case "part-remove": {
       const messages = current.messages.map((message) => {
         if (message.id !== action.messageID) return message;
-        const parts = message.parts.filter((part) => String((part as Record<string, unknown>).partId || "") !== action.partID);
+        const parts = message.parts.filter(
+          (part) => String((part as Record<string, unknown>).partId || "") !== action.partID,
+        );
         return { ...message, parts };
       });
       return { ...current, messages };
@@ -583,20 +633,20 @@ class ChatRuntimeStore {
   };
 
   async bootstrapForUser(userId: string): Promise<void> {
-	const normalizedUserID = userId.trim();
-	if (!normalizedUserID) return;
-	if (this.bootstrappedUsers.has(normalizedUserID)) return;
-	this.bootstrappedUsers.add(normalizedUserID);
-	try {
-		const response = await getChatSessionStatuses(normalizedUserID);
-		const statuses = response.statuses || {};
-		for (const [sessionID, status] of Object.entries(statuses)) {
-			if (!sessionID) continue;
-			this.dispatch(sessionID, { type: "session-status", status: status || "idle" });
-		}
-	} catch {
-		// Non-fatal: websocket stream and local state still work.
-	}
+    const normalizedUserID = userId.trim();
+    if (!normalizedUserID) return;
+    if (this.bootstrappedUsers.has(normalizedUserID)) return;
+    this.bootstrappedUsers.add(normalizedUserID);
+    try {
+      const response = await getChatSessionStatuses(normalizedUserID);
+      const statuses = response.statuses || {};
+      for (const [sessionID, status] of Object.entries(statuses)) {
+        if (!sessionID) continue;
+        this.dispatch(sessionID, { type: "session-status", status: status || "idle" });
+      }
+    } catch {
+      // Non-fatal: websocket stream and local state still work.
+    }
   }
 
   async loadHistory(sessionId: string): Promise<void> {
@@ -622,7 +672,11 @@ class ChatRuntimeStore {
     await this.sendTextTurn({ sessionId, userId: input.userId.trim(), text });
   }
 
-  async startVoiceTurn(input: { sessionId: string; userId: string; textHint?: string }): Promise<{ turnId: string }> {
+  async startVoiceTurn(input: {
+    sessionId: string;
+    userId: string;
+    textHint?: string;
+  }): Promise<{ turnId: string }> {
     const sessionId = input.sessionId.trim();
     const userId = input.userId.trim();
     if (!sessionId || !userId) {
@@ -697,7 +751,11 @@ class ChatRuntimeStore {
     this.finishTurn(normalized);
   }
 
-  private async sendTextTurn(input: { sessionId: string; userId: string; text: string }): Promise<void> {
+  private async sendTextTurn(input: {
+    sessionId: string;
+    userId: string;
+    text: string;
+  }): Promise<void> {
     const turn = await this.beginTurn({
       sessionId: input.sessionId,
       userId: input.userId,
@@ -722,7 +780,10 @@ class ChatRuntimeStore {
     } catch (error) {
       const pending = this.inflight.get(turn.sessionId);
       if (pending && pending.turnId === turn.turnId) {
-        this.failTurn(turn.sessionId, error instanceof Error ? error : new Error("Failed to stream response"));
+        this.failTurn(
+          turn.sessionId,
+          error instanceof Error ? error : new Error("Failed to stream response"),
+        );
       }
       throw error;
     }
@@ -746,7 +807,11 @@ class ChatRuntimeStore {
     const assistantMessageID = randomID("assistant");
     const turnId = randomID("turn");
 
-    this.dispatch(sessionId, { type: "append-user", text: input.userText, messageID: userMessageID });
+    this.dispatch(sessionId, {
+      type: "append-user",
+      text: input.userText,
+      messageID: userMessageID,
+    });
     this.dispatch(sessionId, { type: "append-assistant", messageID: assistantMessageID });
     this.dispatch(sessionId, { type: "stream-start" });
     this.markSessionRunning(sessionId, true);
@@ -781,7 +846,7 @@ class ChatRuntimeStore {
     } catch (error) {
       this.failTurn(
         sessionId,
-        error instanceof Error ? error : new Error("Failed to connect to conversation service")
+        error instanceof Error ? error : new Error("Failed to connect to conversation service"),
       );
       throw error;
     }
@@ -924,7 +989,10 @@ class ChatRuntimeStore {
 
         socket.onerror = () => {
           if (!settled && allowFallback) {
-            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+            if (
+              socket.readyState === WebSocket.OPEN ||
+              socket.readyState === WebSocket.CONNECTING
+            ) {
               socket.close();
             }
             connectProxyFallback();
@@ -941,8 +1009,10 @@ class ChatRuntimeStore {
         .then((direct) => {
           try {
             attachSocket(
-              direct ? directAgentWs("/ws/conversation", direct) : orchestratorWs(WS_CONVERSATION_PATH, token),
-              Boolean(direct)
+              direct
+                ? directAgentWs("/agent/v1/ws/conversation", direct)
+                : orchestratorWs(WS_CONVERSATION_PATH, token),
+              Boolean(direct),
             );
           } catch {
             this.conversationWSConnectPromise = null;
@@ -1057,9 +1127,8 @@ class ChatRuntimeStore {
 
     switch (envelope.type) {
       case "ack": {
-        const ackEventID = typeof envelope.payload?.event_id === "string"
-          ? envelope.payload.event_id
-          : "";
+        const ackEventID =
+          typeof envelope.payload?.event_id === "string" ? envelope.payload.event_id : "";
         if (ackEventID) {
           this.pendingAckEventIDs.delete(ackEventID);
         }
@@ -1078,11 +1147,12 @@ class ChatRuntimeStore {
         return;
       case "assistant.text.delta": {
         if (!inflight) return;
-        const delta = typeof envelope.payload?.delta === "string"
-          ? envelope.payload.delta
-          : typeof envelope.payload?.text === "string"
-            ? envelope.payload.text
-            : "";
+        const delta =
+          typeof envelope.payload?.delta === "string"
+            ? envelope.payload.delta
+            : typeof envelope.payload?.text === "string"
+              ? envelope.payload.text
+              : "";
         if (!delta) return;
         this.dispatch(sessionId, {
           type: "assistant-text-delta",
@@ -1093,8 +1163,10 @@ class ChatRuntimeStore {
       }
       case "assistant.tool-input-available": {
         if (!inflight) return;
-        const toolName = typeof envelope.payload?.toolName === "string" ? envelope.payload.toolName : "tool";
-        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        const toolName =
+          typeof envelope.payload?.toolName === "string" ? envelope.payload.toolName : "tool";
+        const toolCallID =
+          typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
         this.dispatch(sessionId, {
           type: "assistant-tool-input",
           messageID: inflight.assistantMessageId,
@@ -1106,7 +1178,8 @@ class ChatRuntimeStore {
       }
       case "assistant.tool-output-available": {
         if (!inflight) return;
-        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        const toolCallID =
+          typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
         this.dispatch(sessionId, {
           type: "assistant-tool-output",
           messageID: inflight.assistantMessageId,
@@ -1118,8 +1191,12 @@ class ChatRuntimeStore {
       }
       case "assistant.tool-output-error": {
         if (!inflight) return;
-        const toolCallID = typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
-        const errorText = typeof envelope.payload?.errorText === "string" ? envelope.payload.errorText : "Tool failed";
+        const toolCallID =
+          typeof envelope.payload?.toolCallId === "string" ? envelope.payload.toolCallId : "";
+        const errorText =
+          typeof envelope.payload?.errorText === "string"
+            ? envelope.payload.errorText
+            : "Tool failed";
         this.dispatch(sessionId, {
           type: "assistant-tool-output",
           messageID: inflight.assistantMessageId,
@@ -1138,11 +1215,12 @@ class ChatRuntimeStore {
         return;
       }
       case "error": {
-        const message = typeof envelope.payload?.message === "string"
-          ? envelope.payload.message
-          : typeof envelope.payload?.error === "string"
-            ? envelope.payload.error
-            : "Conversation error";
+        const message =
+          typeof envelope.payload?.message === "string"
+            ? envelope.payload.message
+            : typeof envelope.payload?.error === "string"
+              ? envelope.payload.error
+              : "Conversation error";
         this.failTurn(sessionId, new Error(message));
         return;
       }
@@ -1157,7 +1235,7 @@ class ChatRuntimeStore {
     if (this.listeners.size === 0) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsURL = `${protocol}//${window.location.host}/api/ws/notifications`;
+    const wsURL = `${protocol}//${window.location.host}/agent/v1/ws/notifications`;
     try {
       this.globalWS = new WebSocket(wsURL);
     } catch {
@@ -1231,7 +1309,10 @@ class ChatRuntimeStore {
         return;
 
       case "message-removed":
-        this.dispatch(normalized.sessionID, { type: "message-remove", messageID: normalized.messageID });
+        this.dispatch(normalized.sessionID, {
+          type: "message-remove",
+          messageID: normalized.messageID,
+        });
         return;
 
       case "part-updated":
@@ -1359,7 +1440,9 @@ class ChatRuntimeStore {
       if (!raw) return new Set<string>();
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return new Set<string>();
-      return new Set(parsed.filter((item): item is string => typeof item === "string" && item.trim() !== ""));
+      return new Set(
+        parsed.filter((item): item is string => typeof item === "string" && item.trim() !== ""),
+      );
     } catch {
       return new Set<string>();
     }
@@ -1381,7 +1464,7 @@ export function useChatSessionRuntime(sessionId: string): SessionSnapshot {
   return useSyncExternalStore(
     runtimeStore.subscribe,
     () => runtimeStore.getSnapshot(sessionId),
-    () => runtimeStore.getSnapshot(sessionId)
+    () => runtimeStore.getSnapshot(sessionId),
   );
 }
 
@@ -1389,7 +1472,7 @@ export function useChatStatusMap(): Record<string, SessionStatus> {
   return useSyncExternalStore(
     runtimeStore.subscribe,
     () => runtimeStore.getStatusMap(),
-    () => runtimeStore.getStatusMap()
+    () => runtimeStore.getStatusMap(),
   );
 }
 
@@ -1401,6 +1484,7 @@ export const chatRuntime = {
   startVoiceTurn: (input: { sessionId: string; userId: string; textHint?: string }) =>
     runtimeStore.startVoiceTurn(input),
   sendVoiceChunk: (input: VoiceChunkInput) => runtimeStore.sendVoiceChunk(input),
-  commitVoiceTurn: (input: { sessionId: string; turnId: string }) => runtimeStore.commitVoiceTurn(input),
+  commitVoiceTurn: (input: { sessionId: string; turnId: string }) =>
+    runtimeStore.commitVoiceTurn(input),
   cancelTurn: (sessionId: string) => runtimeStore.cancelTurn(sessionId),
 };
