@@ -5,7 +5,8 @@ WORKDIR /src
 COPY caddy-cloudflare ./caddy-cloudflare
 
 RUN xcaddy build \
-    --with github.com/caddy-dns/cloudflare=./caddy-cloudflare
+    --with github.com/caddy-dns/cloudflare=./caddy-cloudflare \
+    && mv ./caddy /usr/bin/caddy
 
 FROM caddy:2
 
