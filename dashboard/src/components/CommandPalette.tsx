@@ -12,20 +12,20 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import {
-  MessageCircle,
-  Settings,
-  Zap,
-  Brain,
-  Smartphone,
-  Plus,
-  PanelLeftClose,
-  Keyboard,
-} from "lucide-react";
+  IconMessageCircle,
+  IconSettings,
+  IconPlugConnected,
+  IconBrain,
+  IconDeviceMobile,
+  IconPlus,
+  IconMessage,
+  IconKeyboard,
+} from "@tabler/icons-react";
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onToggleSidebar?: () => void;
+  onToggleSessions?: () => void;
   onNewChat?: () => void;
   onOpenShortcutsHelp?: () => void;
 }
@@ -33,7 +33,7 @@ interface CommandPaletteProps {
 export default function CommandPalette({
   open,
   onOpenChange,
-  onToggleSidebar,
+  onToggleSessions,
   onNewChat,
   onOpenShortcutsHelp,
 }: CommandPaletteProps) {
@@ -58,21 +58,21 @@ export default function CommandPalette({
           <CommandItem
             onSelect={() => runAction(() => onNewChat?.())}
           >
-            <Plus className="size-4 mr-2 text-muted-foreground" />
+            <IconPlus className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             New Chat
             <span className="ml-auto text-[11px] text-muted-foreground/60">⌘N</span>
           </CommandItem>
           <CommandItem
-            onSelect={() => runAction(() => onToggleSidebar?.())}
+            onSelect={() => runAction(() => onToggleSessions?.())}
           >
-            <PanelLeftClose className="size-4 mr-2 text-muted-foreground" />
-            Toggle Sidebar
+            <IconMessage className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            Sessions
             <span className="ml-auto text-[11px] text-muted-foreground/60">⌘B</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onOpenShortcutsHelp?.())}
           >
-            <Keyboard className="size-4 mr-2 text-muted-foreground" />
+            <IconKeyboard className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Keyboard Shortcuts
             <span className="ml-auto text-[11px] text-muted-foreground/60">?</span>
           </CommandItem>
@@ -82,27 +82,27 @@ export default function CommandPalette({
 
         <CommandGroup heading="Navigate">
           <CommandItem onSelect={() => runAction(() => router.push("/chat"))}>
-            <MessageCircle className="size-4 mr-2 text-muted-foreground" />
+            <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Chat
             <span className="ml-auto text-[11px] text-muted-foreground/60">G C</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/plugins"))}>
-            <Zap className="size-4 mr-2 text-muted-foreground" />
+            <IconPlugConnected className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Connections
             <span className="ml-auto text-[11px] text-muted-foreground/60">G P</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/devices"))}>
-            <Smartphone className="size-4 mr-2 text-muted-foreground" />
+            <IconDeviceMobile className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Devices
             <span className="ml-auto text-[11px] text-muted-foreground/60">G D</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/memory"))}>
-            <Brain className="size-4 mr-2 text-muted-foreground" />
+            <IconBrain className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Memory
             <span className="ml-auto text-[11px] text-muted-foreground/60">G M</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/account"))}>
-            <Settings className="size-4 mr-2 text-muted-foreground" />
+            <IconSettings className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Settings
             <span className="ml-auto text-[11px] text-muted-foreground/60">G S</span>
           </CommandItem>

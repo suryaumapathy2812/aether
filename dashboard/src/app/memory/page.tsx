@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
 import {
-  exportMemory,
   getEntities,
   getEntityDetails,
   getMemoryConversations,
@@ -106,7 +105,6 @@ export default function MemoryPage() {
   const [entityLoading, setEntityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (sessionPending) return;
@@ -165,26 +163,6 @@ export default function MemoryPage() {
     load();
   }, [session, sessionPending, router]);
 
-  async function handleExport() {
-    setExporting(true);
-    try {
-      const res = await exportMemory(session?.user?.id || "");
-      const blob = new Blob([JSON.stringify(res.export, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `aether-memory-export-${new Date().toISOString().slice(0, 19)}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExporting(false);
-    }
-  }
-
   if (sessionPending || !session) return null;
 
   const isEmpty =
@@ -195,7 +173,7 @@ export default function MemoryPage() {
     decisions.length === 0;
 
   return (
-    <ContentShell title="Memory" back="/home">
+    <ContentShell title="Memory">
       {loading ? (
         <p className="text-muted-foreground text-xs tracking-wider text-center">loading...</p>
       ) : error ? (
@@ -206,28 +184,17 @@ export default function MemoryPage() {
         </p>
       ) : (
         <div className="space-y-6 max-w-[950px] mx-auto">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <TabBar
-              tab={tab}
-              onTabChange={setTab}
-              counts={{
-                about: facts.length,
-                conversations: conversations.length,
-                entities: entities.length,
-                memories: memories.length,
-                decisions: decisions.length,
-              }}
-            />
-            <Button
-              variant="aether-link"
-              size="aether-link"
-              onClick={handleExport}
-              disabled={exporting}
-              className="text-[11px] uppercase tracking-[0.12em]"
-            >
-              {exporting ? "exporting..." : "export memory"}
-            </Button>
-          </div>
+          <TabBar
+            tab={tab}
+            onTabChange={setTab}
+            counts={{
+              about: facts.length,
+              conversations: conversations.length,
+              entities: entities.length,
+              memories: memories.length,
+              decisions: decisions.length,
+            }}
+          />
 
           {tab === "about" && <FactsTab facts={facts} />}
           {tab === "conversations" && <ConversationsTab conversations={conversations} />}

@@ -2,16 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import ContentShell from "@/components/ContentShell";
-import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   listDevices,
   listChannels,
-  registerTelegramDevice,
   deleteDevice,
-  claimPairingCode,
   disconnectChannel,
   enableChannel,
   disableChannel,
@@ -27,6 +25,23 @@ import {
 } from "@tabler/icons-react";
 
 type Tab = "connected" | "browse";
+
+const DEVICE_TYPES = [
+  {
+    type: "ios",
+    name: "iOS App",
+    description: "Pair your iPhone with Aether using a one-time code",
+    icon: IconDeviceMobile,
+    href: "/devices/ios",
+  },
+  {
+    type: "telegram",
+    name: "Telegram Bot",
+    description: "Connect a Telegram bot to chat with Aether",
+    icon: IconBrandTelegram,
+    href: "/devices/telegram",
+  },
+] as const;
 
 export default function DevicesPage() {
   const router = useRouter();
@@ -106,7 +121,7 @@ export default function DevicesPage() {
           }}
         />
       ) : (
-        <BrowseTab onSetup={loadAll} userId={session.user.id} />
+        <BrowseTab />
       )}
     </ContentShell>
   );
@@ -216,130 +231,30 @@ function ConnectedTab({
 
 // ── Browse tab ──
 
-function BrowseTab({ onSetup, userId }: { onSetup: () => void; userId: string }) {
+function BrowseTab() {
   return (
-    <div className="space-y-8">
-      <IOSSetup onDone={onSetup} />
-      <TelegramSetup onDone={onSetup} />
-    </div>
-  );
-}
-
-function IOSSetup({ onDone }: { onDone: () => void }) {
-  const [code, setCode] = useState("");
-  const [claiming, setClaiming] = useState(false);
-
-  async function handleClaim(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = code.trim().toUpperCase();
-    if (!trimmed) { toast.error("Pairing code is required"); return; }
-    setClaiming(true);
-    try {
-      await claimPairingCode(trimmed);
-      toast.success("Device paired successfully");
-      setCode("");
-      onDone();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to pair");
-    } finally {
-      setClaiming(false);
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-2.5 mb-1">
-        <IconDeviceMobile className="size-4 text-muted-foreground" />
-        <p className="text-[13px] text-foreground font-medium">iOS App</p>
-      </div>
-      <p className="text-[11px] text-muted-foreground mb-4">
-        Pair your iPhone by entering the code shown in the Aether iOS app.
-      </p>
-      <form onSubmit={handleClaim} className="flex gap-2">
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="XXXX-XXXX"
-          maxLength={9}
-          className="flex-1 h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40 font-mono tracking-wider"
-        />
-        <Button variant="aether" size="sm" type="submit" disabled={claiming} className="h-8 px-3 text-[12px]">
-          {claiming ? "..." : "Pair"}
-        </Button>
-      </form>
-    </div>
-  );
-}
-
-function TelegramSetup({ onDone }: { onDone: () => void }) {
-  const [botToken, setBotToken] = useState("");
-  const [chatIds, setChatIds] = useState("");
-  const [name, setName] = useState("");
-  const [registering, setRegistering] = useState(false);
-
-  async function handleRegister(e: React.FormEvent) {
-    e.preventDefault();
-    if (!botToken.trim()) { toast.error("Bot token is required"); return; }
-    setRegistering(true);
-    try {
-      await registerTelegramDevice(botToken.trim(), chatIds.trim() || undefined, name.trim() || undefined);
-      toast.success("Telegram connected");
-      setBotToken("");
-      setChatIds("");
-      setName("");
-      onDone();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to connect");
-    } finally {
-      setRegistering(false);
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-2.5 mb-1">
-        <IconBrandTelegram className="size-4 text-muted-foreground" />
-        <p className="text-[13px] text-foreground font-medium">Telegram Bot</p>
-      </div>
-      <p className="text-[11px] text-muted-foreground mb-4">
-        Connect a Telegram bot to chat with Aether from Telegram. Create one with @BotFather first.
-      </p>
-      <form onSubmit={handleRegister} className="space-y-3">
-        <div>
-          <label className="text-[12px] text-muted-foreground mb-1.5 block">
-            Bot Token <span className="text-red-400/60">*</span>
-          </label>
-          <input
-            type="password"
-            value={botToken}
-            onChange={(e) => setBotToken(e.target.value)}
-            placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-            className="w-full h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40"
-          />
-        </div>
-        <div>
-          <label className="text-[12px] text-muted-foreground mb-1.5 block">Allowed Chat IDs</label>
-          <input
-            value={chatIds}
-            onChange={(e) => setChatIds(e.target.value)}
-            placeholder="123456789, 987654321"
-            className="w-full h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40"
-          />
-          <p className="text-[10px] text-muted-foreground/60 mt-1">Comma-separated. Leave empty to allow any chat.</p>
-        </div>
-        <div>
-          <label className="text-[12px] text-muted-foreground mb-1.5 block">Device Name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My Telegram Bot"
-            className="w-full h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/40"
-          />
-        </div>
-        <Button variant="aether" size="sm" type="submit" disabled={registering} className="h-8 px-3 text-[12px]">
-          {registering ? "..." : "Connect"}
-        </Button>
-      </form>
+    <div className="space-y-1">
+      {DEVICE_TYPES.map((device) => {
+        const Icon = device.icon;
+        return (
+          <Link
+            key={device.type}
+            href={device.href}
+            className="group flex items-center gap-3 px-3 py-3 -mx-3 rounded-xl hover:bg-white/[0.03] transition-colors"
+          >
+            <Icon className="size-4 text-muted-foreground shrink-0" strokeWidth={1.5} />
+            <div className="flex-1 min-w-0">
+              <span className="text-[13px] font-medium text-foreground">
+                {device.name}
+              </span>
+              <p className="text-[11px] text-muted-foreground/60 mt-0.5 line-clamp-1">
+                {device.description}
+              </p>
+            </div>
+            <IconChevronRight className="size-3.5 text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors shrink-0" />
+          </Link>
+        );
+      })}
     </div>
   );
 }

@@ -20,7 +20,7 @@ const sections = [
     title: "Global",
     shortcuts: [
       { keys: `${mod} K`, label: "Command palette" },
-      { keys: `${mod} B`, label: "Toggle sidebar" },
+      { keys: `${mod} B`, label: "Sessions" },
       { keys: `${mod} N`, label: "New chat" },
       { keys: "?", label: "Show shortcuts" },
     ],

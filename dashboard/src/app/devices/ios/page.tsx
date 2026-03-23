@@ -8,26 +8,23 @@ import MinimalInput from "@/components/MinimalInput";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useSession } from "@/lib/auth-client";
-import { IconBrandTelegram } from "@tabler/icons-react";
+import { IconDeviceMobile } from "@tabler/icons-react";
 import {
+  claimPairingCode,
   listChannels,
-  connectTelegram,
   disconnectChannel,
   enableChannel,
   disableChannel,
   type ChannelInfo,
 } from "@/lib/api";
 
-export default function TelegramChannelPage() {
+export default function IOSDevicePage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
-
-  // Form
-  const [botToken, setBotToken] = useState("");
-  const [chatId, setChatId] = useState("");
+  const [claiming, setClaiming] = useState(false);
+  const [pairingCode, setPairingCode] = useState("");
 
   useEffect(() => {
     if (isPending) return;
@@ -42,56 +39,43 @@ export default function TelegramChannelPage() {
     try {
       setLoading(true);
       const all = await listChannels(session?.user?.id);
-      setChannels(all.filter((c) => c.channel_type === "telegram"));
+      setChannels(all.filter((c) => c.channel_type === "ios"));
     } catch {
-      // fail silently — empty list shown
+      // Fail silently; page still usable
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleConnect(e: React.FormEvent) {
+  async function handleClaim(e: React.FormEvent) {
     e.preventDefault();
-    if (!botToken.trim()) {
-      toast.error("Bot token is required");
+    const code = pairingCode.trim().toUpperCase();
+    if (!code) {
+      toast.error("Pairing code is required");
       return;
     }
-    if (!chatId.trim()) {
-      toast.error("Chat ID is required");
-      return;
-    }
-
     try {
-      setConnecting(true);
-      const result = await connectTelegram({
-        user_id: session?.user?.id,
-        bot_token: botToken.trim(),
-        chat_id: chatId.trim(),
-      });
-      toast.success(
-        `Connected @${result.bot_info?.username || "bot"}`
-      );
-      setBotToken("");
-      setChatId("");
+      setClaiming(true);
+      await claimPairingCode(code);
+      toast.success("Device claimed. Your iOS app will pair in a few seconds.");
+      setPairingCode("");
       await loadChannels();
     } catch (e: unknown) {
       toast.error(
-        e instanceof Error ? e.message : "Failed to connect"
+        e instanceof Error ? e.message : "Failed to claim pairing code"
       );
     } finally {
-      setConnecting(false);
+      setClaiming(false);
     }
   }
 
   async function handleDisconnect(channel: ChannelInfo) {
     try {
       await disconnectChannel(channel.id);
-      toast.success("Disconnected");
+      toast.success("Device removed");
       await loadChannels();
     } catch (e: unknown) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to disconnect"
-      );
+      toast.error(e instanceof Error ? e.message : "Failed to remove device");
     }
   }
 
@@ -107,7 +91,7 @@ export default function TelegramChannelPage() {
       await loadChannels();
     } catch (e: unknown) {
       toast.error(
-        e instanceof Error ? e.message : "Failed to update"
+        e instanceof Error ? e.message : "Failed to update channel"
       );
     }
   }
@@ -115,73 +99,50 @@ export default function TelegramChannelPage() {
   if (isPending || !session) return null;
 
   return (
-    <ContentShell title="Telegram" back="/channels">
+    <ContentShell title="iOS App" back="/devices">
       <div className="space-y-6">
-        {/* Description */}
-        <div>
-          <p className="text-sm text-secondary-foreground leading-relaxed font-normal max-w-[78ch]">
-            Connect a Telegram bot so you can message Aether directly from
-            Telegram. You&apos;ll need a bot token from{" "}
-            <a
-              href="https://t.me/BotFather"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              @BotFather
-            </a>{" "}
-            and your chat ID.
+        <div className="flex items-start gap-3">
+          <IconDeviceMobile
+            className="size-5 shrink-0 text-muted-foreground mt-0.5"
+            strokeWidth={1.5}
+          />
+          <p className="text-[13px] text-muted-foreground leading-relaxed max-w-[72ch]">
+            On your iPhone, open Aether and tap start pairing. Enter the code
+            shown in the app here to link the device.
           </p>
         </div>
 
-        {/* Connect form */}
-        <form onSubmit={handleConnect} className="space-y-1">
+        <form onSubmit={handleClaim} className="space-y-1">
           <MinimalInput
-            label="Bot Token"
-            type="password"
-            value={botToken}
-            onChange={setBotToken}
-            placeholder="paste your bot token"
-          />
-          <MinimalInput
-            label="Chat ID"
-            value={chatId}
-            onChange={setChatId}
-            placeholder="your telegram chat id"
+            label="Pairing Code"
+            value={pairingCode}
+            onChange={(v) => setPairingCode(v.toUpperCase())}
+            placeholder="XXXX-XXXX"
           />
           <p className="text-[10px] text-muted-foreground -mt-3 mb-4">
-            Send any message to your bot, then visit{" "}
-            <a
-              href="https://t.me/userinfobot"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              @userinfobot
-            </a>{" "}
-            to find your chat ID.
+            Codes expire in 10 minutes. Keep the iOS app open until it shows
+            paired.
           </p>
           <Button
             type="submit"
             variant="aether"
             size="aether"
-            disabled={connecting || !botToken.trim() || !chatId.trim()}
+            disabled={claiming || !pairingCode.trim()}
             className="w-full"
           >
-            {connecting ? "connecting..." : "connect"}
+            {claiming ? "claiming..." : "pair device"}
           </Button>
         </form>
 
-        {/* Connected bots */}
         {!loading && channels.length > 0 && (
           <>
             <Separator />
             <div className="space-y-2">
-              <h2 className="text-xs tracking-widest text-muted-foreground uppercase font-normal">
-                Connected bots
+              <h2 className="text-[10px] tracking-[0.15em] text-muted-foreground uppercase font-normal">
+                Connected devices
               </h2>
               {channels.map((channel) => (
-                <TelegramRow
+                <IOSRow
                   key={channel.id}
                   channel={channel}
                   onToggle={() => handleToggle(channel)}
@@ -196,7 +157,7 @@ export default function TelegramChannelPage() {
   );
 }
 
-function TelegramRow({
+function IOSRow({
   channel,
   onToggle,
   onDisconnect,
@@ -214,14 +175,17 @@ function TelegramRow({
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/5 border border-border/60 px-4 py-3">
+    <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
       <div className="flex items-center gap-3 min-w-0">
-        <IconBrandTelegram className="size-5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+        <IconDeviceMobile
+          className="size-4 shrink-0 text-muted-foreground"
+          strokeWidth={1.5}
+        />
         <div className="min-w-0">
-          <p className="text-[14px] text-foreground font-medium truncate">
+          <p className="text-[13px] text-foreground font-medium truncate">
             {channel.display_name}
           </p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[11px] text-muted-foreground/60">
             {channel.channel_id}
           </p>
         </div>
@@ -232,8 +196,8 @@ function TelegramRow({
           onClick={onToggle}
           className={`text-[11px] tracking-wider px-2.5 py-1 rounded-full transition-colors ${
             channel.enabled
-              ? "bg-green-500/10 text-green-400 hover:bg-green-500/20"
-              : "bg-muted/50 text-muted-foreground hover:bg-muted"
+              ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+              : "bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
           }`}
         >
           {channel.enabled ? "on" : "off"}

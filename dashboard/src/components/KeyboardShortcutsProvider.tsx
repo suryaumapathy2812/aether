@@ -7,13 +7,13 @@ import CommandPalette from "@/components/CommandPalette";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
 
 interface ShortcutsContext {
-  toggleSidebar: () => void;
-  setSidebarToggle: (fn: () => void) => void;
+  toggleSessions: () => void;
+  setSessionsToggle: (fn: () => void) => void;
 }
 
 const ShortcutsCtx = createContext<ShortcutsContext>({
-  toggleSidebar: () => {},
-  setSidebarToggle: () => {},
+  toggleSessions: () => {},
+  setSessionsToggle: () => {},
 });
 
 export const useShortcutsContext = () => useContext(ShortcutsCtx);
@@ -26,19 +26,18 @@ export default function KeyboardShortcutsProvider({
   const router = useRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [sidebarToggleFn, setSidebarToggleFn] = useState<(() => void) | null>(null);
-
-  const toggleSidebar = useCallback(() => {
-    sidebarToggleFn?.();
-  }, [sidebarToggleFn]);
 
   const newChat = useCallback(() => {
     router.push("/chat");
   }, [router]);
 
+  const openSessions = useCallback(() => {
+    router.push("/sessions");
+  }, [router]);
+
   useKeyboardShortcuts({
     onOpenCommandPalette: () => setPaletteOpen(true),
-    onToggleSidebar: toggleSidebar,
+    onToggleSessions: openSessions,
     onNewChat: newChat,
     onOpenShortcutsHelp: () => setHelpOpen(true),
   });
@@ -46,15 +45,15 @@ export default function KeyboardShortcutsProvider({
   return (
     <ShortcutsCtx.Provider
       value={{
-        toggleSidebar,
-        setSidebarToggle: (fn) => setSidebarToggleFn(() => fn),
+        toggleSessions: openSessions,
+        setSessionsToggle: () => {},
       }}
     >
       {children}
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
-        onToggleSidebar={toggleSidebar}
+        onToggleSessions={openSessions}
         onNewChat={newChat}
         onOpenShortcutsHelp={() => {
           setPaletteOpen(false);

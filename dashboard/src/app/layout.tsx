@@ -6,9 +6,8 @@ import { Toaster } from "@/components/ui/sonner";
 import SessionSync from "@/components/SessionSync";
 import NotificationProvider from "@/components/NotificationProvider";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
-import Sidebar from "@/components/Sidebar";
+import FloatingToolbar from "@/components/FloatingToolbar";
 import KeyboardShortcutsProvider from "@/components/KeyboardShortcutsProvider";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { UIPreferencesProvider } from "@/lib/ui-preferences";
 import "./globals.css";
 
@@ -49,14 +48,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ServiceWorkerRegistrar />
             <NotificationProvider>
               <KeyboardShortcutsProvider>
-                <SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden md:flex-row">
+                <div className="h-dvh flex flex-col overflow-hidden">
                   <Suspense>
-                    <Sidebar variant="inset" />
+                    <FloatingToolbar />
                   </Suspense>
-                  <SidebarInset id="app-main" className="overflow-hidden">
+                  <main id="app-main" className="flex-1 overflow-hidden">
                     {children}
-                  </SidebarInset>
-                </SidebarProvider>
+                  </main>
+                </div>
               </KeyboardShortcutsProvider>
             </NotificationProvider>
             <Toaster />

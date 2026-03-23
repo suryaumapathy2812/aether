@@ -20,7 +20,7 @@ export default function ContentShell({
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[720px] mx-auto px-6 py-8">
+      <div className="max-w-[720px] mx-auto px-6 pt-16 pb-8">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
           {back && (
@@ -31,7 +31,7 @@ export default function ContentShell({
               <IconChevronLeft className="size-4" />
             </button>
           )}
-          <h1 className="text-[13px] font-medium text-foreground/80">{title}</h1>
+          <h1 className="text-[22px] font-semibold text-foreground tracking-tight">{title}</h1>
         </div>
 
         {children}

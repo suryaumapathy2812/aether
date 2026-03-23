@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 
 interface ShortcutHandlers {
-  onToggleSidebar?: () => void;
+  onToggleSessions?: () => void;
   onNewChat?: () => void;
   onOpenCommandPalette?: () => void;
   onOpenShortcutsHelp?: () => void;
@@ -21,7 +21,7 @@ function isInputFocused(): boolean {
  * Global keyboard shortcuts for Aether.
  *
  * ⌘K — command palette (always)
- * ⌘B — toggle sidebar (always)
+ * ⌘B — toggle sessions sheet (always)
  * ⌘N — new chat (always)
  * /  — focus chat input (when not typing)
  * ?  — shortcuts help (when not typing)
@@ -46,10 +46,10 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
         return;
       }
 
-      // ⌘B — toggle sidebar
+      // ⌘B — toggle sessions sheet
       if (meta && e.key === "b") {
         e.preventDefault();
-        handlers.onToggleSidebar?.();
+        handlers.onToggleSessions?.();
         return;
       }
 

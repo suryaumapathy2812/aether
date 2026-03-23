@@ -361,7 +361,7 @@ function ChatView({
         </div>*/}
 
         <Conversation className="flex-1 min-h-0">
-          <ConversationContent className="gap-5 px-6 pt-8 pb-4 max-w-180 mx-auto w-full">
+          <ConversationContent className="gap-5 px-6 pt-16 pb-4 max-w-180 mx-auto w-full">
             {loading ? (
               <div className="flex items-center justify-center h-full">
                 <p className="text-muted-foreground/60 text-xs">loading...</p>
