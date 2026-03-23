@@ -113,6 +113,15 @@ prompt_yes_no() {
     echo ""
 }
 
+require_non_empty() {
+    local var_name="$1"
+    local message="$2"
+    if [ -z "${!var_name}" ]; then
+        echo -e "${RED}Error: ${message}${NC}"
+        exit 1
+    fi
+}
+
 # ============================================
 # Step 1: Docker Hub Login (Optional)
 # ============================================
@@ -130,6 +139,7 @@ fi
 # ============================================
 echo -e "${GREEN}Step 2: Domain Configuration${NC}"
 prompt_with_default "Enter your domain (e.g., aether.suryaumapathy.in):" "DOMAIN" "$DEFAULT_DOMAIN" "yes"
+prompt_with_default "Enter your Cloudflare API token (required for wildcard TLS):" "CF_API_TOKEN" "" "yes"
 
 # ============================================
 # Step 3: Security Configuration
@@ -185,6 +195,9 @@ if [ -z "$VAPID_SUBJECT" ]; then
     VAPID_SUBJECT="mailto:admin@${DOMAIN}"
 fi
 
+require_non_empty "DOMAIN" "DOMAIN is required."
+require_non_empty "CF_API_TOKEN" "CF_API_TOKEN is required for Caddy wildcard certificates and agent subdomains."
+
 echo -e "${YELLOW}Please save these passwords:${NC}"
 echo -e "  POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
 echo -e "  BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}"
@@ -235,6 +248,7 @@ cat > "$ENV_FILE" << EOF
 # =============================================================================
 
 DOMAIN=$DOMAIN
+CF_API_TOKEN=$CF_API_TOKEN
 
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
@@ -257,10 +271,13 @@ BETTER_AUTH_TRUSTED_ORIGINS=https://$DOMAIN
 
 AGENT_IMAGE=suryaumapathy2812/aether-agent:latest
 AGENT_NETWORK=aether_internal
-AGENT_IDLE_TIMEOUT=1800
+AGENT_IDLE_TIMEOUT=0
 AGENT_HEALTH_TIMEOUT=30
+AGENT_RECONCILE_INTERVAL=30
 AGENT_PORT=8000
 AGENT_ASSETS_ROOT=/var/lib/aether/agents
+DIRECT_AGENT_DOMAIN=$DOMAIN
+CADDY_ADMIN_URL=http://localhost:2019
 
 S3_ACCESS_KEY_ID=minioadmin
 S3_SECRET_ACCESS_KEY=$S3_SECRET
@@ -517,6 +534,7 @@ docker run -d \
     --name caddy \
     --network host \
     --restart=unless-stopped \
+    -e CF_API_TOKEN="$CF_API_TOKEN" \
     -v "$AETHER_DIR/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
     -v /var/lib/caddy:/data \
     caddy:latest

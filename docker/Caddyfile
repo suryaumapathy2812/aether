@@ -4,8 +4,29 @@ aether.suryaumapathy.in {
         reverse_proxy localhost:3000
     }
 
-    # Next.js orchestrator proxy — must go to the dashboard
-    # flush_interval -1 disables response buffering for SSE streaming
+    # Agent websocket routes go straight to the orchestrator.
+    handle /agent/v1/ws/* {
+        reverse_proxy localhost:4000 {
+            flush_interval -1
+        }
+    }
+
+    # Public HTTP API routes go through the dashboard proxy.
+    # flush_interval -1 disables response buffering for SSE streaming.
+    handle /go/v1/* {
+        reverse_proxy localhost:3000 {
+            flush_interval -1
+        }
+    }
+
+    # Non-websocket agent HTTP routes are handled by dashboard proxy routes.
+    handle /agent/v1/* {
+        reverse_proxy localhost:3000 {
+            flush_interval -1
+        }
+    }
+
+    # Legacy Next.js orchestrator proxy.
     handle /api/go/* {
         reverse_proxy localhost:3000 {
             flush_interval -1

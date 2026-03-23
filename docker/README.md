@@ -20,7 +20,10 @@ Internet
   ▼
 Caddy (:80/:443, host network)
   ├── /api/auth/*    → Dashboard (:3000)
-  ├── /api/go/*      → Dashboard (:3000)  → proxies to Orchestrator
+  ├── /go/v1/*       → Dashboard (:3000)  → proxies to Orchestrator
+  ├── /agent/v1/ws/* → Orchestrator (:4000)
+  ├── /agent/v1/*    → Dashboard (:3000)  → HTTP proxy routes
+  ├── /api/go/*      → Dashboard (:3000)  → legacy proxy alias
   ├── /api/*         → Orchestrator (:4000)
   └── /*             → Dashboard (:3000)
                           │

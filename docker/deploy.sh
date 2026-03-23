@@ -39,6 +39,15 @@ SKIP_RESTART=false
 SKIP_CLEANUP=false
 DO_PULL=false
 
+require_env() {
+    local var_name="$1"
+    local message="$2"
+    if [ -z "${!var_name}" ]; then
+        echo -e "${RED}Error: ${message}${NC}"
+        exit 1
+    fi
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -103,6 +112,8 @@ else
     echo "Expected at: $PROJECT_ROOT/.env or /opt/aether/.env"
     exit 1
 fi
+
+require_env "CF_API_TOKEN" "CF_API_TOKEN is required for Caddy wildcard certificates and direct agent subdomains."
 
 cd "$PROJECT_ROOT"
 echo "Working directory: $(pwd)"
