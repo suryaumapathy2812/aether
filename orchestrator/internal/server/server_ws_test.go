@@ -20,7 +20,7 @@ func TestBuildAgentWSURL_InjectsIdentityAndPreservesQuery(t *testing.T) {
 	}
 	id := auth.Identity{UserID: "user-123", Token: "tok-abc"}
 
-	raw := buildAgentWSURL(target, "/ws/conversation", incoming, id)
+	raw := buildAgentWSURL(target, "/agent/v1/ws/conversation", incoming, id)
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
@@ -31,8 +31,8 @@ func TestBuildAgentWSURL_InjectsIdentityAndPreservesQuery(t *testing.T) {
 	if got := u.Host; got != "127.0.0.1:9000" {
 		t.Fatalf("expected host 127.0.0.1:9000, got %q", got)
 	}
-	if got := u.Path; got != "/ws/conversation" {
-		t.Fatalf("expected /ws/conversation path, got %q", got)
+	if got := u.Path; got != "/agent/v1/ws/conversation" {
+		t.Fatalf("expected /agent/v1/ws/conversation path, got %q", got)
 	}
 	q := u.Query()
 	if got := q.Get("foo"); got != "bar" {
@@ -51,7 +51,7 @@ func TestBuildAgentWSURL_LeavesTokenUnsetWhenMissing(t *testing.T) {
 
 	raw := buildAgentWSURL(
 		agent.Target{Host: "agent.local", Port: 8080},
-		"/ws/notifications",
+		"/agent/v1/ws/notifications",
 		nil,
 		auth.Identity{UserID: "user-1"},
 	)

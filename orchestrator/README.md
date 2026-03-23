@@ -10,26 +10,23 @@ Go rewrite of the orchestration layer.
 
 ## Implemented route groups
 
-- `GET /health`, `GET /api/health`
-- `POST /api/agents/register`
-- `POST /api/agents/{id}/heartbeat`
-- `POST /api/agents/{id}/assign?user_id=...`
-- `GET /api/agents/health`
+- `GET /health`, `GET /api/health`, `GET /go/v1/health`
+- `POST /go/v1/agents/register`
+- `POST /go/v1/agents/{id}/heartbeat`
+- `POST /go/v1/agents/{id}/assign?user_id=...`
+- `GET /go/v1/agents/health`
 - Admin endpoints (require `AGENT_SECRET` bearer when configured):
-  - `GET /api/agents/version`
-  - `POST /api/agents/reload`
-  - `POST /api/agents/upgrade`
+  - `GET /go/v1/agents/version`
+  - `POST /go/v1/agents/reload`
+  - `POST /go/v1/agents/upgrade`
 - Authenticated user-routing proxy:
-  - `/v1/*`
-  - `/api/memory/*`
-  - `/api/plugins*`
-  - `/api/push/vapid-key`
-  - `/api/push/subscribe`
+  - `/agent/v1/*`
 - Realtime-support endpoints:
-  - `GET /api/agent/ready`
-  - `WS /api/ws/notifications` (and `WS /api/ws` alias)
-  - `WS /api/ws/conversation`
-- `GET /api/metrics/latency` (proxy if available, otherwise degraded payload)
+  - `GET /go/v1/agent/ready`
+  - `GET /go/v1/agent/subdomain`
+  - `WS /agent/v1/ws/notifications` (with legacy `/api/ws/notifications` and `/api/ws` aliases)
+  - `WS /agent/v1/ws/conversation` (with legacy `/api/ws/conversation` alias)
+- `GET /go/v1/metrics/latency` (proxy if available, otherwise degraded payload)
 
 ## Behavior guarantees
 

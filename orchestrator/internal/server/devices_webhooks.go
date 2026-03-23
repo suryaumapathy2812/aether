@@ -104,7 +104,7 @@ func (s *Server) handleTelegramDevice(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusBadRequest, "missing public base url (set AETHER_PUBLIC_BASE_URL)")
 		return
 	}
-	webhookURL := strings.TrimRight(baseURL, "/") + "/api/hooks/telegram/" + deviceID
+	webhookURL := strings.TrimRight(baseURL, "/") + orchestratorAPIPrefix + "/hooks/telegram/" + deviceID
 	if err := setTelegramWebhook(r.Context(), botToken, webhookURL, secretToken); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to configure Telegram webhook: "+err.Error())
 		return
@@ -140,7 +140,7 @@ func (s *Server) handleTelegramDevice(w http.ResponseWriter, r *http.Request, id
 }
 
 func (s *Server) handleDeviceByID(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	deviceID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/devices/"))
+	deviceID := strings.TrimSpace(trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/devices/", "/api/devices/"))
 	if deviceID == "" {
 		writeError(w, http.StatusBadRequest, "device id is required")
 		return
@@ -187,7 +187,7 @@ func (s *Server) handlePluginWebhookIngress(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/hooks/"), "/")
+	path := strings.Trim(trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/hooks/", "/api/hooks/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
 		writeError(w, http.StatusNotFound, "not found")
@@ -375,7 +375,7 @@ func errorsIsNoRows(err error) bool {
 }
 
 // Pub/Sub webhook handler for Google push notifications (Gmail, Calendar, etc.)
-// Route: /api/hooks/pubsub/{plugin_name}
+// Route: /go/v1/hooks/pubsub/{plugin_name}
 
 type pubsubMessage struct {
 	Data        string            `json:"data"`
@@ -395,7 +395,7 @@ func (s *Server) handlePubsubWebhookIngress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/hooks/pubsub/"), "/")
+	path := strings.Trim(trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/hooks/pubsub/", "/api/hooks/pubsub/"), "/")
 	pluginName := strings.TrimSpace(path)
 	if pluginName == "" {
 		writeError(w, http.StatusBadRequest, "plugin name is required")

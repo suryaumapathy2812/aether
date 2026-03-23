@@ -67,8 +67,9 @@ type ManagerConfig struct {
 	// PublicBaseURL is the public base URL (e.g. "https://aether.example.com")
 	// from AETHER_PUBLIC_BASE_URL. Passed to agent containers so the agent
 	// can construct webhook callback URLs for Telegram, WhatsApp, etc.
-	PublicBaseURL string
-	RouteManager  *caddy.RouteManager
+	PublicBaseURL     string
+	DirectAgentDomain string
+	RouteManager      *caddy.RouteManager
 
 	// OAuthEnvVars holds "KEY=VALUE" pairs for OAuth provider credentials
 	// (e.g. GOOGLE_CLIENT_ID=…, SPOTIFY_CLIENT_SECRET=…) that are forwarded
@@ -149,7 +150,10 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 	lock := m.lockForUser(userID)
 	lock.Lock()
 	defer lock.Unlock()
+	return m.provisionLocked(ctx, userID)
+}
 
+func (m *Manager) provisionLocked(ctx context.Context, userID string) (Target, error) {
 	rec, err := m.loadRecord(ctx, userID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, err
@@ -223,6 +227,96 @@ func (m *Manager) Provision(ctx context.Context, userID string) (Target, error) 
 
 	m.RecordActivity(userID)
 	return target, nil
+}
+
+func (m *Manager) RunAvailabilityReconciler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	m.reconcileOnce(ctx)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.reconcileOnce(ctx)
+		}
+	}
+}
+
+func (m *Manager) reconcileOnce(ctx context.Context) {
+	recs, err := m.listManagedRecords(ctx)
+	if err != nil {
+		log.Printf("agent reconciler: list managed records failed: %v", err)
+		return
+	}
+	for _, rec := range recs {
+		m.reconcileRecord(ctx, rec)
+	}
+}
+
+func (m *Manager) reconcileRecord(ctx context.Context, rec record) {
+	lock := m.lockForUser(rec.UserID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	target, err := m.provisionLocked(ctx, rec.UserID)
+	if err != nil {
+		log.Printf("agent reconciler: provision check failed: user=%s err=%v", rec.UserID, err)
+		return
+	}
+
+	current, err := m.loadRecord(ctx, rec.UserID)
+	if err != nil {
+		log.Printf("agent reconciler: reload record failed: user=%s err=%v", rec.UserID, err)
+		return
+	}
+
+	if err := m.ensureDirectRouteHealthy(ctx, current.SubdomainPrefix, target); err != nil {
+		log.Printf("agent reconciler: direct health failed: user=%s prefix=%s err=%v", rec.UserID, current.SubdomainPrefix, err)
+	}
+}
+
+func (m *Manager) ensureDirectRouteHealthy(ctx context.Context, prefix string, target Target) error {
+	pfx := strings.TrimSpace(prefix)
+	domain := strings.Trim(strings.TrimSpace(m.cfg.DirectAgentDomain), ".")
+	if pfx == "" || domain == "" {
+		return nil
+	}
+	url := directHealthURL(pfx, domain)
+	if err := m.checkHealthURL(ctx, url); err == nil {
+		return nil
+	}
+	if err := m.syncDirectRoute(pfx, target); err != nil {
+		return fmt.Errorf("sync direct route: %w", err)
+	}
+	if err := m.checkHealthURL(ctx, url); err != nil {
+		return fmt.Errorf("direct health check failed after route sync: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) checkHealthURL(ctx context.Context, healthURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func directHealthURL(prefix, domain string) string {
+	return fmt.Sprintf("https://%s.%s/health", strings.TrimSpace(prefix), strings.Trim(strings.TrimSpace(domain), "."))
 }
 
 func (m *Manager) RecordActivity(userID string) {
@@ -685,6 +779,28 @@ func (m *Manager) loadRecord(ctx context.Context, userID string) (record, error)
 		LIMIT 1
 	`, userID).Scan(&rec.ID, &rec.UserID, &rec.ContainerID, &rec.SubdomainPrefix, &rec.Host, &rec.Port, &rec.Status)
 	return rec, err
+}
+
+func (m *Manager) listManagedRecords(ctx context.Context) ([]record, error) {
+	rows, err := m.db.Query(ctx, `
+		SELECT id, user_id, COALESCE(container_id,''), COALESCE(subdomain_prefix,''), host, port, COALESCE(status,'')
+		FROM agents
+		WHERE COALESCE(status, '') <> 'stopped'
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []record
+	for rows.Next() {
+		var rec record
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.ContainerID, &rec.SubdomainPrefix, &rec.Host, &rec.Port, &rec.Status); err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, rows.Err()
 }
 
 func (m *Manager) lockForUser(userID string) *sync.Mutex {

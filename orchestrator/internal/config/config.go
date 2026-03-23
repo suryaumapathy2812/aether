@@ -12,6 +12,7 @@ import (
 const (
 	DefaultDirectAgentDomain = "aether.suryaumapathy.in"
 	DefaultCaddyAdminURL     = "http://localhost:2019"
+	DefaultReconcileInterval = 30 * time.Second
 )
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	AutoAssignFirstAgent   bool
 	DirectAgentDomain      string
 	CaddyAdminURL          string
+	AgentReconcileInterval time.Duration
 
 	AgentImage         string
 	AgentNetwork       string
@@ -59,6 +61,7 @@ func Load() Config {
 	proxyTimeout := time.Duration(EnvInt("AGENT_PROXY_TIMEOUT_SECONDS", 120)) * time.Second
 	idleTimeout := time.Duration(EnvInt("AGENT_IDLE_TIMEOUT", 1800)) * time.Second
 	healthTimeout := time.Duration(EnvInt("AGENT_HEALTH_TIMEOUT", 30)) * time.Second
+	reconcileInterval := time.Duration(EnvInt("AGENT_RECONCILE_INTERVAL", 30)) * time.Second
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	databaseURL = stripWrappingQuotes(databaseURL)
 	if databaseURL == "" {
@@ -74,8 +77,9 @@ func Load() Config {
 		ProxyTimeout:           proxyTimeout,
 		DefaultAgentID:         stripWrappingQuotes(strings.TrimSpace(os.Getenv("AETHER_DEFAULT_AGENT_ID"))),
 		AutoAssignFirstAgent:   strings.EqualFold(strings.TrimSpace(os.Getenv("AETHER_AUTO_ASSIGN_FIRST_AGENT")), "true"),
-		DirectAgentDomain:      DefaultDirectAgentDomain,
-		CaddyAdminURL:          DefaultCaddyAdminURL,
+		DirectAgentDomain:      defaultString("DIRECT_AGENT_DOMAIN", DefaultDirectAgentDomain),
+		CaddyAdminURL:          defaultString("CADDY_ADMIN_URL", DefaultCaddyAdminURL),
+		AgentReconcileInterval: firstPositiveDuration(reconcileInterval, DefaultReconcileInterval),
 
 		AgentImage:         defaultString("AGENT_IMAGE", "suryaumapathy2812/aether-agent:latest"),
 		AgentNetwork:       stripWrappingQuotes(strings.TrimSpace(os.Getenv("AGENT_NETWORK"))),
@@ -135,6 +139,13 @@ func stripWrappingQuotes(v string) string {
 		}
 	}
 	return v
+}
+
+func firstPositiveDuration(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 // Validate checks that all required environment variables are present.

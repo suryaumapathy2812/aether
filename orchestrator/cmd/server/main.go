@@ -81,6 +81,7 @@ func main() {
 			UpdateRepo:        cfg.AgentUpdateRepo,
 			UpdateToken:       cfg.AgentUpdateToken,
 			PublicBaseURL:     strings.TrimSpace(os.Getenv("AETHER_PUBLIC_BASE_URL")),
+			DirectAgentDomain: cfg.DirectAgentDomain,
 			RouteManager:      routeManager,
 			OAuthEnvVars:      config.CollectOAuthEnvVars(),
 		})
@@ -90,7 +91,7 @@ func main() {
 			if err := routeManager.SyncRoutes(ctx, pool); err != nil {
 				log.Printf("caddy route sync warning: %v", err)
 			}
-			go mgr.RunIdleReaper(ctx)
+			go mgr.RunAvailabilityReconciler(ctx, cfg.AgentReconcileInterval)
 		}
 	}
 

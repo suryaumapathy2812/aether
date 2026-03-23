@@ -98,7 +98,7 @@ func RewriteQueryUserID(path string, q url.Values, userID string) url.Values {
 	for k, vals := range q {
 		copyQ[k] = append([]string(nil), vals...)
 	}
-	if strings.HasPrefix(path, "/api/memory/") || strings.HasPrefix(path, "/v1/agent/tasks") || strings.HasPrefix(path, "/api/push/") {
+	if strings.HasPrefix(path, "/api/memory/") || strings.HasPrefix(path, "/v1/agent/tasks") || strings.HasPrefix(path, "/api/push/") || strings.HasPrefix(path, "/agent/v1/memory/") || strings.HasPrefix(path, "/agent/v1/agent/tasks") || strings.HasPrefix(path, "/agent/v1/push/") {
 		copyQ.Set("user_id", userID)
 	}
 	return copyQ
@@ -111,7 +111,7 @@ func RewriteBodyUserID(path, contentType string, body []byte, userID string) []b
 	if !strings.Contains(strings.ToLower(contentType), "application/json") {
 		return body
 	}
-	if !strings.HasPrefix(path, "/v1/") && !strings.HasPrefix(path, "/api/") {
+	if !strings.HasPrefix(path, "/v1/") && !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/agent/v1/") {
 		return body
 	}
 	var payload map[string]any

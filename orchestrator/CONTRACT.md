@@ -14,17 +14,17 @@ dashboard + agent features.
 
 ## Required HTTP groups
 
-- `/v1/*` (chat, media upload, agent tasks/jobs)
-- `/api/memory/*`
-- `/api/plugins*`
-- `/api/push/vapid-key`, `/api/push/subscribe`
-- `/health`, `/api/health`
-- `/api/agent/ready`
-- `/api/metrics/latency`
+- `/agent/v1/*` (chat, media upload, memory, plugins, push, channels, jobs)
+- `/go/v1/agent/ready`
+- `/go/v1/agent/subdomain`
+- `/go/v1/metrics/latency`
+- `/go/v1/devices*`
+- `/go/v1/pair/*`
+- `/health`, `/api/health`, `/go/v1/health`
 
 ## Required WebSocket group
 
-- `/api/ws/notifications` (or `/api/ws`) authenticated endpoint that proxies
+- `/agent/v1/ws/notifications` authenticated endpoint that proxies
   user-scoped notification stream to the assigned agent.
-- `/api/ws/conversation` authenticated endpoint that proxies user-scoped
+- `/agent/v1/ws/conversation` authenticated endpoint that proxies user-scoped
   conversation runtime traffic to the assigned agent.

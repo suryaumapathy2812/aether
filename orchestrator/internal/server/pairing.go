@@ -126,7 +126,7 @@ func (s *Server) handlePairStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	code := normalizePairCode(strings.TrimPrefix(r.URL.Path, "/api/pair/status/"))
+	code := normalizePairCode(trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/pair/status/", "/api/pair/status/"))
 	if code == "" {
 		writeError(w, http.StatusBadRequest, "code is required")
 		return
@@ -243,7 +243,7 @@ func (s *Server) registerIOSChannel(ctx context.Context, userID, channelID, devi
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://%s:%d/api/channels/ios/connect", target.Host, target.Port), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://%s:%d%s/channels/ios/connect", target.Host, target.Port, agentAPIPrefix), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

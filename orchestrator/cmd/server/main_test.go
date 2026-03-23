@@ -15,7 +15,7 @@ import (
 
 func TestRewriteQueryUserID(t *testing.T) {
 	q := url.Values{"limit": []string{"20"}, "user_id": []string{"wrong"}}
-	out := proxy.RewriteQueryUserID("/api/memory/conversations", q, "user-1")
+	out := proxy.RewriteQueryUserID("/agent/v1/memory/conversations", q, "user-1")
 	if got := out.Get("user_id"); got != "user-1" {
 		t.Fatalf("expected forced user_id user-1, got %q", got)
 	}
@@ -26,7 +26,7 @@ func TestRewriteQueryUserID(t *testing.T) {
 
 func TestRewriteBodyUserID(t *testing.T) {
 	body := []byte(`{"user_id":"wrong","kind":"image"}`)
-	out := proxy.RewriteBodyUserID("/v1/media/upload/init", "application/json", body, "user-2")
+	out := proxy.RewriteBodyUserID("/agent/v1/media/upload/init", "application/json", body, "user-2")
 	if !strings.Contains(string(out), `"user_id":"user-2"`) {
 		t.Fatalf("expected user_id rewrite, got %s", string(out))
 	}
@@ -73,12 +73,12 @@ func TestHTTPStreamRewritesBodyUserID(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "http://orch.local/v1/media/upload/init", strings.NewReader(`{"user_id":"wrong"}`))
+	req := httptest.NewRequest(http.MethodPost, "http://orch.local/agent/v1/media/upload/init", strings.NewReader(`{"user_id":"wrong"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	client := &http.Client{}
 
-	ok := proxy.HTTPStream(client, w, req, host, port, "/v1/media/upload/init", "user-correct", true)
+	ok := proxy.HTTPStream(client, w, req, host, port, "/agent/v1/media/upload/init", "user-correct", true)
 	if !ok {
 		t.Fatal("expected proxy stream success")
 	}

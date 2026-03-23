@@ -42,7 +42,25 @@ const (
 	wsPongWait   = 60 * time.Second
 	wsPingPeriod = 25 * time.Second
 	wsWriteWait  = 5 * time.Second
+
+	orchestratorAPIPrefix = "/go/v1"
+	agentAPIPrefix        = "/agent/v1"
 )
+
+func registerRouteAliases(mux *http.ServeMux, paths []string, handler http.HandlerFunc) {
+	for _, path := range paths {
+		mux.HandleFunc(path, handler)
+	}
+}
+
+func trimAnyPrefix(path string, prefixes ...string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimPrefix(path, prefix)
+		}
+	}
+	return path
+}
 
 func New(cfg config.Config, db *pgxpool.Pool, mgr *agent.Manager) *Server {
 	return &Server{
@@ -63,55 +81,39 @@ func New(cfg config.Config, db *pgxpool.Pool, mgr *agent.Manager) *Server {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/api/health", s.handleHealth)
-	mux.HandleFunc("/auth/me", s.requireIdentity(s.handleAuthMe))
-	mux.HandleFunc("/api/auth/me", s.requireIdentity(s.handleAuthMe))
+	registerRouteAliases(mux, []string{"/health", "/api/health", orchestratorAPIPrefix + "/health"}, s.handleHealth)
+	registerRouteAliases(mux, []string{"/auth/me", "/api/auth/me", orchestratorAPIPrefix + "/auth/me"}, s.requireIdentity(s.handleAuthMe))
 
-	mux.HandleFunc("/api/agents/register", s.handleRegisterAgent)
-	mux.HandleFunc("/api/agents/health", s.handleListAgents)
-	mux.HandleFunc("/api/agents/version", s.handleAgentVersionAdmin)
-	mux.HandleFunc("/api/agents/reload", s.handleAgentReloadAdmin)
-	mux.HandleFunc("/api/agents/upgrade", s.handleAgentUpgradeAdmin)
-	mux.HandleFunc("/api/agents/", s.handleAgentsByID)
+	registerRouteAliases(mux, []string{"/api/agents/register", orchestratorAPIPrefix + "/agents/register"}, s.handleRegisterAgent)
+	registerRouteAliases(mux, []string{"/api/agents/health", orchestratorAPIPrefix + "/agents/health"}, s.handleListAgents)
+	registerRouteAliases(mux, []string{"/api/agents/version", orchestratorAPIPrefix + "/agents/version"}, s.handleAgentVersionAdmin)
+	registerRouteAliases(mux, []string{"/api/agents/reload", orchestratorAPIPrefix + "/agents/reload"}, s.handleAgentReloadAdmin)
+	registerRouteAliases(mux, []string{"/api/agents/upgrade", orchestratorAPIPrefix + "/agents/upgrade"}, s.handleAgentUpgradeAdmin)
+	registerRouteAliases(mux, []string{"/api/agents/", orchestratorAPIPrefix + "/agents/"}, s.handleAgentsByID)
 
-	mux.HandleFunc("/api/agent/ready", s.requireIdentity(s.handleAgentReady))
-	mux.HandleFunc("/api/agent/subdomain", s.requireIdentity(s.handleAgentSubdomain))
-	mux.HandleFunc("/api/metrics/latency", s.requireIdentity(s.handleLatency))
-	mux.HandleFunc("/api/ws/notifications", s.requireIdentity(s.handleNotificationsWS))
-	mux.HandleFunc("/api/ws/conversation", s.requireIdentity(s.handleConversationWS))
-	mux.HandleFunc("/api/ws", s.requireIdentity(s.handleNotificationsWS))
-	mux.HandleFunc("/api/pair/request", s.handlePairRequest)
-	mux.HandleFunc("/api/pair/status/", s.handlePairStatus)
-	mux.HandleFunc("/api/pair/claim", s.requireIdentity(s.handlePairClaim))
-	mux.HandleFunc("/api/devices", s.requireIdentity(s.handleDevices))
-	mux.HandleFunc("/api/devices/telegram", s.requireIdentity(s.handleTelegramDevice))
-	mux.HandleFunc("/api/devices/", s.requireIdentity(s.handleDeviceByID))
-	mux.HandleFunc("/api/hooks/", s.handlePluginWebhookIngress)
-	mux.HandleFunc("/api/hooks/pubsub/", s.handlePubsubWebhookIngress)
+	registerRouteAliases(mux, []string{"/api/agent/ready", orchestratorAPIPrefix + "/agent/ready"}, s.requireIdentity(s.handleAgentReady))
+	registerRouteAliases(mux, []string{"/api/agent/subdomain", orchestratorAPIPrefix + "/agent/subdomain"}, s.requireIdentity(s.handleAgentSubdomain))
+	registerRouteAliases(mux, []string{"/api/metrics/latency", orchestratorAPIPrefix + "/metrics/latency"}, s.requireIdentity(s.handleLatency))
+	registerRouteAliases(mux, []string{"/api/ws/notifications", "/api/ws", agentAPIPrefix + "/ws/notifications"}, s.requireIdentity(s.handleNotificationsWS))
+	registerRouteAliases(mux, []string{"/api/ws/conversation", agentAPIPrefix + "/ws/conversation"}, s.requireIdentity(s.handleConversationWS))
+	registerRouteAliases(mux, []string{"/api/pair/request", orchestratorAPIPrefix + "/pair/request"}, s.handlePairRequest)
+	registerRouteAliases(mux, []string{"/api/pair/status/", orchestratorAPIPrefix + "/pair/status/"}, s.handlePairStatus)
+	registerRouteAliases(mux, []string{"/api/pair/claim", orchestratorAPIPrefix + "/pair/claim"}, s.requireIdentity(s.handlePairClaim))
+	registerRouteAliases(mux, []string{"/api/devices", orchestratorAPIPrefix + "/devices"}, s.requireIdentity(s.handleDevices))
+	registerRouteAliases(mux, []string{"/api/devices/telegram", orchestratorAPIPrefix + "/devices/telegram"}, s.requireIdentity(s.handleTelegramDevice))
+	registerRouteAliases(mux, []string{"/api/devices/", orchestratorAPIPrefix + "/devices/"}, s.requireIdentity(s.handleDeviceByID))
+	registerRouteAliases(mux, []string{"/api/hooks/pubsub/", orchestratorAPIPrefix + "/hooks/pubsub/"}, s.handlePubsubWebhookIngress)
+	registerRouteAliases(mux, []string{"/api/hooks/", orchestratorAPIPrefix + "/hooks/"}, s.handlePluginWebhookIngress)
 
-	mux.HandleFunc("/v1/", s.requireIdentity(s.handleV1Proxy))
-	mux.HandleFunc("/api/memory/", s.requireIdentity(s.handleMemoryProxy))
-	mux.HandleFunc("/api/preferences", s.requireIdentity(s.proxyToAgentSamePath))
-	mux.HandleFunc("/api/preferences/", s.requireIdentity(s.proxyToAgentSamePath))
-	mux.HandleFunc("/api/plugins", s.requireIdentity(s.handlePluginsProxy))
-	mux.HandleFunc("/api/plugins/", s.requireIdentity(s.handlePluginsProxy))
-	mux.HandleFunc("/api/skills", s.requireIdentity(s.proxyToAgentSamePath))
-	mux.HandleFunc("/api/skills/", s.requireIdentity(s.proxyToAgentSamePath))
-	mux.HandleFunc("/api/push/vapid-key", s.requireIdentity(s.handlePushProxy))
-	mux.HandleFunc("/api/push/subscribe", s.requireIdentity(s.handlePushProxy))
-	mux.HandleFunc("/api/push/test", s.requireIdentity(s.handlePushProxy))
+	registerRouteAliases(mux, []string{"/v1/", agentAPIPrefix + "/"}, s.requireIdentity(s.handleV1Proxy))
+	registerRouteAliases(mux, []string{"/api/memory/", "/api/preferences", "/api/preferences/", "/api/plugins", "/api/plugins/", "/api/skills", "/api/skills/", "/api/push/vapid-key", "/api/push/subscribe", "/api/push/test", "/api/channels", "/api/channels/"}, s.requireIdentity(s.proxyToAgentSamePath))
 
 	// Channel webhook — unauthenticated, called by Telegram/WhatsApp/etc.
-	// URL: POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+	// URL: POST /go/v1/{user_id}/channels/{channel_type}/webhook/{agent_id}
 	//
-	// NOTE: We register this on /api/ (prefix) and parse the path manually to
+	// NOTE: We register this on /go/v1/ (prefix) and parse the path manually to
 	// avoid net/http ServeMux wildcard conflicts with existing /api/* routes.
-	mux.HandleFunc("/api/", s.handleChannelWebhookProxy)
-
-	// Channel management — authenticated, proxy to agent for Telegram/WhatsApp/etc.
-	mux.HandleFunc("/api/channels", s.requireIdentity(s.proxyToAgentSamePath))
-	mux.HandleFunc("/api/channels/", s.requireIdentity(s.proxyToAgentSamePath))
+	registerRouteAliases(mux, []string{"/api/", orchestratorAPIPrefix + "/"}, s.handleChannelWebhookProxy)
 
 	return mux
 }
@@ -225,7 +227,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentsByID(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	path := trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/agents/", "/api/agents/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
 		writeError(w, http.StatusNotFound, "not found")
@@ -450,18 +452,18 @@ func (s *Server) handlePushProxy(w http.ResponseWriter, r *http.Request, id auth
 // handleChannelWebhookProxy proxies inbound channel webhooks (e.g. Telegram)
 // to the correct agent without requiring user authentication.
 //
-// URL: POST /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
+// URL: POST /go/v1/{user_id}/channels/{channel_type}/webhook/{agent_id}
 //
 // The user_id in the URL allows the orchestrator to resolve the correct agent
 // via the standard resolveAgent() path. The agent_id is used for direct DB
 // lookup as a fast path; user_id is the fallback.
 // The upstream path forwarded to the agent strips the user_id and agent_id:
-// /api/channels/{channel_type}/webhook
+// /agent/v1/channels/{channel_type}/webhook
 func (s *Server) handleChannelWebhookProxy(w http.ResponseWriter, r *http.Request) {
-	// Match only: /api/{user_id}/channels/{channel_type}/webhook/{agent_id}
-	trimmed := strings.Trim(r.URL.Path, "/")
+	// Match only: /go/v1/{user_id}/channels/{channel_type}/webhook/{agent_id}
+	trimmed := strings.Trim(trimAnyPrefix(r.URL.Path, orchestratorAPIPrefix+"/", "/api/"), "/")
 	parts := strings.Split(trimmed, "/")
-	if len(parts) != 6 || parts[0] != "api" || parts[2] != "channels" || parts[4] != "webhook" {
+	if len(parts) != 5 || parts[1] != "channels" || parts[3] != "webhook" {
 		// Not a channel webhook path; let this fallback handler return 404.
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -471,16 +473,16 @@ func (s *Server) handleChannelWebhookProxy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	userID := strings.TrimSpace(parts[1])
-	channelType := strings.TrimSpace(parts[3])
-	agentID := strings.TrimSpace(parts[5])
+	userID := strings.TrimSpace(parts[0])
+	channelType := strings.TrimSpace(parts[2])
+	agentID := strings.TrimSpace(parts[4])
 	if userID == "" || channelType == "" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
 	// The agent receives the standard webhook path (no user_id / agent_id).
-	upstreamPath := fmt.Sprintf("/api/channels/%s/webhook", channelType)
+	upstreamPath := fmt.Sprintf("%s/channels/%s/webhook", agentAPIPrefix, channelType)
 
 	// In local dev mode, proxy directly to the configured agent URL.
 	if local := strings.TrimSpace(s.cfg.LocalAgentURL); local != "" {
@@ -566,11 +568,11 @@ func (s *Server) proxyToAgentSamePath(w http.ResponseWriter, r *http.Request, id
 }
 
 func (s *Server) handleNotificationsWS(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	s.handleAgentWSProxy(w, r, id, "/ws/notifications")
+	s.handleAgentWSProxy(w, r, id, agentAPIPrefix+"/ws/notifications")
 }
 
 func (s *Server) handleConversationWS(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	s.handleAgentWSProxy(w, r, id, "/ws/conversation")
+	s.handleAgentWSProxy(w, r, id, agentAPIPrefix+"/ws/conversation")
 }
 
 func (s *Server) handleAgentWSProxy(w http.ResponseWriter, r *http.Request, id auth.Identity, upstreamPath string) {
