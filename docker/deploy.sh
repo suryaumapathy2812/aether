@@ -38,6 +38,7 @@ SKIP_AGENT=false
 SKIP_RESTART=false
 SKIP_CLEANUP=false
 DO_PULL=false
+CADDY_IMAGE="aether-caddy"
 
 require_env() {
     local var_name="$1"
@@ -46,6 +47,28 @@ require_env() {
         echo -e "${RED}Error: ${message}${NC}"
         exit 1
     fi
+}
+
+build_caddy_image() {
+    local docker_dir="$1"
+    echo "Building custom Caddy image with Cloudflare DNS support..."
+    docker build -t "$CADDY_IMAGE" -f "$docker_dir/Caddy.Dockerfile" "$docker_dir"
+}
+
+restart_caddy_container() {
+    local docker_dir="$1"
+    local caddy_data_dir="$2"
+    echo "Restarting Caddy..."
+    docker rm -f caddy 2>/dev/null || true
+    mkdir -p "$caddy_data_dir"
+    docker run -d \
+        --name caddy \
+        --network host \
+        --restart=unless-stopped \
+        -e CF_API_TOKEN="$CF_API_TOKEN" \
+        -v "$docker_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "$caddy_data_dir:/data" \
+        "$CADDY_IMAGE"
 }
 
 # Parse arguments
@@ -268,6 +291,15 @@ else
     echo -e "${YELLOW}Skipping PM2 restart${NC}"
     echo ""
 fi
+
+# ============================================
+# Rebuild and Restart Caddy
+# ============================================
+echo -e "${GREEN}Refreshing Caddy...${NC}"
+build_caddy_image "$PROJECT_ROOT/docker"
+restart_caddy_container "$PROJECT_ROOT/docker" "/var/lib/caddy"
+echo -e "${GREEN}Caddy refresh complete!${NC}"
+echo ""
 
 # ============================================
 # Summary

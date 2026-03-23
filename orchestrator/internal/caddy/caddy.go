@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,8 @@ type RouteManager struct {
 	domain   string
 	client   *http.Client
 }
+
+const dynamicRoutesConfigPath = "/config/apps/http/servers/srv0/routes/0"
 
 func NewRouteManager(adminURL, domain string) *RouteManager {
 	return &RouteManager{
@@ -54,7 +57,12 @@ func (rm *RouteManager) AddRoute(prefix, agentHost string, agentPort int) error 
 		}},
 		"terminal": true,
 	}
-	return rm.sendConfigRequest(http.MethodPut, "/id/"+routeID(pfx), route)
+	if err := rm.sendConfigRequest(http.MethodPatch, "/id/"+routeID(pfx), route); err == nil {
+		return nil
+	} else if !isConfigPathNotFound(err) {
+		return err
+	}
+	return rm.sendConfigRequest(http.MethodPut, dynamicRoutesConfigPath, route)
 }
 
 func (rm *RouteManager) RemoveRoute(prefix string) error {
@@ -82,6 +90,23 @@ func (rm *RouteManager) RemoveRoute(prefix string) error {
 		return fmt.Errorf("caddy delete route failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func isConfigPathNotFound(err error) bool {
+	var configErr *configRequestError
+	if !errors.As(err, &configErr) {
+		return false
+	}
+	return configErr.statusCode == http.StatusNotFound
+}
+
+type configRequestError struct {
+	statusCode int
+	body       string
+}
+
+func (e *configRequestError) Error() string {
+	return fmt.Sprintf("caddy config request failed: status=%d body=%s", e.statusCode, e.body)
 }
 
 func (rm *RouteManager) SyncRoutes(ctx context.Context, db *pgxpool.Pool) error {
@@ -136,7 +161,7 @@ func (rm *RouteManager) sendConfigRequest(method, path string, payload any) erro
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("caddy config request failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return &configRequestError{statusCode: resp.StatusCode, body: strings.TrimSpace(string(respBody))}
 	}
 	return nil
 }
