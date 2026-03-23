@@ -5,19 +5,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 import { createChatSession, replyToQuestion, rejectQuestion } from "@/lib/api";
 import { chatRuntime, useChatSessionRuntime } from "@/lib/chat-runtime";
-import StatusOrb from "@/components/StatusOrb";
 import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-
-} from "@/components/ai-elements/message";
+import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import {
   Tool,
   ToolHeader,
@@ -62,7 +56,13 @@ function ChatPageInner() {
   return <ChatView key={sessionId || "new"} session={session} sessionId={sessionId} />;
 }
 
-function ChatView({ session, sessionId: initialSessionId }: { session: { user: { id: string; name?: string | null } }; sessionId: string }) {
+function ChatView({
+  session,
+  sessionId: initialSessionId,
+}: {
+  session: { user: { id: string; name?: string | null } };
+  sessionId: string;
+}) {
   const router = useRouter();
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(initialSessionId);
@@ -77,7 +77,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
   const voiceChunkQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const userId = session.user.id;
-  const { messages, status, error, loading, loopState, questionRequest } = useChatSessionRuntime(sessionId);
+  const { messages, status, error, loading, questionRequest } = useChatSessionRuntime(sessionId);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -194,7 +194,9 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
       if (!turnId || !targetSessionId) return;
       void voiceChunkQueueRef.current
         .then(() => chatRuntime.commitVoiceTurn({ sessionId: targetSessionId, turnId }))
-        .catch(async () => { await chatRuntime.cancelTurn(targetSessionId); });
+        .catch(async () => {
+          await chatRuntime.cancelTurn(targetSessionId);
+        });
     };
 
     recorder.start(250);
@@ -231,18 +233,14 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
   const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
   const latestAssistantMessage = [...messages].reverse().find((m) => m.role === "assistant");
   const latestUserText = latestUserMessage?.parts.find((p) => p.type === "text")?.text || "";
-  const latestAssistantText = latestAssistantMessage?.parts.find((p) => p.type === "text")?.text || "";
+  const latestAssistantText =
+    latestAssistantMessage?.parts.find((p) => p.type === "text")?.text || "";
 
-  const voiceState: "idle" | "recording" | "thinking" =
-    isRecordingVoice ? "recording" : isStreaming ? "thinking" : "idle";
-
-  const loopLabel = isStreaming && loopState && loopState !== "running" && loopState !== "stopped"
-    ? loopState === "retrying" ? "retrying..."
-    : loopState === "recovering" ? "recovering..."
-    : loopState === "blocked" ? "blocked"
-    : loopState === "compacting" ? "compacting context..."
-    : null
-    : null;
+  const voiceState: "idle" | "recording" | "thinking" = isRecordingVoice
+    ? "recording"
+    : isStreaming
+      ? "thinking"
+      : "idle";
 
   return (
     <>
@@ -272,9 +270,7 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                 <div
                   className={[
                     "h-20 w-20 rounded-full transition-all duration-700",
-                    voiceState === "thinking"
-                      ? "bg-white/30 animate-pulse"
-                      : "bg-white/75",
+                    voiceState === "thinking" ? "bg-white/30 animate-pulse" : "bg-white/75",
                   ].join(" ")}
                 />
               )}
@@ -290,10 +286,13 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             </p>
 
             {/* Transcript */}
-            {(latestAssistantText || (latestUserText && latestUserText !== "[voice instruction]")) && (
+            {(latestAssistantText ||
+              (latestUserText && latestUserText !== "[voice instruction]")) && (
               <div className="max-w-md w-full text-center space-y-2 overflow-y-auto max-h-[40vh] px-2">
                 {latestUserText && latestUserText !== "[voice instruction]" && (
-                  <p className="text-white/50 text-sm leading-relaxed line-clamp-2">{latestUserText}</p>
+                  <p className="text-white/50 text-sm leading-relaxed line-clamp-2">
+                    {latestUserText}
+                  </p>
                 )}
                 {latestAssistantText && (
                   <div className="text-white/90 text-left">
@@ -327,7 +326,9 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             ) : (
               <button
                 type="button"
-                onClick={() => { void startVoiceRecording(); }}
+                onClick={() => {
+                  void startVoiceRecording();
+                }}
                 disabled={isStreaming}
                 className="h-14 w-14 rounded-full bg-white/15 flex items-center justify-center text-white hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
@@ -337,17 +338,21 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
           </div>
 
           {/* Bar animation keyframes */}
-          <style dangerouslySetInnerHTML={{ __html: `
+          <style
+            dangerouslySetInnerHTML={{
+              __html: `
             @keyframes aether-vbar {
               0%, 100% { transform: scaleY(0.3); }
               50% { transform: scaleY(1); }
             }
-          ` }} />
+          `,
+            }}
+          />
         </div>
       )}
 
       {/* ── Main chat view ──────────────────────────────────────────── */}
-      <div className="h-full flex flex-col">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
         {/*<div className="absolute top-5 right-5 z-10 flex items-center gap-2">
           {loopLabel && (
             <span className="text-[10px] text-muted-foreground/60 animate-pulse">{loopLabel}</span>
@@ -368,14 +373,15 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                 description=""
               />
             ) : (
-              messages.map((message, messageIndex) => (
+              messages.map((message) => (
                 <Message from={message.role} key={message.id} className="max-w-full">
                   <MessageContent>
                     {message.parts.map((part, i) => {
                       const key = `${message.id}-${i}`;
                       switch (part.type) {
                         case "text": {
-                          const isVoiceMsg = message.role === "user" && part.text === "[voice instruction]";
+                          const isVoiceMsg =
+                            message.role === "user" && part.text === "[voice instruction]";
                           return (
                             <Fragment key={key}>
                               {isVoiceMsg ? (
@@ -391,11 +397,22 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                         }
                         default:
                           if (part.type.startsWith("tool-")) {
-                            const toolPart = part as { type: string; state: string; toolCallId: string; input?: unknown; output?: unknown; errorText?: string };
+                            const toolPart = part as {
+                              type: string;
+                              state: string;
+                              toolCallId: string;
+                              input?: unknown;
+                              output?: unknown;
+                              errorText?: string;
+                            };
                             const toolName = toolPart.type.replace("tool-", "");
                             const inputObj = toolPart.input as Record<string, unknown> | undefined;
                             const subtitle = inputObj
-                              ? (inputObj.query || inputObj.message_id || inputObj.name || inputObj.summary || "") as string
+                              ? ((inputObj.query ||
+                                  inputObj.message_id ||
+                                  inputObj.name ||
+                                  inputObj.summary ||
+                                  "") as string)
                               : "";
                             return (
                               <Tool key={key}>
@@ -406,8 +423,12 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
                                 />
                                 <ToolContent>
                                   <ToolInput input={toolPart.input} />
-                                  {(toolPart.state === "output-available" || toolPart.state === "output-error") && (
-                                    <ToolOutput output={toolPart.output} errorText={toolPart.errorText} />
+                                  {(toolPart.state === "output-available" ||
+                                    toolPart.state === "output-error") && (
+                                    <ToolOutput
+                                      output={toolPart.output}
+                                      errorText={toolPart.errorText}
+                                    />
                                   )}
                                 </ToolContent>
                               </Tool>
@@ -444,10 +465,18 @@ function ChatView({ session, sessionId: initialSessionId }: { session: { user: {
             <QuestionDock
               request={questionRequest}
               onSubmit={async (answers) => {
-                try { await replyToQuestion(questionRequest.id, answers); } catch { /* ignore */ }
+                try {
+                  await replyToQuestion(questionRequest.id, answers);
+                } catch {
+                  /* ignore */
+                }
               }}
               onDismiss={async () => {
-                try { await rejectQuestion(questionRequest.id); } catch { /* ignore */ }
+                try {
+                  await rejectQuestion(questionRequest.id);
+                } catch {
+                  /* ignore */
+                }
               }}
             />
           ) : (

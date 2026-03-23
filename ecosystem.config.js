@@ -15,7 +15,7 @@ module.exports = {
     // ─────────────────────────────────────────────
     {
       name: "aether-dashboard",
-      script: "npm",
+      script: "vp",
       args: "run dev",
       cwd: `${ROOT}/dashboard`,
       interpreter: "none",

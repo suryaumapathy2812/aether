@@ -49,7 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ServiceWorkerRegistrar />
             <NotificationProvider>
               <KeyboardShortcutsProvider>
-                <SidebarProvider className="flex-col md:flex-row">
+                <SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden md:flex-row">
                   <Suspense>
                     <Sidebar variant="sidebar" />
                   </Suspense>
