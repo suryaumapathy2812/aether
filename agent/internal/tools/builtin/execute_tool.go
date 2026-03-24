@@ -23,10 +23,7 @@ var credentialEnvMapping = map[string]string{
 	"spotify":         "SPOTIFY_ACCESS_TOKEN",
 	"weather":         "WEATHER_API_KEY",
 	"brave-search":    "BRAVE_SEARCH_API_KEY",
-	"wikipedia":       "WOLFRAM_APP_ID",
 	"wolfram":         "WOLFRAM_APP_ID",
-	"rss-feeds":       "",
-	"local-search":    "",
 }
 
 // envVarForPlugin returns the environment variable name for a plugin's credential.
@@ -35,7 +32,6 @@ func envVarForPlugin(pluginName string) string {
 	if env, ok := credentialEnvMapping[pluginName]; ok && env != "" {
 		return env
 	}
-	// Fallback: uppercase the plugin name with _ACCESS_TOKEN suffix
 	upper := strings.ToUpper(strings.ReplaceAll(pluginName, "-", "_"))
 	return upper + "_ACCESS_TOKEN"
 }
@@ -84,65 +80,6 @@ func (t *ExecuteTool) Execute(ctx context.Context, call tools.Call) tools.Result
 		return tools.Fail(credErr.Error(), map[string]any{"credentials": credNames})
 	}
 
-	// Use container execution if available, otherwise fall back to host.
-	if cm, ok := call.Ctx.RuntimeHints["container_manager"]; ok && cm != nil {
-		return t.executeInContainer(ctx, call, command, envVars, credMeta, timeoutSec, cm)
-	}
-	return t.executeOnHost(ctx, call, command, envVars, credMeta, timeoutSec)
-}
-
-// ContainerExecer is the interface the execute tool expects from a container manager.
-// Defined here to avoid circular imports with the container package.
-type ContainerExecer interface {
-	ExecRaw(ctx context.Context, userID string, command string, envVars []string, timeoutSec int) (ContainerExecResult, error)
-}
-
-// ContainerExecResult holds the result of a container command execution.
-type ContainerExecResult struct {
-	Stdout   string
-	Stderr   string
-	Error    string
-	ExitCode int
-}
-
-func (t *ExecuteTool) executeInContainer(ctx context.Context, call tools.Call, command string, envVars []string, credMeta map[string]string, timeoutSec int, cm any) tools.Result {
-	execer, ok := cm.(ContainerExecer)
-	if !ok {
-		return tools.Fail("container manager does not implement expected interface", nil)
-	}
-
-	// Default user ID — will be configurable per user in the future.
-	userID := "default"
-	if v, ok := call.Ctx.RuntimeHints["user_id"]; ok {
-		if uid, ok := v.(string); ok && uid != "" {
-			userID = uid
-		}
-	}
-
-	result, err := execer.ExecRaw(ctx, userID, command, envVars, timeoutSec)
-	if err != nil {
-		out := result.Stdout
-		errOut := result.Stderr
-		msg := "command failed"
-		if errOut != "" {
-			msg = msg + ": " + errOut
-		} else {
-			msg = msg + ": " + err.Error()
-		}
-		return tools.Fail(msg, map[string]any{"command": command, "stdout": out, "stderr": errOut, "injected_credentials": credMeta})
-	}
-
-	out := result.Stdout
-	if out == "" && result.Stderr != "" {
-		out = result.Stderr
-	}
-	if out == "" {
-		out = "command completed successfully"
-	}
-	return tools.Success(out, map[string]any{"command": command, "stderr": result.Stderr, "injected_credentials": credMeta})
-}
-
-func (t *ExecuteTool) executeOnHost(ctx context.Context, call tools.Call, command string, envVars []string, credMeta map[string]string, timeoutSec int) tools.Result {
 	// Build the execution environment: inherit host env + inject plugin credentials.
 	cmdEnv := os.Environ()
 	cmdEnv = append(cmdEnv, envVars...)

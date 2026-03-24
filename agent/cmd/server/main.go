@@ -21,7 +21,6 @@ import (
 	channelshttp "github.com/suryaumapathy2812/core-ai/agent/internal/channels/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels/telegram"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/container"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
 	convws "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/wsapi"
@@ -142,19 +141,6 @@ func main() {
 	pushDeliverer := ws.NewPushDeliverer(store, pushSender, wsHub)
 	directValidator := agentauth.NewValidator(cfg.DirectTokenSecret, cfg.Channels.AgentID)
 
-	// ── Container manager (per-user sandbox) ──────────────────────────
-	var containerMgr *container.Manager
-	containerRuntimeHint := map[string]any{}
-	if container.DockerAvailable() {
-		containerCfg := container.DefaultConfig()
-		containerCfg.BaseDataDir = filepath.Join(cfg.AssetsDir, "users")
-		containerMgr = container.NewManager(containerCfg)
-		containerRuntimeHint["container_manager"] = containerMgr
-		log.Printf("container: Docker available, per-user sandbox enabled")
-	} else {
-		log.Printf("container: Docker not available, falling back to host execution")
-	}
-
 	// ── Question system & WS notify ────────────────────────────────
 	// Shared WS notify callback used by both the conversation handler and
 	// the question asker bridge.
@@ -173,7 +159,6 @@ func main() {
 		Plugins:       pluginsManager,
 		PushDeliverer: pushDeliverer,
 		QuestionAsker: questionAskerHolder,
-		RuntimeHints:  containerRuntimeHint,
 	})
 
 	// ── LLM & Media ────────────────────────────────────────────────
@@ -196,7 +181,6 @@ func main() {
 		PushDeliverer:     pushDeliverer,
 		QuestionAsker:     questionAskerHolder,
 		EmbeddingProvider: embeddingProvider,
-		RuntimeHints:      containerRuntimeHint,
 	})
 
 	mediaService, err := media.New(context.Background(), cfg.S3)

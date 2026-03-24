@@ -24,11 +24,36 @@ RUN CGO_ENABLED=1 go build \
 # ── Runtime stage ──
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    curl \
+    jq \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
+    git \
+    wget \
+    unzip \
+    zip \
+    bash \
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Common Python packages
+RUN pip3 install requests beautifulsoup4 pandas --break-system-packages --no-warn-script-location
+
+# Common Node packages
+RUN npm install -g axios
+
+# Create workspace directory
+RUN mkdir -p /workspace
 
 COPY --from=builder /agent-server /usr/local/bin/agent-server
 COPY --from=builder /app/assets /app/assets
 
+WORKDIR /workspace
 EXPOSE 8000
 
 CMD ["agent-server"]
