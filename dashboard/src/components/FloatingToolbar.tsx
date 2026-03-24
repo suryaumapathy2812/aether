@@ -75,9 +75,14 @@ function FloatingToolbarInner() {
       <div className="flex items-center gap-0.5 pointer-events-auto">
         <button
           onClick={() => router.push("/chat")}
-          className="logo-wordmark text-sm font-bold text-foreground/40 hover:text-foreground/70 transition-colors px-1.5 cursor-pointer"
+          className="flex items-center justify-center rounded-lg transition-colors cursor-pointer"
+          aria-label="Home"
         >
-          aether
+          <img
+            src={theme === "dark" ? "/icon-animated-white.svg" : "/icon-animated-black.svg"}
+            alt="Aether"
+            className="w-8 h-8"
+          />
         </button>
 
         <Tooltip>

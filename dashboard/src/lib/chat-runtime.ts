@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { UIMessage } from "ai";
+import type { UIMessage, FileUIPart } from "ai";
 import {
   ensureDirectAgentConnection,
   directAgentWs,
@@ -8,6 +8,8 @@ import {
   getChatSessionStatuses,
   getSessionToken,
   orchestratorWs,
+  initMediaUpload,
+  completeMediaUpload,
 } from "@/lib/api";
 
 export type SessionStatus = "idle" | "streaming" | "error";
@@ -85,6 +87,7 @@ type ConversationEventType =
   | "turn.start"
   | "turn.accepted"
   | "turn.input.text"
+  | "turn.input.media"
   | "turn.input.audio.chunk"
   | "turn.commit"
   | "turn.cancel"
@@ -138,7 +141,7 @@ type SessionAction =
   | { type: "stream-start" }
   | { type: "stream-end" }
   | { type: "stream-error"; error: string }
-  | { type: "append-user"; text: string; messageID: string }
+  | { type: "append-user"; text: string; messageID: string; files?: FileUIPart[] }
   | { type: "append-assistant"; messageID: string }
   | { type: "assistant-text-delta"; messageID: string; delta: string }
   | { type: "assistant-reasoning-delta"; messageID: string; delta: string }
@@ -554,13 +557,34 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
         loopState: null,
         loopReason: null,
       };
-    case "stream-error":
-      return { ...current, status: "error", error: action.error };
+    case "stream-error": {
+      // Remove empty assistant messages on error
+      const filteredMessages = current.messages.filter((msg) => {
+        if (msg.role !== "assistant") return true;
+        // Keep assistant messages that have content
+        if (msg.parts.length === 0) return false;
+        if (msg.parts.length === 1 && msg.parts[0].type === "text" && !msg.parts[0].text.trim()) return false;
+        return true;
+      });
+      return { ...current, status: "error", error: action.error, messages: filteredMessages };
+    }
     case "append-user": {
+      const parts: UIMessage["parts"] = [];
+      if (action.files && action.files.length > 0) {
+        for (const file of action.files) {
+          parts.push(file as UIMessage["parts"][number]);
+        }
+      }
+      if (action.text.trim()) {
+        parts.push({ type: "text", text: action.text });
+      }
+      if (parts.length === 0) {
+        parts.push({ type: "text", text: " " });
+      }
       const msg: UIMessage = {
         id: action.messageID,
         role: "user",
-        parts: [{ type: "text", text: action.text }],
+        parts,
       };
       return { ...current, messages: [...current.messages, msg] };
     }
@@ -645,10 +669,14 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
     case "message-upsert-from-event": {
       const idx = current.messages.findIndex((message) => message.id === action.messageID);
       if (idx === -1) {
+        // Only create new message if there's text content
+        if (!action.text) {
+          return current;
+        }
         const next: UIMessage = {
           id: action.messageID,
           role: action.role,
-          parts: action.text ? [{ type: "text", text: action.text }] : [],
+          parts: [{ type: "text", text: action.text }],
         };
         return { ...current, messages: [...current.messages, next] };
       }
@@ -855,11 +883,154 @@ class ChatRuntimeStore {
     }
   }
 
-  async sendMessage(input: { sessionId: string; userId: string; text: string }): Promise<void> {
+  async sendMessage(input: { 
+    sessionId: string; 
+    userId: string; 
+    text: string;
+    files?: FileUIPart[];
+  }): Promise<void> {
     const sessionId = input.sessionId.trim();
+    const userId = input.userId.trim();
     const text = input.text.trim();
-    if (!sessionId || !text) return;
-    await this.sendTextTurn({ sessionId, userId: input.userId.trim(), text });
+    
+    if (input.files && input.files.length > 0) {
+      await this.sendMediaTurn({ sessionId, userId, text, files: input.files });
+    } else {
+      await this.sendTextTurn({ sessionId, userId, text });
+    }
+  }
+
+  private async sendMediaTurn(input: {
+    sessionId: string;
+    userId: string;
+    text: string;
+    files: FileUIPart[];
+  }): Promise<void> {
+    const turn = await this.beginTurn({
+      sessionId: input.sessionId,
+      userId: input.userId,
+      mode: "text",
+      userText: input.text || "[media]",
+      files: input.files,
+    });
+
+    try {
+      // 1. Upload files to S3 and collect media refs
+      const mediaRefs: Array<{ kind: string; media: Record<string, unknown> }> = [];
+
+      for (const file of input.files) {
+        if (!file.url) continue;
+        
+        // Convert blob URL to data URL if needed
+        let dataUrl = file.url;
+        if (file.url.startsWith("blob:")) {
+          const response = await fetch(file.url);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          dataUrl = await new Promise<string>((resolve) => {
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        // Determine media type from file.mediaType or data URL prefix
+        let mediaType = file.mediaType;
+        if (!mediaType && dataUrl.startsWith("data:")) {
+          const match = dataUrl.match(/^data:([^;]+);/);
+          if (match) {
+            mediaType = match[1];
+          }
+        }
+        
+        const isImage = mediaType?.startsWith("image/") ?? false;
+        const kind = isImage ? "image" : "audio";
+        const contentType = mediaType || (isImage ? "image/png" : "audio/webm");
+
+        if (dataUrl.startsWith("data:")) {
+          // Convert data URL to blob first so we know the size
+          const base64Data = dataUrl.split(",")[1];
+          const binaryString = atob(base64Data);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const blob = new Blob([bytes], { type: contentType });
+
+          // Upload to S3
+          const initResult = await initMediaUpload({
+            user_id: input.userId,
+            session_id: input.sessionId,
+            file_name: file.filename || "file",
+            content_type: contentType,
+            size: blob.size,
+            kind,
+          });
+
+          const uploadResponse = await fetch(initResult.upload_url, {
+            method: "PUT",
+            body: blob,
+            headers: initResult.headers,
+          });
+
+          if (!uploadResponse.ok) {
+            throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
+          }
+
+          const completeResult = await completeMediaUpload({
+            user_id: input.userId,
+            bucket: initResult.bucket,
+            object_key: initResult.object_key,
+            file_name: file.filename || "file",
+            content_type: contentType,
+            size: blob.size,
+            kind,
+          });
+
+          mediaRefs.push({
+            kind,
+            media: completeResult.media as unknown as Record<string, unknown>,
+          });
+        }
+      }
+
+      // 2. Send media refs over WebSocket
+      if (mediaRefs.length > 0) {
+        this.sendConversationEnvelope({
+          type: "turn.input.media",
+          sessionId: turn.sessionId,
+          turnId: turn.turnId,
+          payload: { media_refs: mediaRefs },
+        });
+      }
+
+      // 3. Send text if present
+      if (input.text.trim()) {
+        this.sendConversationEnvelope({
+          type: "turn.input.text",
+          sessionId: turn.sessionId,
+          turnId: turn.turnId,
+          payload: { text: input.text },
+        });
+      }
+
+      // 4. Commit turn
+      this.sendConversationEnvelope({
+        type: "turn.commit",
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+      });
+
+      await turn.done;
+    } catch (error) {
+      const pending = this.inflight.get(turn.sessionId);
+      if (pending && pending.turnId === turn.turnId) {
+        this.failTurn(
+          turn.sessionId,
+          error instanceof Error ? error : new Error("Failed to stream response"),
+        );
+      }
+      throw error;
+    }
   }
 
   async startVoiceTurn(input: {
@@ -984,6 +1155,7 @@ class ChatRuntimeStore {
     userId: string;
     mode: TurnMode;
     userText: string;
+    files?: FileUIPart[];
   }): Promise<{ sessionId: string; turnId: string; done: Promise<void> }> {
     const sessionId = input.sessionId.trim();
     if (!sessionId) {
@@ -1001,6 +1173,7 @@ class ChatRuntimeStore {
       type: "append-user",
       text: input.userText,
       messageID: userMessageID,
+      files: input.files,
     });
     this.dispatch(sessionId, { type: "append-assistant", messageID: assistantMessageID });
     this.dispatch(sessionId, { type: "stream-start" });
@@ -1671,7 +1844,7 @@ export function useChatStatusMap(): Record<string, SessionStatus> {
 export const chatRuntime = {
   bootstrapForUser: (userId: string) => runtimeStore.bootstrapForUser(userId),
   loadHistory: (sessionId: string) => runtimeStore.loadHistory(sessionId),
-  sendMessage: (input: { sessionId: string; userId: string; text: string }) =>
+  sendMessage: (input: { sessionId: string; userId: string; text: string; files?: FileUIPart[] }) =>
     runtimeStore.sendMessage(input),
   startVoiceTurn: (input: { sessionId: string; userId: string; textHint?: string }) =>
     runtimeStore.startVoiceTurn(input),

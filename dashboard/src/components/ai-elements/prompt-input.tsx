@@ -875,25 +875,21 @@ export const PromptInput = ({
           })
         );
 
+        // Clear inputs immediately before async operation
+        clear();
+        if (usingProvider) {
+          controller.textInput.clear();
+        }
+
         const result = onSubmit({ files: convertedFiles, text }, event);
 
         // Handle both sync and async onSubmit
         if (result instanceof Promise) {
-          try {
-            await result;
-            clear();
-            if (usingProvider) {
-              controller.textInput.clear();
-            }
-          } catch {
-            // Don't clear on error - user may want to retry
-          }
-        } else {
-          // Sync function completed without throwing, clear inputs
-          clear();
-          if (usingProvider) {
-            controller.textInput.clear();
-          }
+          // Don't await - let it run in background
+          // Input already cleared, so user can type while waiting
+          result.catch(() => {
+            // Error handling is done by the onSubmit caller
+          });
         }
       } catch {
         // Don't clear on error - user may want to retry

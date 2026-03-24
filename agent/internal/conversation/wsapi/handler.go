@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
@@ -34,6 +36,7 @@ type Handler struct {
 	runtime   *conversation.Runtime
 	builder   *llm.ContextBuilder
 	memory    *memory.Service
+	media     *media.Service
 	store     *db.Store
 	limits    agentcfg.MediaLimitsConfig
 	notify    func(userID, eventType string, payload map[string]any)
@@ -46,6 +49,7 @@ type Options struct {
 	Runtime   *conversation.Runtime
 	Builder   *llm.ContextBuilder
 	Memory    *memory.Service
+	Media     *media.Service
 	Store     *db.Store
 	Limits    agentcfg.MediaLimitsConfig
 	Notify    func(userID, eventType string, payload map[string]any)
@@ -75,10 +79,19 @@ type audioChunk struct {
 	MIME string
 }
 
+type mediaRef struct {
+	Kind   string
+	Bucket string
+	Key    string
+	MIME   string
+	Format string
+}
+
 type activeTurn struct {
 	id         string
 	mode       turnMode
 	textParts  []string
+	mediaParts []mediaRef
 	audio      []audioChunk
 	audioBytes int
 	running    bool
@@ -106,6 +119,7 @@ func New(opts Options) *Handler {
 		runtime:   opts.Runtime,
 		builder:   opts.Builder,
 		memory:    opts.Memory,
+		media:     opts.Media,
 		store:     opts.Store,
 		limits:    opts.Limits,
 		notify:    opts.Notify,
@@ -205,6 +219,8 @@ func (h *Handler) handleWS(w http.ResponseWriter, r *http.Request) {
 			h.handleTurnStart(conn, writeMu, state, in)
 		case "turn.input.text":
 			h.handleTurnInputText(conn, writeMu, state, in)
+		case "turn.input.media":
+			h.handleTurnInputMedia(conn, writeMu, state, in)
 		case "turn.input.audio.chunk":
 			h.handleTurnInputAudio(conn, writeMu, state, in)
 		case "turn.commit":
@@ -339,6 +355,39 @@ func (h *Handler) handleTurnInputText(conn *websocket.Conn, writeMu *sync.Mutex,
 	state.mu.Unlock()
 }
 
+func (h *Handler) handleTurnInputMedia(conn *websocket.Conn, writeMu *sync.Mutex, state *connectionState, in envelope) {
+	state.mu.Lock()
+	turn, ok := state.activeBySession[in.SessionID]
+	if !ok || turn == nil || turn.id != in.TurnID {
+		state.mu.Unlock()
+		h.writeError(conn, writeMu, state, in.SessionID, in.TurnID, "turn_conflict", "no matching active turn")
+		return
+	}
+
+	rawRefs, _ := in.Payload["media_refs"].([]any)
+	for _, raw := range rawRefs {
+		refMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, _ := refMap["kind"].(string)
+		mediaObj, _ := refMap["media"].(map[string]any)
+		ref := mediaRef{
+			Kind:   kind,
+			Bucket: stringValue(mediaObj["bucket"]),
+			Key:    stringValue(mediaObj["key"]),
+			MIME:   stringValue(mediaObj["mime"]),
+			Format: stringValue(mediaObj["format"]),
+		}
+		if ref.Key != "" {
+			turn.mediaParts = append(turn.mediaParts, ref)
+		}
+	}
+	state.mu.Unlock()
+
+	h.writeAck(conn, writeMu, state, in.SessionID, in.TurnID, in.EventID)
+}
+
 func (h *Handler) handleTurnInputAudio(conn *websocket.Conn, writeMu *sync.Mutex, state *connectionState, in envelope) {
 	audioB64, _ := in.Payload["audio"].(string)
 	audioB64 = strings.TrimSpace(audioB64)
@@ -411,7 +460,7 @@ func (h *Handler) handleTurnCommit(conn *websocket.Conn, writeMu *sync.Mutex, st
 		return
 	}
 
-	if turn.mode == turnModeText && len(turn.textParts) == 0 {
+	if turn.mode == turnModeText && len(turn.textParts) == 0 && len(turn.mediaParts) == 0 {
 		state.mu.Unlock()
 		h.writeError(conn, writeMu, state, in.SessionID, in.TurnID, "validation", "text turn has no input")
 		return
@@ -489,6 +538,12 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 	if h.store != nil {
 		if modelPref, err := h.store.GetUserPreference(ctx, state.userID, "model"); err == nil && strings.TrimSpace(modelPref) != "" {
 			policy["model"] = strings.TrimSpace(modelPref)
+		}
+		// Override model for voice/audio turns with a dedicated voice_model preference
+		if turn.mode == turnModeVoice || len(turn.mediaParts) > 0 {
+			if voiceModel, err := h.store.GetUserPreference(ctx, state.userID, "voice_model"); err == nil && strings.TrimSpace(voiceModel) != "" {
+				policy["model"] = strings.TrimSpace(voiceModel)
+			}
 		}
 	}
 	env := h.builder.Build(messages, policy, state.userID, sessionID)
@@ -624,45 +679,152 @@ func (h *Handler) buildUserMessage(turn *activeTurn) (model map[string]any, stor
 	if turn == nil {
 		return nil, nil, "", fmt.Errorf("turn is required")
 	}
-	if turn.mode == turnModeText {
-		text := strings.TrimSpace(strings.Join(turn.textParts, "\n"))
-		if text == "" {
-			return nil, nil, "", fmt.Errorf("text turn has no input")
+
+	text := strings.TrimSpace(strings.Join(turn.textParts, "\n"))
+
+	// If no media parts, use existing simple logic
+	if len(turn.mediaParts) == 0 {
+		if turn.mode == turnModeText {
+			if text == "" {
+				return nil, nil, "", fmt.Errorf("text turn has no input")
+			}
+			msg := map[string]any{
+				"role":    "user",
+				"content": text,
+				"metadata": map[string]any{
+					"input_mode": "text",
+				},
+			}
+			return cloneMap(msg), msg, text, nil
+		}
+
+		// Voice mode without media
+		if len(turn.audio) == 0 {
+			return nil, nil, "", fmt.Errorf("voice turn has no audio")
+		}
+		buf := make([]byte, 0, turn.audioBytes)
+		format := "wav"
+		for _, chunk := range turn.audio {
+			buf = append(buf, chunk.Data...)
+			if chunk.MIME != "" {
+				format = chunk.MIME
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(buf)
+		content := []any{
+			map[string]any{"type": "text", "text": "[voice instruction]"},
+			map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": encoded, "format": format}},
 		}
 		msg := map[string]any{
 			"role":    "user",
-			"content": text,
+			"content": content,
 			"metadata": map[string]any{
-				"input_mode": "text",
+				"input_mode": "voice",
 			},
 		}
-		return cloneMap(msg), msg, text, nil
+		return cloneMap(msg), msg, "[voice instruction]", nil
 	}
 
-	if len(turn.audio) == 0 {
-		return nil, nil, "", fmt.Errorf("voice turn has no audio")
+	// Build content array with media parts
+	content := []any{}
+
+	// Add text part
+	if text != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	buf := make([]byte, 0, turn.audioBytes)
-	format := "wav"
-	for _, chunk := range turn.audio {
-		buf = append(buf, chunk.Data...)
-		if chunk.MIME != "" {
-			format = chunk.MIME
+
+	// Add audio if voice mode
+	if len(turn.audio) > 0 {
+		buf := make([]byte, 0, turn.audioBytes)
+		format := "wav"
+		for _, chunk := range turn.audio {
+			buf = append(buf, chunk.Data...)
+			if chunk.MIME != "" {
+				format = chunk.MIME
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(buf)
+		content = append(content, map[string]any{
+			"type":        "input_audio",
+			"input_audio": map[string]any{"data": encoded, "format": format},
+		})
+	}
+
+	// Resolve media refs
+	for _, ref := range turn.mediaParts {
+		if h.media == nil || !h.media.Enabled() {
+			return nil, nil, "", fmt.Errorf("media storage not available")
+		}
+
+		if ref.Kind == "image" {
+			// Try presigned/public URL first — OpenRouter supports HTTP URLs for image_url.
+			// Fall back to base64 data URL if the URL is private/localhost (unreachable by LLM provider).
+			presignedURL, err := h.media.PresignGet(context.Background(), ref.Bucket, ref.Key)
+			if err == nil && isPublicURL(presignedURL) {
+				content = append(content, map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": presignedURL},
+				})
+			} else {
+				imgBytes, contentType, fetchErr := h.media.GetObjectBytes(context.Background(), ref.Bucket, ref.Key)
+				if fetchErr != nil {
+					return nil, nil, "", fmt.Errorf("failed to fetch image %s: %w", ref.Key, fetchErr)
+				}
+				if len(imgBytes) > h.limits.MaxImageBytes {
+					return nil, nil, "", fmt.Errorf("image exceeds size limit")
+				}
+				mime := ref.MIME
+				if mime == "" {
+					mime = contentType
+				}
+				if mime == "" {
+					mime = "image/png"
+				}
+				dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(imgBytes)
+				content = append(content, map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": dataURL},
+				})
+			}
+		} else if ref.Kind == "audio" {
+			// Audio requires base64 encoding — OpenRouter doesn't support audio URLs
+			bytes, _, err := h.media.GetObjectBytes(context.Background(), ref.Bucket, ref.Key)
+			if err != nil {
+				return nil, nil, "", fmt.Errorf("failed to fetch media %s: %w", ref.Key, err)
+			}
+			if len(bytes) > h.limits.MaxAudioBytes {
+				return nil, nil, "", fmt.Errorf("audio exceeds size limit")
+			}
+			format := ref.Format
+			if format == "" {
+				format = "webm"
+			}
+			encoded := base64.StdEncoding.EncodeToString(bytes)
+			content = append(content, map[string]any{
+				"type":        "input_audio",
+				"input_audio": map[string]any{"data": encoded, "format": format},
+			})
 		}
 	}
-	encoded := base64.StdEncoding.EncodeToString(buf)
-	content := []any{
-		map[string]any{"type": "text", "text": "[voice instruction]"},
-		map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": encoded, "format": format}},
+
+	summary = text
+	if summary == "" {
+		summary = "[media]"
 	}
+
+	inputMode := "text"
+	if len(turn.audio) > 0 {
+		inputMode = "voice"
+	}
+
 	msg := map[string]any{
 		"role":    "user",
 		"content": content,
 		"metadata": map[string]any{
-			"input_mode": "voice",
+			"input_mode": inputMode,
 		},
 	}
-	return cloneMap(msg), msg, "[voice instruction]", nil
+	return cloneMap(msg), msg, summary, nil
 }
 
 func (h *Handler) cancelAll(state *connectionState) {
@@ -899,6 +1061,31 @@ func cloneMap(in map[string]any) map[string]any {
 
 func nowRFC3339Nano() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+// isPublicURL returns true if the URL is reachable from external services (not localhost/private).
+func isPublicURL(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1" {
+		return false
+	}
+	if strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return false
+	}
+	// 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+	if strings.HasPrefix(host, "10.") || strings.HasPrefix(host, "192.168.") || strings.HasPrefix(host, "172.") {
+		return false
+	}
+	return true
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 var eventCounter uint64

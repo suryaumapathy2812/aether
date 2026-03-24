@@ -13,7 +13,13 @@ import { toast } from "sonner";
 
 const DEFAULT_MODEL = "minimax/minimax-m2.5";
 
-export default function ModelPreference() {
+export default function ModelPreference({
+  prefKey = "model",
+  placeholder = DEFAULT_MODEL,
+}: {
+  prefKey?: string;
+  placeholder?: string;
+} = {}) {
   const { data: session } = useSession();
   const userId = session?.user?.id || "";
 
@@ -23,17 +29,17 @@ export default function ModelPreference() {
 
   useEffect(() => {
     if (!userId) return;
-    getUserPreference(userId, "model").then((value) => {
+    getUserPreference(userId, prefKey).then((value) => {
       setModel(value || "");
       setLoading(false);
     });
-  }, [userId]);
+  }, [userId, prefKey]);
 
   async function handleSave() {
     if (!userId) return;
     setSaving(true);
     const trimmed = model.trim();
-    const success = await setUserPreference(userId, "model", trimmed);
+    const success = await setUserPreference(userId, prefKey, trimmed);
     if (success) {
       toast.success("Model saved");
     } else {
@@ -45,7 +51,7 @@ export default function ModelPreference() {
   async function handleReset() {
     if (!userId) return;
     setSaving(true);
-    const success = await deleteUserPreference(userId, "model");
+    const success = await deleteUserPreference(userId, prefKey);
     if (success) {
       setModel("");
       toast.success("Reset to default");
@@ -62,7 +68,7 @@ export default function ModelPreference() {
       <Input
         value={model}
         onChange={(e) => setModel(e.target.value)}
-        placeholder={DEFAULT_MODEL}
+        placeholder={placeholder}
         className="flex-1"
       />
       <Button

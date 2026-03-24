@@ -228,7 +228,7 @@ func main() {
 	// Wire the question asker bridge now that the handler (and its question manager) exist.
 	questionAskerHolder.inner = convhttp.NewQuestionAskerBridge(convHandler.QuestionManager(), wsNotify)
 	convHandler.RegisterRoutes(mux)
-	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Store: store, Limits: cfg.Media, Notify: wsNotify, Validator: directValidator})
+	convWSHandler := convws.New(convws.Options{Runtime: conversationRuntime, Builder: llmBuilder, Memory: memoryService, Media: mediaService, Store: store, Limits: cfg.Media, Notify: wsNotify, Validator: directValidator})
 	convWSHandler.RegisterRoutes(mux)
 	dataHandler := dataapi.New(dataapi.Options{Store: store, Media: mediaService, Embedder: embeddingProvider, Validator: directValidator})
 	dataHandler.RegisterRoutes(mux)

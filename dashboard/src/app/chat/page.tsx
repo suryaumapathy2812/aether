@@ -28,14 +28,26 @@ import {
 } from "@/components/ai-elements/tool-renderer";
 import {
   PromptInput,
+  PromptInputProvider,
   PromptInputTextarea,
   PromptInputSubmit,
   PromptInputButton,
   PromptInputBody,
   PromptInputFooter,
   PromptInputTools,
+  PromptInputActionMenu,
+  PromptInputActionMenuTrigger,
+  PromptInputActionMenuContent,
+  PromptInputActionAddAttachments,
   type PromptInputMessage,
+  usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
+import {
+  Attachments,
+  Attachment,
+  AttachmentPreview,
+  AttachmentRemove,
+} from "@/components/ai-elements/attachments";
 import { IconSparkles, IconX, IconPlayerPause } from "@tabler/icons-react";
 import { AudioLines } from "lucide-react";
 
@@ -65,6 +77,87 @@ function ChatPageInner() {
       session={session}
       sessionId={sessionId}
     />
+  );
+}
+
+function ChatPromptInput({
+  input,
+  setInput,
+  isStreaming,
+  sessionId,
+  setInputMode,
+  onSubmit,
+}: {
+  input: string;
+  setInput: (v: string) => void;
+  isStreaming: boolean;
+  sessionId: string;
+  setInputMode: (mode: "text" | "voice") => void;
+  onSubmit: (message: PromptInputMessage) => Promise<void>;
+}) {
+  const attachments = usePromptInputAttachments();
+
+  return (
+    <PromptInput onSubmit={onSubmit}>
+      <PromptInputBody>
+        {attachments.files.length > 0 && (
+          <div className="flex justify-end gap-2 mb-2">
+            <Attachments variant="inline">
+              {attachments.files.map((file) => (
+                <Attachment
+                  key={file.id}
+                  data={file}
+                  onRemove={() => attachments.remove(file.id)}
+                >
+                  <AttachmentPreview />
+                  <AttachmentRemove />
+                </Attachment>
+              ))}
+            </Attachments>
+          </div>
+        )}
+        <PromptInputTextarea
+          value={input}
+          onChange={(e) => setInput(e.currentTarget.value)}
+          placeholder="Message aether..."
+          className="min-h-11"
+        />
+      </PromptInputBody>
+      <PromptInputFooter>
+        <PromptInputTools>
+          <PromptInputActionMenu>
+            <PromptInputActionMenuTrigger tooltip="Add attachments" />
+            <PromptInputActionMenuContent>
+              <PromptInputActionAddAttachments />
+            </PromptInputActionMenuContent>
+          </PromptInputActionMenu>
+        </PromptInputTools>
+        {!input.trim() && !isStreaming && attachments.files.length === 0 ? (
+          <PromptInputButton
+            onClick={() => setInputMode("voice")}
+            tooltip="Voice mode"
+            size="icon-sm"
+            variant="default"
+            className="rounded-full"
+          >
+            <AudioLines className="size-5" />
+          </PromptInputButton>
+        ) : (
+          <PromptInputSubmit
+            status={isStreaming ? "streaming" : "ready"}
+            disabled={
+              !input.trim() && attachments.files.length === 0 && !isStreaming
+            }
+            size="icon-sm"
+            className={isStreaming ? "rounded-lg" : "rounded-full"}
+            onStop={() => {
+              if (!sessionId) return;
+              void chatRuntime.cancelTurn(sessionId);
+            }}
+          />
+        )}
+      </PromptInputFooter>
+    </PromptInput>
   );
 }
 
@@ -116,20 +209,29 @@ function ChatView({
   // ── Text submit ──────────────────────────────────────────────────────
   async function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
-    if (!text) return;
+    const files = message.files;
+    if (!text && (!files || files.length === 0)) return;
     setInput("");
 
     if (!sessionId) {
       if (creatingSessionRef.current) return;
       creatingSessionRef.current = true;
       try {
-        const newSess = await createChatSession(userId, text.slice(0, 60));
+        const title =
+          text.slice(0, 60) ||
+          (files && files.length > 0 ? "Media message" : "");
+        const newSess = await createChatSession(userId, title);
         setSessionId(newSess.id);
         router.replace(`/chat?s=${newSess.id}`, { scroll: false });
-        await chatRuntime.sendMessage({ sessionId: newSess.id, userId, text });
+        await chatRuntime.sendMessage({
+          sessionId: newSess.id,
+          userId,
+          text: text || "",
+          files,
+        });
         return;
       } catch {
-        setInput(text);
+        setInput(text || "");
         return;
       } finally {
         creatingSessionRef.current = false;
@@ -137,9 +239,14 @@ function ChatView({
     }
 
     try {
-      await chatRuntime.sendMessage({ sessionId, userId, text });
+      await chatRuntime.sendMessage({
+        sessionId,
+        userId,
+        text: text || "",
+        files,
+      });
     } catch {
-      setInput(text);
+      setInput(text || "");
     }
   }
 
@@ -414,7 +521,7 @@ function ChatView({
         </div>*/}
 
         <Conversation className="flex-1 min-h-0">
-          <ConversationContent className="gap-10 px-6 pt-20 pb-4 max-w-180 mx-auto w-full">
+          <ConversationContent className="gap-10 px-6 pt-20 pb-10 max-w-180 mx-auto w-full">
             {loading ? (
               <div className="flex items-center justify-center h-full">
                 <p className="text-muted-foreground/60 text-xs">loading...</p>
@@ -454,6 +561,28 @@ function ChatView({
                               )}
                             </Fragment>
                           );
+                        }
+                        case "file": {
+                          const filePart = part as {
+                            url: string;
+                            mediaType?: string;
+                            filename?: string;
+                          };
+                          if (
+                            filePart.mediaType?.startsWith("image/") &&
+                            filePart.url
+                          ) {
+                            return (
+                              <div key={key} className="mt-2">
+                                <img
+                                  src={filePart.url}
+                                  alt={filePart.filename || "Attached image"}
+                                  className="max-w-full rounded-lg max-h-96 object-contain"
+                                />
+                              </div>
+                            );
+                          }
+                          return null;
                         }
                         default:
                           if (part.type.startsWith("tool-")) {
@@ -508,41 +637,16 @@ function ChatView({
               Respond to the inline prompt above to continue.
             </div>
           ) : (
-            <PromptInput onSubmit={handleSubmit}>
-              <PromptInputBody>
-                <PromptInputTextarea
-                  value={input}
-                  onChange={(e) => setInput(e.currentTarget.value)}
-                  placeholder="Message aether..."
-                  className="min-h-11"
-                />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <PromptInputTools />
-                {!input.trim() && !isStreaming ? (
-                  <PromptInputButton
-                    onClick={() => setInputMode("voice")}
-                    tooltip="Voice mode"
-                    size="icon-sm"
-                    variant="default"
-                    className="rounded-full"
-                  >
-                    <AudioLines className="size-5" />
-                  </PromptInputButton>
-                ) : (
-                  <PromptInputSubmit
-                    status={isStreaming ? "streaming" : "ready"}
-                    disabled={!input.trim() && !isStreaming}
-                    size="icon-sm"
-                    className={isStreaming ? "rounded-lg" : "rounded-full"}
-                    onStop={() => {
-                      if (!sessionId) return;
-                      void chatRuntime.cancelTurn(sessionId);
-                    }}
-                  />
-                )}
-              </PromptInputFooter>
-            </PromptInput>
+            <PromptInputProvider initialInput={input}>
+              <ChatPromptInput
+                input={input}
+                setInput={setInput}
+                isStreaming={isStreaming}
+                sessionId={sessionId}
+                setInputMode={setInputMode}
+                onSubmit={handleSubmit}
+              />
+            </PromptInputProvider>
           )}
         </div>
       </div>
