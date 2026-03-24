@@ -13,6 +13,10 @@ import {
 } from "./tool";
 import { renderToolProjection, hasInteractiveProjection } from "./tool-projection";
 import { AskUserTool } from "./ask-user-tool";
+import { GmailTool } from "./gmail-tool";
+import { CalendarTool } from "./calendar-tool";
+import { DriveTool } from "./drive-tool";
+import { ContactsTool } from "./contacts-tool";
 
 export type ToolPartRecord = {
   type: string;
@@ -94,6 +98,51 @@ const toolRenderers: Record<string, ComponentType<ToolRendererProps>> = {
   ask_user: AskUserTool,
 };
 
+const prefixRenderers: Array<{
+  prefix: string;
+  renderer: ComponentType<ToolRendererProps>;
+}> = [
+  // Gmail
+  { prefix: "inbox_count", renderer: GmailTool },
+  { prefix: "list_unread", renderer: GmailTool },
+  { prefix: "read_gmail", renderer: GmailTool },
+  { prefix: "search_email", renderer: GmailTool },
+  { prefix: "get_thread", renderer: GmailTool },
+  { prefix: "send_email", renderer: GmailTool },
+  { prefix: "send_reply", renderer: GmailTool },
+  { prefix: "create_draft", renderer: GmailTool },
+  { prefix: "archive_email", renderer: GmailTool },
+  { prefix: "trash_email", renderer: GmailTool },
+  { prefix: "mark_read", renderer: GmailTool },
+  { prefix: "mark_unread", renderer: GmailTool },
+  { prefix: "list_labels", renderer: GmailTool },
+  { prefix: "add_label", renderer: GmailTool },
+  { prefix: "remove_label", renderer: GmailTool },
+  // Google Calendar
+  { prefix: "upcoming_events", renderer: CalendarTool },
+  { prefix: "search_events", renderer: CalendarTool },
+  { prefix: "get_event", renderer: CalendarTool },
+  { prefix: "create_event", renderer: CalendarTool },
+  { prefix: "update_event", renderer: CalendarTool },
+  { prefix: "delete_event", renderer: CalendarTool },
+  { prefix: "list_calendars", renderer: CalendarTool },
+  // Google Drive
+  { prefix: "search_drive", renderer: DriveTool },
+  { prefix: "list_drive_files", renderer: DriveTool },
+  { prefix: "get_file_info", renderer: DriveTool },
+  { prefix: "export_google_doc", renderer: DriveTool },
+  { prefix: "download_file", renderer: DriveTool },
+  { prefix: "create_folder", renderer: DriveTool },
+  { prefix: "list_shared_drives", renderer: DriveTool },
+  // Google Contacts
+  { prefix: "search_contacts", renderer: ContactsTool },
+  { prefix: "get_contact", renderer: ContactsTool },
+];
+
 export function getToolRenderer(toolName: string): ComponentType<ToolRendererProps> {
-  return toolRenderers[toolName] ?? DefaultToolRenderer;
+  if (toolRenderers[toolName]) return toolRenderers[toolName];
+  for (const entry of prefixRenderers) {
+    if (toolName === entry.prefix) return entry.renderer;
+  }
+  return DefaultToolRenderer;
 }
