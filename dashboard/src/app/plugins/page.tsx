@@ -94,11 +94,11 @@ function PluginsContent() {
         <button
           onClick={() => setTab("browse")}
           className={`
-            px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
             ${
               tab === "browse"
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                ? "bg-accent/80 text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
@@ -107,19 +107,19 @@ function PluginsContent() {
         <button
           onClick={() => setTab("installed")}
           className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
             ${
               tab === "installed"
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                ? "bg-accent/80 text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
           Installed
           <span
             className={`
-              text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
-              ${tab === "installed" ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
+              text-xs tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
+              ${tab === "installed" ? "bg-accent/80 text-foreground/70" : "bg-accent/40 text-muted-foreground/60"}
             `}
           >
             {active.length}
@@ -137,7 +137,7 @@ function PluginsContent() {
           placeholder={
             tab === "installed" ? "Search installed..." : "Search plugins..."
           }
-          className="w-full h-9 pl-9 pr-3 text-[13px] bg-white/[0.03] border border-white/[0.06] rounded-lg focus:outline-none focus:border-white/[0.12] text-foreground placeholder:text-muted-foreground/40 transition-colors"
+          className="w-full h-9 pl-9 pr-3 text-sm bg-accent/30 border border-border rounded-lg focus:outline-none focus:border-input text-foreground placeholder:text-muted-foreground/40 transition-colors"
         />
       </div>
 
@@ -173,7 +173,7 @@ function PluginsContent() {
           {tab === "installed" && !search.trim() && inactive.length > 0 && (
             <button
               onClick={() => setTab("browse")}
-              className="mt-3 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+              className="mt-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               Browse available plugins
             </button>
@@ -189,7 +189,7 @@ function PluginsContent() {
               href={`/plugins/${plugin.name}`}
               action={
                 !plugin.installed && tab === "browse" ? (
-                  <span className="shrink-0 text-[11px] font-medium text-foreground/70 bg-white/[0.08] px-3 py-1 rounded-full">
+                  <span className="shrink-0 text-sm font-medium text-foreground/70 bg-accent/80 px-3 py-1 rounded-full">
                     Get
                   </span>
                 ) : undefined

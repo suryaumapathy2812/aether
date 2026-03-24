@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 // ── questionManager unit tests ─────────────────────────────────────────
@@ -57,7 +59,7 @@ func TestQuestionManagerAskReply(t *testing.T) {
 	}
 
 	// Reply and unblock the ask() goroutine.
-	if !mgr.reply(questionID, []string{"React"}) {
+	if !mgr.reply(questionID, []string{"React"}, nil) {
 		t.Fatal("reply() returned false")
 	}
 
@@ -120,7 +122,7 @@ func TestQuestionManagerAskReject(t *testing.T) {
 
 func TestQuestionManagerReplyNonExistent(t *testing.T) {
 	mgr := newQuestionManager()
-	if mgr.reply("nonexistent-id", []string{"x"}) {
+	if mgr.reply("nonexistent-id", []string{"x"}, nil) {
 		t.Fatal("reply() should return false for nonexistent question")
 	}
 	if mgr.reject("nonexistent-id") {
@@ -193,23 +195,28 @@ func TestQuestionAskerBridgeAskAndReply(t *testing.T) {
 
 	bridge := NewQuestionAskerBridge(mgr, notify)
 
-	var answers []string
+	var reply tools.QuestionResponse
 	var askErr error
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
-		answers, askErr = bridge.AskQuestion(
+		reply, askErr = bridge.AskQuestion(
 			context.Background(),
+			"user-bridge",
 			"sess-bridge",
-			"Pick a color",
-			"Color",
-			[]map[string]any{
-				{"label": "Red", "description": "Warm"},
-				{"label": "Blue"},
+			tools.QuestionPrompt{
+				ToolCallID: "call-bridge",
+				Question:   "Pick a color",
+				Header:     "Color",
+				Kind:       "choice",
+				Options: []tools.QuestionOption{
+					{Label: "Red", Description: "Warm"},
+					{Label: "Blue"},
+				},
+				AllowCustom: true,
 			},
-			true,
 		)
 	}()
 
@@ -239,10 +246,13 @@ func TestQuestionAskerBridgeAskAndReply(t *testing.T) {
 	if notifiedPayload["header"] != "Color" {
 		t.Fatalf("unexpected header in payload: %v", notifiedPayload["header"])
 	}
+	if notifiedPayload["tool_call_id"] != "call-bridge" {
+		t.Fatalf("unexpected tool call id in payload: %v", notifiedPayload["tool_call_id"])
+	}
 	mu.Unlock()
 
 	// Reply.
-	if !mgr.reply(questionID, []string{"Blue"}) {
+	if !mgr.reply(questionID, []string{"Blue"}, nil) {
 		t.Fatal("reply() returned false")
 	}
 
@@ -251,8 +261,8 @@ func TestQuestionAskerBridgeAskAndReply(t *testing.T) {
 	if askErr != nil {
 		t.Fatalf("unexpected error: %v", askErr)
 	}
-	if len(answers) != 1 || answers[0] != "Blue" {
-		t.Fatalf("unexpected answers: %v", answers)
+	if len(reply.Answers) != 1 || reply.Answers[0] != "Blue" {
+		t.Fatalf("unexpected answers: %v", reply.Answers)
 	}
 }
 
@@ -262,14 +272,19 @@ func TestQuestionAskerBridgeContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var answers []string
+	var reply tools.QuestionResponse
 	var askErr error
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
-		answers, askErr = bridge.AskQuestion(ctx, "sess-cancel", "Will this cancel?", "Test", nil, true)
+		reply, askErr = bridge.AskQuestion(ctx, "user-cancel", "sess-cancel", tools.QuestionPrompt{
+			Question:    "Will this cancel?",
+			Header:      "Test",
+			Kind:        "choice",
+			AllowCustom: true,
+		})
 	}()
 
 	// Wait for the question to appear.
@@ -290,8 +305,8 @@ func TestQuestionAskerBridgeContextCancellation(t *testing.T) {
 	if askErr == nil {
 		t.Fatal("expected error from context cancellation")
 	}
-	if answers != nil {
-		t.Fatalf("expected nil answers, got: %v", answers)
+	if reply.Answers != nil || reply.Data != nil {
+		t.Fatalf("expected empty reply, got: %#v", reply)
 	}
 }
 
@@ -351,6 +366,101 @@ func TestHandleQuestionReplyEndpoint(t *testing.T) {
 	}
 	if len(answer.Answers) != 1 || answer.Answers[0] != "PostgreSQL" {
 		t.Fatalf("unexpected answers: %v", answer.Answers)
+	}
+}
+
+func TestHandleQuestionReplyEndpointFormValidation(t *testing.T) {
+	h := newTestHandler()
+
+	var answer questionAnswer
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		answer = h.questions.ask(&questionRequest{
+			SessionID: "sess-form",
+			Question:  "Enter email",
+			Kind:      "form",
+			Fields: []questionField{
+				{Name: "email", Label: "Email", Type: "email", Required: true},
+			},
+		})
+	}()
+
+	var questionID string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pending := h.questions.listForSession("sess-form")
+		if len(pending) == 1 {
+			questionID = pending[0].ID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if questionID == "" {
+		t.Fatal("question did not appear")
+	}
+
+	body := `{"data": {"email": "not-an-email"}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/questions/"+questionID+"/reply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleQuestions(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	h.questions.reject(questionID)
+	wg.Wait()
+	if !answer.Rejected {
+		t.Fatal("expected rejected answer after cleanup")
+	}
+}
+
+func TestHandleQuestionReplyEndpointRejectsInvalidChoice(t *testing.T) {
+	h := newTestHandler()
+
+	var answer questionAnswer
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		answer = h.questions.ask(&questionRequest{
+			SessionID:   "sess-choice",
+			Question:    "Pick one",
+			Kind:        "choice",
+			Options:     []questionOption{{Label: "A"}, {Label: "B"}},
+			AllowCustom: false,
+		})
+	}()
+
+	var questionID string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pending := h.questions.listForSession("sess-choice")
+		if len(pending) == 1 {
+			questionID = pending[0].ID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if questionID == "" {
+		t.Fatal("question did not appear")
+	}
+
+	body := `{"answers": ["Z"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/questions/"+questionID+"/reply", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleQuestions(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	h.questions.reject(questionID)
+	wg.Wait()
+	if !answer.Rejected {
+		t.Fatal("expected rejected answer after cleanup")
 	}
 }
 

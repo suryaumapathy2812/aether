@@ -334,6 +334,10 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				if len(toolText) > 12000 {
 					toolText = toolText[:12000] + "\n...truncated"
 				}
+				metadata := tr.result.Metadata
+				if metadata == nil {
+					metadata = map[string]any{}
+				}
 				if tr.result.Error {
 					classification := classifyToolError(toolText)
 					if classification == toolErrorDenied || classification == toolErrorAuth || classification == toolErrorConfig || classification == toolErrorFatal {
@@ -343,10 +347,10 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 						iterationRecoverableToolError = true
 					}
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "errorText": toolText, "class": string(classification)})
+					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "errorText": toolText, "class": string(classification), "metadata": metadata, "error": true})
 				} else {
 					seq++
-					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "output": toolText})
+					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "output": toolText, "metadata": metadata, "error": false})
 				}
 
 				env.Messages = append(env.Messages, map[string]any{

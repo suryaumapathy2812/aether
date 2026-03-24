@@ -74,6 +74,7 @@ func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Re
 		heading = fmt.Sprintf("Places for '%s' near %s:", q, location)
 	}
 	lines := []string{heading}
+	structured := make([]map[string]any, 0, len(places))
 	for i, p := range places {
 		rating := ""
 		if p.UserRatingCount > 0 {
@@ -84,8 +85,22 @@ func (t *LocalSearchTool) Execute(ctx context.Context, call tools.Call) tools.Re
 			meta = "\n" + meta
 		}
 		lines = append(lines, fmt.Sprintf("%d. %s\n%s%s\n%s", i+1, p.Name, p.Address, meta, p.MapsURL))
+		structured = append(structured, map[string]any{
+			"name":              p.Name,
+			"address":           p.Address,
+			"rating":            p.Rating,
+			"user_rating_count": p.UserRatingCount,
+			"maps_url":          p.MapsURL,
+			"phone":             p.Phone,
+		})
 	}
-	return tools.Success(strings.Join(lines, "\n\n"), map[string]any{"query": q, "location": location, "count": len(places), "provider": "google_places"})
+	return tools.Success(strings.Join(lines, "\n\n"), map[string]any{
+		"query":    q,
+		"location": location,
+		"count":    len(places),
+		"provider": "google_places",
+		"places":   structured,
+	})
 }
 
 type googlePlace struct {

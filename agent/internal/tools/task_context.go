@@ -3,7 +3,8 @@ package tools
 import "context"
 
 type TaskRuntimeContext struct {
-	UserID string
+	UserID    string
+	SessionID string
 }
 
 type taskRuntimeContextKey struct{}

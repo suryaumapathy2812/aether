@@ -16,9 +16,16 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
 import { QuestionDock } from "@/components/ai-elements/question-dock";
-import { getToolRenderer, type ToolPartRecord } from "@/components/ai-elements/tool-renderer";
+import {
+  getToolRenderer,
+  type ToolPartRecord,
+} from "@/components/ai-elements/tool-renderer";
 import {
   PromptInput,
   PromptInputTextarea,
@@ -52,7 +59,13 @@ function ChatPageInner() {
 
   if (isPending || !session) return null;
 
-  return <ChatView key={sessionId || "new"} session={session} sessionId={sessionId} />;
+  return (
+    <ChatView
+      key={sessionId || "new"}
+      session={session}
+      sessionId={sessionId}
+    />
+  );
 }
 
 function ChatView({
@@ -76,7 +89,8 @@ function ChatView({
   const voiceChunkQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const userId = session.user.id;
-  const { messages, status, error, loading, questionRequest } = useChatSessionRuntime(sessionId);
+  const { messages, status, error, loading, questionRequest } =
+    useChatSessionRuntime(sessionId);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -132,7 +146,8 @@ function ChatView({
   // ── Voice helpers ────────────────────────────────────────────────────
   async function ensureSessionForVoice(): Promise<string> {
     if (sessionId) return sessionId;
-    if (creatingSessionRef.current) throw new Error("Session is already being created");
+    if (creatingSessionRef.current)
+      throw new Error("Session is already being created");
     creatingSessionRef.current = true;
     try {
       const newSess = await createChatSession(userId, "Voice chat");
@@ -160,7 +175,10 @@ function ChatView({
   async function startVoiceRecording(): Promise<void> {
     if (isStreaming || isRecordingVoice) return;
     const activeSessionId = await ensureSessionForVoice();
-    const turn = await chatRuntime.startVoiceTurn({ sessionId: activeSessionId, userId });
+    const turn = await chatRuntime.startVoiceTurn({
+      sessionId: activeSessionId,
+      userId,
+    });
     voiceTurnIdRef.current = turn.turnId;
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -192,7 +210,9 @@ function ChatView({
       voiceTurnIdRef.current = null;
       if (!turnId || !targetSessionId) return;
       void voiceChunkQueueRef.current
-        .then(() => chatRuntime.commitVoiceTurn({ sessionId: targetSessionId, turnId }))
+        .then(() =>
+          chatRuntime.commitVoiceTurn({ sessionId: targetSessionId, turnId }),
+        )
         .catch(async () => {
           await chatRuntime.cancelTurn(targetSessionId);
         });
@@ -201,7 +221,8 @@ function ChatView({
     recorder.start(250);
     setIsRecordingVoice(true);
     setRecordingSeconds(0);
-    if (recordingTimerRef.current !== null) window.clearInterval(recordingTimerRef.current);
+    if (recordingTimerRef.current !== null)
+      window.clearInterval(recordingTimerRef.current);
     recordingTimerRef.current = window.setInterval(() => {
       setRecordingSeconds((prev) => prev + 1);
     }, 1000);
@@ -237,7 +258,8 @@ function ChatView({
             if (!String(part.type).startsWith("tool-")) return false;
             const candidate = part as Record<string, unknown>;
             return (
-              String(candidate.toolCallId || "") === questionRequest.toolCallId &&
+              String(candidate.toolCallId || "") ===
+                questionRequest.toolCallId &&
               String(candidate.state || "") === "input-available"
             );
           }),
@@ -254,9 +276,14 @@ function ChatView({
     await rejectQuestion(questionRequest.id);
   }
 
-  const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
-  const latestAssistantMessage = [...messages].reverse().find((m) => m.role === "assistant");
-  const latestUserText = latestUserMessage?.parts.find((p) => p.type === "text")?.text || "";
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((m) => m.role === "user");
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((m) => m.role === "assistant");
+  const latestUserText =
+    latestUserMessage?.parts.find((p) => p.type === "text")?.text || "";
   const latestAssistantText =
     latestAssistantMessage?.parts.find((p) => p.type === "text")?.text || "";
 
@@ -294,7 +321,9 @@ function ChatView({
                 <div
                   className={[
                     "h-20 w-20 rounded-full transition-all duration-700",
-                    voiceState === "thinking" ? "bg-white/30 animate-pulse" : "bg-white/75",
+                    voiceState === "thinking"
+                      ? "bg-white/30 animate-pulse"
+                      : "bg-white/75",
                   ].join(" ")}
                 />
               )}
@@ -392,20 +421,27 @@ function ChatView({
               </div>
             ) : messages.length === 0 ? (
               <ConversationEmptyState
-                icon={<IconSparkles className="size-6 text-muted-foreground/30" />}
+                icon={
+                  <IconSparkles className="size-6 text-muted-foreground/30" />
+                }
                 title="What can I help you with?"
                 description=""
               />
             ) : (
               messages.map((message) => (
-                <Message from={message.role} key={message.id} className="max-w-full">
+                <Message
+                  from={message.role}
+                  key={message.id}
+                  className="max-w-full"
+                >
                   <MessageContent>
                     {message.parts.map((part, i) => {
                       const key = `${message.id}-${i}`;
                       switch (part.type) {
                         case "text": {
                           const isVoiceMsg =
-                            message.role === "user" && part.text === "[voice instruction]";
+                            message.role === "user" &&
+                            part.text === "[voice instruction]";
                           return (
                             <Fragment key={key}>
                               {isVoiceMsg ? (
@@ -498,6 +534,7 @@ function ChatView({
                     status={isStreaming ? "streaming" : "ready"}
                     disabled={!input.trim() && !isStreaming}
                     size="icon-sm"
+                    className={isStreaming ? "rounded-lg" : "rounded-full"}
                     onStop={() => {
                       if (!sessionId) return;
                       void chatRuntime.cancelTurn(sessionId);

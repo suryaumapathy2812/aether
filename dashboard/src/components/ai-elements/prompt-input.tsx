@@ -42,11 +42,11 @@ import {
 import { cn } from "@/lib/utils";
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
-  IconCornerDownLeft,
+  IconArrowUp,
   IconPhoto,
   IconDeviceDesktop,
   IconPlus,
-  IconSquare,
+  IconPlayerPause,
   IconX,
 } from "@tabler/icons-react";
 import { nanoid } from "nanoid";
@@ -1225,14 +1225,14 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
 
-  let Icon = <IconCornerDownLeft className="size-4" />;
+  let Icon = <IconArrowUp className="size-5" />;
 
   if (status === "submitted") {
     Icon = <Spinner />;
   } else if (status === "streaming") {
-    Icon = <IconSquare className="size-4" />;
+    Icon = <IconPlayerPause className="size-5" />;
   } else if (status === "error") {
-    Icon = <IconX className="size-4" />;
+    Icon = <IconX className="size-5" />;
   }
 
   const handleClick = useCallback(

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "@/lib/auth-client";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   isPushSupported,
   getPermissionState,
@@ -10,9 +11,10 @@ import {
   unsubscribeFromPush,
   isSubscribedToPush,
 } from "@/lib/push";
+import { toast } from "sonner";
 
 /**
- * Push notification opt-in toggle for the account/settings page.
+ * Push notification opt-in for the account/settings page.
  *
  * Shows the current push state and allows the user to enable/disable.
  * Hidden entirely if the browser doesn't support push.
@@ -37,17 +39,23 @@ export default function PushOptIn() {
 
   if (!supported) return null;
 
-  async function handleToggle(checked: boolean) {
+  async function handleToggle() {
     if (!userId) return;
     setLoading(true);
     try {
-      if (checked) {
+      if (subscribed) {
+        await unsubscribeFromPush(userId);
+        setSubscribed(false);
+        toast.success("Notifications disabled");
+      } else {
         const ok = await subscribeToPush(userId);
         setSubscribed(ok);
         setPermissionState(getPermissionState());
-      } else {
-        await unsubscribeFromPush(userId);
-        setSubscribed(false);
+        if (ok) {
+          toast.success("Notifications enabled");
+        } else {
+          toast.error("Could not enable notifications");
+        }
       }
     } finally {
       setLoading(false);
@@ -58,19 +66,26 @@ export default function PushOptIn() {
 
   return (
     <div className="flex items-center justify-between gap-4">
-      <p className="text-[12px] text-muted-foreground">
-        {denied
-          ? "Blocked by browser \u2014 enable in site settings"
-          : subscribed
-          ? "Enabled \u2014 you\u2019ll receive notifications when the app is closed"
-          : "Disabled"}
-      </p>
-      <Switch
-        checked={subscribed}
-        onCheckedChange={handleToggle}
-        disabled={loading || denied}
+      <div className="flex items-center gap-3">
+        <Badge variant={subscribed ? "default" : "secondary"}>
+          {denied ? "Blocked" : subscribed ? "Enabled" : "Disabled"}
+        </Badge>
+        <p className="text-sm text-muted-foreground">
+          {denied
+            ? "Enable in browser site settings"
+            : subscribed
+            ? "You'll receive notifications when the app is closed"
+            : "Push notifications are off"}
+        </p>
+      </div>
+      <Button
+        variant="outline"
         size="sm"
-      />
+        onClick={handleToggle}
+        disabled={loading || denied}
+      >
+        {loading ? "..." : subscribed ? "Disable" : "Enable"}
+      </Button>
     </div>
   );
 }

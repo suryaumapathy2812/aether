@@ -12,14 +12,15 @@ import (
 // mockQuestionAsker implements tools.QuestionAsker for testing.
 type mockQuestionAsker struct {
 	answers  []string
+	data     map[string]any
 	rejected bool
 }
 
-func (m *mockQuestionAsker) AskQuestion(ctx context.Context, sessionID string, question string, header string, options []map[string]any, allowCustom bool) ([]string, error) {
+func (m *mockQuestionAsker) AskQuestion(ctx context.Context, userID string, sessionID string, prompt tools.QuestionPrompt) (tools.QuestionResponse, error) {
 	if m.rejected {
-		return nil, fmt.Errorf("question rejected")
+		return tools.QuestionResponse{}, fmt.Errorf("question rejected")
 	}
-	return m.answers, nil
+	return tools.QuestionResponse{Answers: m.answers, Data: m.data}, nil
 }
 
 func TestQuestionToolDefinition(t *testing.T) {
@@ -159,6 +160,58 @@ func TestQuestionToolWithOptions(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "Option A") {
 		t.Fatalf("expected 'Option A' in output, got: %s", result.Output)
+	}
+}
+
+func TestQuestionToolExecuteFormSuccess(t *testing.T) {
+	tool := &QuestionTool{}
+	asker := &mockQuestionAsker{data: map[string]any{"email": "surya@example.com", "name": "Surya"}}
+
+	result := tool.Execute(context.Background(), tools.Call{
+		ID: "call-form",
+		Args: map[string]any{
+			"question":     "Fill this out",
+			"kind":         "form",
+			"submit_label": "Save",
+			"fields": []any{
+				map[string]any{"name": "email", "label": "Email", "type": "email", "required": true},
+				map[string]any{"name": "name", "label": "Name", "type": "text"},
+			},
+		},
+		Ctx: tools.ExecContext{QuestionAsker: asker},
+	})
+
+	if result.Error {
+		t.Fatalf("expected success, got error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "surya@example.com") {
+		t.Fatalf("expected form data json in output, got: %s", result.Output)
+	}
+	if kind, _ := result.Metadata["kind"].(string); kind != "form" {
+		t.Fatalf("expected kind=form metadata, got: %#v", result.Metadata)
+	}
+	if _, ok := result.Metadata["data"].(map[string]any); !ok {
+		t.Fatalf("expected form data metadata, got: %#v", result.Metadata)
+	}
+}
+
+func TestQuestionToolExecuteFormRequiresFields(t *testing.T) {
+	tool := &QuestionTool{}
+	asker := &mockQuestionAsker{}
+
+	result := tool.Execute(context.Background(), tools.Call{
+		Args: map[string]any{
+			"question": "Fill this out",
+			"kind":     "form",
+		},
+		Ctx: tools.ExecContext{QuestionAsker: asker},
+	})
+
+	if !result.Error {
+		t.Fatal("expected error for form prompt without fields")
+	}
+	if !strings.Contains(result.Output, "at least one field") {
+		t.Fatalf("unexpected error: %s", result.Output)
 	}
 }
 

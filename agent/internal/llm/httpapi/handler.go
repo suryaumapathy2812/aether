@@ -170,7 +170,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Inject user ID into context so tools (e.g. delegate_task) can use the
 	// real authenticated user instead of relying on LLM-generated arguments.
-	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID, SessionID: sessionID})
 	r = r.WithContext(rCtx)
 
 	if req.Stream {
@@ -396,7 +396,7 @@ func (h *Handler) handleResponses(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	model := firstNonEmpty(policyString(policy, "model"), h.model)
 
-	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID, SessionID: sessionID})
 	r = r.WithContext(rCtx)
 
 	if req.Stream {
@@ -581,7 +581,7 @@ func (h *Handler) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	model := firstNonEmpty(policyString(policy, "model"), h.model)
 
-	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID, SessionID: "completions"})
 	r = r.WithContext(rCtx)
 
 	if req.Stream {

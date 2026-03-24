@@ -63,7 +63,7 @@ const statusLabels: Record<ToolPart["state"], string> = {
 };
 
 export const getStatusBadge = (status: ToolPart["state"]) => (
-  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+  <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
     {statusIcons[status]}
     {statusLabels[status]}
   </span>
@@ -82,7 +82,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex w-full items-center gap-2 py-1.5 text-[13px] text-muted-foreground hover:text-foreground/80 transition-colors",
+        "flex w-full items-center gap-2 py-1.5 text-sm text-muted-foreground hover:text-foreground/80 transition-colors",
         className
       )}
     >
@@ -115,7 +115,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
   }
   return (
     <div className={cn("overflow-hidden", className)} {...props}>
-      <div className="rounded bg-white/[0.03] border border-white/[0.06]">
+      <div className="rounded bg-accent/30 border border-border">
         <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
       </div>
     </div>
@@ -155,10 +155,10 @@ export const ToolOutput = ({
           "rounded border text-xs",
           errorText
             ? "bg-red-500/[0.05] border-red-500/10 text-red-300/80"
-            : "bg-white/[0.03] border-white/[0.06]"
+            : "bg-accent/30 border-border"
         )}
       >
-        {errorText && <div className="px-3 py-2 text-[11px]">{errorText}</div>}
+        {errorText && <div className="px-3 py-2 text-sm">{errorText}</div>}
         {!errorText && Output}
       </div>
     </div>

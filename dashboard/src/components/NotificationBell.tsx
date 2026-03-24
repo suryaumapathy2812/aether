@@ -39,7 +39,7 @@ export default function NotificationBell() {
       >
         <IconBell className="size-[18px]" strokeWidth={1.5} />
         {badgeCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-red-500 text-white text-[9px] font-medium flex items-center justify-center px-1">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-red-500 text-white text-xs font-medium flex items-center justify-center px-1">
             {badgeCount > 99 ? "99+" : badgeCount}
           </span>
         )}
@@ -60,21 +60,21 @@ export default function NotificationBell() {
         <div className="h-[calc(100%-24px)] m-3 ml-0 flex flex-col rounded-2xl border border-border/70 bg-background/95 backdrop-blur-xl shadow-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-border/40">
             <div className="flex items-center justify-between">
-              <p className="text-[11px] tracking-[0.14em] uppercase text-muted-foreground">
+              <p className="text-sm tracking-[0.14em] uppercase text-muted-foreground">
                 Notifications
               </p>
               <div className="flex items-center gap-3">
                 {unreadCount > 0 && (
                   <button
                     onClick={markAllRead}
-                    className="text-[10px] tracking-wider text-secondary-foreground hover:text-foreground transition-colors"
+                    className="text-xs tracking-wider text-secondary-foreground hover:text-foreground transition-colors"
                   >
                     mark all read
                   </button>
                 )}
                 <button
                   onClick={clearAll}
-                  className="text-[10px] tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                  className="text-xs tracking-wider text-muted-foreground hover:text-foreground transition-colors"
                 >
                   clear
                 </button>
@@ -84,7 +84,7 @@ export default function NotificationBell() {
 
           {(waitingCount > 0 || loadingApprovals) && (
             <div className="px-4 py-3 border-b border-amber-500/30 bg-amber-500/10">
-              <p className="text-[11px] text-amber-100">
+              <p className="text-sm text-amber-100">
                 {loadingApprovals
                   ? "Checking if any agents need your input..."
                   : `${waitingCount} agent${waitingCount === 1 ? "" : "s"} waiting for your input`}
@@ -92,7 +92,7 @@ export default function NotificationBell() {
               <Link
                 href="/agent"
                 onClick={() => setOpen(false)}
-                className="inline-block mt-2 text-[10px] tracking-[0.1em] uppercase text-amber-100 hover:text-white"
+                className="inline-block mt-2 text-xs tracking-[0.1em] uppercase text-amber-100 hover:text-white"
               >
                 review agents
               </Link>
@@ -111,8 +111,8 @@ export default function NotificationBell() {
                 <button
                   key={notif.id}
                   onClick={() => markRead(notif.id)}
-                  className={`w-full text-left px-4 py-3 border-b border-border/20 hover:bg-white/[0.03] transition-colors ${
-                    !notif.read ? "bg-white/[0.02]" : ""
+                  className={`w-full text-left px-4 py-3 border-b border-border/20 hover:bg-accent/30 transition-colors ${
+                    !notif.read ? "bg-accent/20" : ""
                   }`}
                 >
                   <div className="flex items-start gap-2">
@@ -120,15 +120,15 @@ export default function NotificationBell() {
                       <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-[12px] text-foreground truncate">
+                      <p className="text-sm text-foreground truncate">
                         {notif.title}
                       </p>
                       {notif.body && (
-                        <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+                        <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
                           {notif.body}
                         </p>
                       )}
-                      <p className="text-[10px] text-muted-foreground/70 mt-1">
+                      <p className="text-xs text-muted-foreground/70 mt-1">
                         {formatTimeAgo(notif.timestamp)}
                       </p>
                     </div>
@@ -142,7 +142,7 @@ export default function NotificationBell() {
             <Link
               href="/notifications"
               onClick={() => setOpen(false)}
-              className="text-[10px] tracking-[0.1em] uppercase text-secondary-foreground hover:text-foreground transition-colors"
+              className="text-xs tracking-[0.1em] uppercase text-secondary-foreground hover:text-foreground transition-colors"
             >
               open notifications page
             </Link>

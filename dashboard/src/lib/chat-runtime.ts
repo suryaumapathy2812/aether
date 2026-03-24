@@ -4,12 +4,22 @@ import {
   ensureDirectAgentConnection,
   directAgentWs,
   getChatSession,
+  getPendingQuestions,
   getChatSessionStatuses,
   getSessionToken,
   orchestratorWs,
 } from "@/lib/api";
 
 export type SessionStatus = "idle" | "streaming" | "error";
+
+export type QuestionField = {
+  name: string;
+  label: string;
+  type: string;
+  required?: boolean;
+  placeholder?: string;
+  options?: string[];
+};
 
 export type SessionState = {
   messages: UIMessage[];
@@ -22,10 +32,14 @@ export type SessionState = {
   questionRequest: {
     id: string;
     sessionId: string;
+    toolCallId: string;
     question: string;
     header: string;
+    kind: "choice" | "confirm" | "form";
     options: Array<{ label: string; description?: string }>;
     allowCustom: boolean;
+    fields: QuestionField[];
+    submitLabel: string;
   } | null;
 };
 
@@ -140,6 +154,7 @@ type SessionAction =
       messageID: string;
       toolCallID: string;
       output?: unknown;
+      metadata?: unknown;
       errorText?: string;
       failed: boolean;
     }
@@ -185,10 +200,114 @@ function textFromStoredMessageContent(content: unknown): string {
     .join("");
 }
 
+function normalizeQuestionRequestPayload(
+  payload: Record<string, unknown>,
+  sessionID: string,
+): NonNullable<SessionState["questionRequest"]> {
+  const input = isRecord(payload.input) ? (payload.input as Record<string, unknown>) : payload;
+  const rawKind = typeof input.kind === "string" ? input.kind.trim().toLowerCase() : "";
+  const kind = rawKind === "confirm" || rawKind === "form" ? rawKind : "choice";
+  const toolCallID =
+    typeof input.tool_call_id === "string"
+      ? input.tool_call_id
+      : typeof payload.toolCallId === "string"
+        ? payload.toolCallId
+        : typeof payload.tool_call_id === "string"
+          ? payload.tool_call_id
+          : "";
+
+  return {
+    id:
+      typeof input.question_id === "string"
+        ? input.question_id
+        : typeof input.id === "string"
+          ? input.id
+          : toolCallID,
+    sessionId: sessionID,
+    toolCallId: toolCallID,
+    question: typeof input.question === "string" ? input.question : "",
+    header: typeof input.header === "string" ? input.header : "Question",
+    kind,
+    options: Array.isArray(input.options)
+      ? (input.options as unknown[]).filter(isRecord).map((o) => ({
+          label: String(o.label || ""),
+          description: typeof o.description === "string" ? o.description : undefined,
+        }))
+      : [],
+    allowCustom: input.allow_custom !== false,
+    fields: Array.isArray(input.fields)
+      ? (input.fields as unknown[])
+          .filter(isRecord)
+          .map((field) => ({
+            name: typeof field.name === "string" ? field.name : "",
+            label:
+              typeof field.label === "string"
+                ? field.label
+                : typeof field.name === "string"
+                  ? field.name
+                  : "Field",
+            type: typeof field.type === "string" ? field.type : "text",
+            required: field.required === true,
+            placeholder: typeof field.placeholder === "string" ? field.placeholder : undefined,
+            options: Array.isArray(field.options)
+              ? field.options.filter((value): value is string => typeof value === "string")
+              : undefined,
+          }))
+          .filter((field) => field.name.trim().length > 0)
+      : [],
+    submitLabel: typeof input.submit_label === "string" ? input.submit_label : "Submit",
+  };
+}
+
+function parseStoredToolCalls(content: unknown): Array<{
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}> {
+  if (!isRecord(content) || !Array.isArray(content.tool_calls)) {
+    return [];
+  }
+
+  const calls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
+  for (const entry of content.tool_calls) {
+    if (!isRecord(entry)) continue;
+    const toolCallId = typeof entry.id === "string" ? entry.id : "";
+    const fn = isRecord(entry.function) ? entry.function : null;
+    const toolName = fn && typeof fn.name === "string" ? fn.name : "tool";
+    let input: unknown = undefined;
+    if (fn && typeof fn.arguments === "string") {
+      try {
+        input = JSON.parse(fn.arguments);
+      } catch {
+        input = fn.arguments;
+      }
+    }
+    calls.push({ toolCallId, toolName, input });
+  }
+  return calls;
+}
+
+function ensureHistoryAssistantMessage(
+  restored: UIMessage[],
+  current: UIMessage | null,
+  rowID: number,
+): UIMessage {
+  if (current) return current;
+  const created: UIMessage = {
+    id: `msg-${rowID}-assistant`,
+    role: "assistant",
+    parts: [],
+  };
+  restored.push(created);
+  return created;
+}
+
 function buildHistoryMessages(
   rows: Array<{ id: number; role?: string; content: unknown }>,
 ): UIMessage[] {
   const restored: UIMessage[] = [];
+  let currentAssistant: UIMessage | null = null;
+
   for (const row of rows) {
     const role =
       typeof row.role === "string"
@@ -196,14 +315,82 @@ function buildHistoryMessages(
         : isRecord(row.content) && typeof row.content.role === "string"
           ? row.content.role
           : "";
+    const storedContent = isRecord(row.content) ? row.content : null;
+
+    if (role === "user") {
+      currentAssistant = null;
+    }
+
     const text = textFromStoredMessageContent(row.content);
-    if (!text.trim()) continue;
-    if (role === "user" || role === "assistant") {
+    if (role === "user") {
+      if (!text.trim()) continue;
       restored.push({
-        id: `msg-${row.id}-${role}`,
-        role,
+        id: `msg-${row.id}-user`,
+        role: "user",
         parts: [{ type: "text", text }],
       });
+      continue;
+    }
+
+    if (role === "assistant") {
+      const toolCalls = parseStoredToolCalls(row.content);
+      if (toolCalls.length === 0 && !text.trim()) {
+        continue;
+      }
+      if (toolCalls.length > 0) {
+        currentAssistant = ensureHistoryAssistantMessage(restored, currentAssistant, row.id);
+        for (const call of toolCalls) {
+          currentAssistant.parts.push({
+            type: `tool-${call.toolName}`,
+            state: "input-available",
+            toolCallId: call.toolCallId,
+            input: call.input,
+          } as UIMessage["parts"][number]);
+        }
+      }
+
+      if (text.trim()) {
+        currentAssistant = ensureHistoryAssistantMessage(restored, currentAssistant, row.id);
+        currentAssistant.parts.push({ type: "text", text } as UIMessage["parts"][number]);
+      }
+      continue;
+    }
+
+    if (role === "tool" && storedContent) {
+      const toolCallId = typeof storedContent.tool_call_id === "string" ? storedContent.tool_call_id : "";
+      const rawMetadata = isRecord(storedContent.metadata) ? storedContent.metadata : undefined;
+      const contentText = typeof storedContent.content === "string" ? storedContent.content : text;
+      if (!toolCallId && !contentText.trim()) {
+        continue;
+      }
+      const failed = contentText.startsWith("[tool_error] ");
+      const output = failed ? undefined : contentText;
+      const errorText = failed ? contentText.replace(/^\[tool_error\]\s*/, "") : undefined;
+
+      currentAssistant = ensureHistoryAssistantMessage(restored, currentAssistant, row.id);
+      const partIndex = currentAssistant.parts.findIndex((part) => {
+        if (!String(part.type).startsWith("tool-")) return false;
+        return String((part as Record<string, unknown>).toolCallId || "") === toolCallId;
+      });
+
+      if (partIndex >= 0) {
+        const candidate = currentAssistant.parts[partIndex] as Record<string, unknown>;
+        currentAssistant.parts[partIndex] = {
+          ...candidate,
+          state: failed ? "output-error" : "output-available",
+          ...(failed ? { errorText } : { output }),
+          ...(rawMetadata ? { metadata: rawMetadata } : {}),
+        } as UIMessage["parts"][number];
+      } else {
+        currentAssistant.parts.push({
+          type: "tool-unknown",
+          state: failed ? "output-error" : "output-available",
+          toolCallId,
+          input: {},
+          ...(failed ? { errorText } : { output }),
+          ...(rawMetadata ? { metadata: rawMetadata } : {}),
+        } as unknown as UIMessage["parts"][number]);
+      }
     }
   }
   return restored;
@@ -321,25 +508,11 @@ function normalizeGlobalEvent(
     return { kind: "part-removed", sessionID, messageID, partID, version };
   }
   if (normalizedType === "question.asked") {
-    const input = isRecord(payload.input) ? (payload.input as Record<string, unknown>) : payload;
-    const toolCallID = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
     return {
       kind: "question-asked",
       sessionID,
       version,
-      request: {
-        id: typeof input.question_id === "string" ? input.question_id : toolCallID,
-        sessionId: sessionID,
-        question: typeof input.question === "string" ? input.question : "",
-        header: typeof input.header === "string" ? input.header : "Question",
-        options: Array.isArray(input.options)
-          ? (input.options as unknown[]).filter(isRecord).map((o) => ({
-              label: String(o.label || ""),
-              description: typeof o.description === "string" ? o.description : undefined,
-            }))
-          : [],
-        allowCustom: input.allow_custom !== false,
-      },
+      request: normalizeQuestionRequestPayload(payload, sessionID),
     };
   }
   if (normalizedType === "question.replied" || normalizedType === "question.rejected") {
@@ -455,6 +628,9 @@ function nextState(current: SessionState, action: SessionAction): SessionState {
             nextPart.errorText = action.errorText || "Tool failed";
           } else {
             nextPart.output = action.output;
+          }
+          if (action.metadata !== undefined) {
+            nextPart.metadata = action.metadata;
           }
           return nextPart as UIMessage["parts"][number];
         });
@@ -660,6 +836,20 @@ class ChatRuntimeStore {
         type: "history-loaded",
         messages: buildHistoryMessages(res.messages || []),
       });
+      try {
+        const pending = await getPendingQuestions(sessionId);
+        const first = pending.questions?.[0];
+        if (first && isRecord(first)) {
+          this.dispatch(sessionId, {
+            type: "question-asked",
+            request: normalizeQuestionRequestPayload(first, sessionId),
+          });
+        } else {
+          this.dispatch(sessionId, { type: "question-answered" });
+        }
+      } catch {
+        // Ignore pending question load failures; history is still usable.
+      }
     } catch {
       this.dispatch(sessionId, { type: "history-error", error: "Failed to load chat history" });
     }
@@ -1185,6 +1375,7 @@ class ChatRuntimeStore {
           messageID: inflight.assistantMessageId,
           toolCallID,
           output: envelope.payload?.output,
+          metadata: envelope.payload?.metadata,
           failed: false,
         });
         return;
@@ -1201,6 +1392,7 @@ class ChatRuntimeStore {
           type: "assistant-tool-output",
           messageID: inflight.assistantMessageId,
           toolCallID,
+          metadata: envelope.payload?.metadata,
           failed: true,
           errorText,
         });

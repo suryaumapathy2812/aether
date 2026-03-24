@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
 import {
   CommandDialog,
   CommandEmpty,
@@ -20,6 +21,8 @@ import {
   IconPlus,
   IconMessage,
   IconKeyboard,
+  IconSun,
+  IconMoon,
 } from "@tabler/icons-react";
 
 interface CommandPaletteProps {
@@ -38,6 +41,7 @@ export default function CommandPalette({
   onOpenShortcutsHelp,
 }: CommandPaletteProps) {
   const router = useRouter();
+  const { theme, setTheme } = useTheme();
 
   const runAction = useCallback(
     (action: () => void) => {
@@ -60,21 +64,31 @@ export default function CommandPalette({
           >
             <IconPlus className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             New Chat
-            <span className="ml-auto text-[11px] text-muted-foreground/60">⌘N</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">⌘N</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onToggleSessions?.())}
           >
             <IconMessage className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Sessions
-            <span className="ml-auto text-[11px] text-muted-foreground/60">⌘B</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">⌘B</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onOpenShortcutsHelp?.())}
           >
             <IconKeyboard className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Keyboard Shortcuts
-            <span className="ml-auto text-[11px] text-muted-foreground/60">?</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">?</span>
+          </CommandItem>
+          <CommandItem
+            onSelect={() => runAction(() => setTheme(theme === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? (
+              <IconSun className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            ) : (
+              <IconMoon className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            )}
+            Toggle Theme
           </CommandItem>
         </CommandGroup>
 
@@ -84,27 +98,27 @@ export default function CommandPalette({
           <CommandItem onSelect={() => runAction(() => router.push("/chat"))}>
             <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Chat
-            <span className="ml-auto text-[11px] text-muted-foreground/60">G C</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">G C</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/plugins"))}>
             <IconPlugConnected className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Connections
-            <span className="ml-auto text-[11px] text-muted-foreground/60">G P</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">G P</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/devices"))}>
             <IconDeviceMobile className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Devices
-            <span className="ml-auto text-[11px] text-muted-foreground/60">G D</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">G D</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/memory"))}>
             <IconBrain className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Memory
-            <span className="ml-auto text-[11px] text-muted-foreground/60">G M</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">G M</span>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => router.push("/account"))}>
             <IconSettings className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Settings
-            <span className="ml-auto text-[11px] text-muted-foreground/60">G S</span>
+            <span className="ml-auto text-sm text-muted-foreground/60">G S</span>
           </CommandItem>
         </CommandGroup>
       </CommandList>

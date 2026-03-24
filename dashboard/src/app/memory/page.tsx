@@ -29,7 +29,9 @@ export default function MemoryPage() {
   const [tab, setTab] = useState<Tab>("about");
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [entities, setEntities] = useState<EntityRow[]>([]);
-  const [selectedEntity, setSelectedEntity] = useState<EntityDetails | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<EntityDetails | null>(
+    null,
+  );
   const [entityLoading, setEntityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -52,11 +54,13 @@ export default function MemoryPage() {
         const raw = itemsRes.items || [];
         setItems(
           raw
-            .filter((item) => ["fact", "memory", "summary", "decision"].includes(item.kind))
+            .filter((item) =>
+              ["fact", "memory", "summary", "decision"].includes(item.kind),
+            )
             .map((item) => ({
               id: item.id,
               content: item.content,
-            }))
+            })),
         );
         setEntities(entitiesRes.entities || []);
       } catch (e: unknown) {
@@ -76,7 +80,9 @@ export default function MemoryPage() {
   return (
     <ContentShell title="Memory">
       {loading ? (
-        <p className="text-muted-foreground text-xs tracking-wider text-center">loading...</p>
+        <p className="text-muted-foreground text-xs tracking-wider text-center">
+          loading...
+        </p>
       ) : error ? (
         <p className="text-muted-foreground text-xs text-center">{error}</p>
       ) : isEmpty ? (
@@ -142,19 +148,19 @@ function TabBar({
           key={t.id}
           onClick={() => onTabChange(t.id)}
           className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors shrink-0
+            flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0
             ${
               tab === t.id
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                ? "bg-accent/80 text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
           {t.label}
           <span
             className={`
-              text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
-              ${tab === t.id ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
+              text-xs tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
+              ${tab === t.id ? "bg-accent/80 text-foreground/70" : "bg-accent/40 text-muted-foreground/60"}
             `}
           >
             {counts[t.id]}
@@ -167,15 +173,17 @@ function TabBar({
 
 function AboutTab({ items }: { items: MemoryItem[] }) {
   if (items.length === 0) {
-    return <p className="text-muted-foreground text-xs pt-4">nothing learned yet</p>;
+    return (
+      <p className="text-muted-foreground text-xs pt-4">nothing learned yet</p>
+    );
   }
 
   return (
-    <div className="space-y-2 pt-2">
+    <div className="space-y-3 pt-2">
       {items.map((item) => (
         <ListItem key={item.id} title={item.content} />
       ))}
-      <p className="text-[10px] text-muted-foreground pt-2">
+      <p className="text-xs text-muted-foreground pt-2">
         {items.length} {items.length === 1 ? "item" : "items"} remembered
       </p>
     </div>
@@ -200,11 +208,17 @@ function EntitiesTab({
   }
 
   if (entityLoading) {
-    return <p className="text-muted-foreground text-xs pt-4">loading entity...</p>;
+    return (
+      <p className="text-muted-foreground text-xs pt-4">loading entity...</p>
+    );
   }
 
   if (entities.length === 0) {
-    return <p className="text-muted-foreground text-xs pt-4">no entities discovered yet</p>;
+    return (
+      <p className="text-muted-foreground text-xs pt-4">
+        no entities discovered yet
+      </p>
+    );
   }
 
   // Group entities by type
@@ -215,7 +229,14 @@ function EntitiesTab({
     return acc;
   }, {});
 
-  const typeOrder = ["person", "project", "organization", "topic", "place", "tool"];
+  const typeOrder = [
+    "person",
+    "project",
+    "organization",
+    "topic",
+    "place",
+    "tool",
+  ];
   const sortedTypes = Object.keys(grouped).sort((a, b) => {
     const ai = typeOrder.indexOf(a);
     const bi = typeOrder.indexOf(b);
@@ -226,7 +247,7 @@ function EntitiesTab({
     <div className="space-y-6 pt-2">
       {sortedTypes.map((type) => (
         <div key={type}>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+          <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground mb-2">
             {type}s ({grouped[type].length})
           </p>
           <div className="space-y-2">
@@ -238,7 +259,9 @@ function EntitiesTab({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-foreground font-medium truncate">{entity.name}</p>
+                    <p className="text-sm text-foreground font-medium truncate">
+                      {entity.name}
+                    </p>
                     {entity.summary && (
                       <p className="text-xs text-secondary-foreground mt-0.5 line-clamp-2 leading-relaxed">
                         {entity.summary}
@@ -247,7 +270,7 @@ function EntitiesTab({
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {entity.interaction_count > 0 && (
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-xs text-muted-foreground">
                         {entity.interaction_count} interactions
                       </span>
                     )}
@@ -259,7 +282,7 @@ function EntitiesTab({
                       <Badge
                         key={i}
                         variant="secondary"
-                        className="text-[9px] tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
+                        className="text-xs tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
                       >
                         {alias}
                       </Badge>
@@ -267,7 +290,7 @@ function EntitiesTab({
                   </div>
                 )}
                 <div className="flex items-center gap-2 mt-2">
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     last seen {formatTimestamp(entity.last_seen_at)}
                   </span>
                 </div>
@@ -276,14 +299,21 @@ function EntitiesTab({
           </div>
         </div>
       ))}
-      <p className="text-[10px] text-muted-foreground pt-2">
-        {entities.length} {entities.length === 1 ? "entity" : "entities"} tracked
+      <p className="text-xs text-muted-foreground pt-2">
+        {entities.length} {entities.length === 1 ? "entity" : "entities"}{" "}
+        tracked
       </p>
     </div>
   );
 }
 
-function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack: () => void }) {
+function EntityDetailView({
+  details,
+  onBack,
+}: {
+  details: EntityDetails;
+  onBack: () => void;
+}) {
   const { entity, observations, interactions, relations } = details;
 
   return (
@@ -294,7 +324,7 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
           variant="aether-link"
           size="aether-link"
           onClick={onBack}
-          className="text-[11px] uppercase tracking-[0.12em]"
+          className="text-sm uppercase tracking-[0.12em]"
         >
           &larr; back
         </Button>
@@ -304,12 +334,14 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       <div>
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-medium text-foreground">{entity.name}</h2>
-          <Badge variant="secondary" className="text-[9px] tracking-wider">
+          <Badge variant="secondary" className="text-xs tracking-wider">
             {entity.entity_type}
           </Badge>
         </div>
         {entity.summary && (
-          <p className="text-sm text-secondary-foreground mt-1 leading-relaxed">{entity.summary}</p>
+          <p className="text-sm text-secondary-foreground mt-1 leading-relaxed">
+            {entity.summary}
+          </p>
         )}
         {entity.aliases.length > 0 && (
           <div className="flex gap-1.5 mt-2 flex-wrap">
@@ -317,14 +349,14 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
               <Badge
                 key={i}
                 variant="secondary"
-                className="text-[9px] tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
+                className="text-xs tracking-wider font-normal px-1.5 py-0 h-4 rounded-sm"
               >
                 {alias}
               </Badge>
             ))}
           </div>
         )}
-        <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
           <span>{entity.interaction_count} interactions</span>
           <span>&middot;</span>
           <span>first seen {formatTimestamp(entity.first_seen_at)}</span>
@@ -338,7 +370,7 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       {/* Observations */}
       {observations.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+          <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground mb-2">
             observations ({observations.length})
           </p>
           <div className="space-y-2">
@@ -348,10 +380,12 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
                   {obs.observation}
                 </p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary" className="text-[9px] tracking-wider">
+                  <Badge variant="secondary" className="text-xs tracking-wider">
                     {obs.category}
                   </Badge>
-                  <span className="text-[10px] text-muted-foreground">{obs.source}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {obs.source}
+                  </span>
                 </div>
               </div>
             ))}
@@ -362,31 +396,48 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       {/* Relations */}
       {relations.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+          <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground mb-2">
             relationships ({relations.length})
           </p>
           <div className="space-y-2">
             {relations.map((rel) => {
               const isSource = rel.source_entity_id === entity.id;
               return (
-                <div key={rel.id} className="rounded-xl border border-border/70 p-3">
+                <div
+                  key={rel.id}
+                  className="rounded-xl border border-border/70 p-3"
+                >
                   <p className="text-sm text-secondary-foreground">
                     {isSource ? (
                       <>
-                        <span className="text-foreground font-medium">{entity.name}</span>{" "}
-                        <span className="text-muted-foreground">{rel.relation}</span>{" "}
-                        <span className="text-foreground">{rel.target_entity_id}</span>
+                        <span className="text-foreground font-medium">
+                          {entity.name}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          {rel.relation}
+                        </span>{" "}
+                        <span className="text-foreground">
+                          {rel.target_entity_id}
+                        </span>
                       </>
                     ) : (
                       <>
-                        <span className="text-foreground">{rel.source_entity_id}</span>{" "}
-                        <span className="text-muted-foreground">{rel.relation}</span>{" "}
-                        <span className="text-foreground font-medium">{entity.name}</span>
+                        <span className="text-foreground">
+                          {rel.source_entity_id}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          {rel.relation}
+                        </span>{" "}
+                        <span className="text-foreground font-medium">
+                          {entity.name}
+                        </span>
                       </>
                     )}
                   </p>
                   {rel.context && (
-                    <p className="text-xs text-muted-foreground mt-1">{rel.context}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {rel.context}
+                    </p>
                   )}
                 </div>
               );
@@ -398,18 +449,20 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       {/* Interactions timeline */}
       {interactions.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+          <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground mb-2">
             interactions ({interactions.length})
           </p>
           <div className="space-y-2">
             {interactions.map((inter) => (
               <div key={inter.id} className="pl-3 border-l-2 border-border">
-                <p className="text-sm text-secondary-foreground leading-relaxed">{inter.summary}</p>
+                <p className="text-sm text-secondary-foreground leading-relaxed">
+                  {inter.summary}
+                </p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary" className="text-[9px] tracking-wider">
+                  <Badge variant="secondary" className="text-xs tracking-wider">
                     {inter.source}
                   </Badge>
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     {formatTimestamp(inter.interaction_at)}
                   </span>
                 </div>
@@ -420,9 +473,13 @@ function EntityDetailView({ details, onBack }: { details: EntityDetails; onBack:
       )}
 
       {/* Empty state for sections */}
-      {observations.length === 0 && relations.length === 0 && interactions.length === 0 && (
-        <p className="text-muted-foreground text-xs">no details recorded yet for this entity</p>
-      )}
+      {observations.length === 0 &&
+        relations.length === 0 &&
+        interactions.length === 0 && (
+          <p className="text-muted-foreground text-xs">
+            no details recorded yet for this entity
+          </p>
+        )}
     </div>
   );
 }

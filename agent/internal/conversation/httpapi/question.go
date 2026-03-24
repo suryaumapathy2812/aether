@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/mail"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
 // questionRequest represents a pending question from the agent to the user.
@@ -19,10 +22,14 @@ import (
 type questionRequest struct {
 	ID          string              `json:"id"`
 	SessionID   string              `json:"session_id"`
+	ToolCallID  string              `json:"tool_call_id,omitempty"`
 	Question    string              `json:"question"`
 	Header      string              `json:"header"`
+	Kind        string              `json:"kind,omitempty"`
 	Options     []questionOption    `json:"options"`
 	AllowCustom bool                `json:"allow_custom"`
+	Fields      []questionField     `json:"fields,omitempty"`
+	SubmitLabel string              `json:"submit_label,omitempty"`
 	CreatedAt   string              `json:"created_at"`
 	answerCh    chan questionAnswer // internal channel, not serialized
 }
@@ -33,10 +40,20 @@ type questionOption struct {
 	Description string `json:"description,omitempty"`
 }
 
+type questionField struct {
+	Name        string   `json:"name"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Options     []string `json:"options,omitempty"`
+}
+
 // questionAnswer carries the user's response back to the blocking tool.
 type questionAnswer struct {
-	Answers  []string `json:"answers"`
-	Rejected bool     `json:"rejected"`
+	Answers  []string       `json:"answers,omitempty"`
+	Data     map[string]any `json:"data,omitempty"`
+	Rejected bool           `json:"rejected"`
 }
 
 // questionManager tracks pending questions keyed by request ID.
@@ -80,14 +97,14 @@ func (m *questionManager) ask(req *questionRequest) questionAnswer {
 
 // reply resolves a pending question with the given answers.
 // Returns true if the question existed and was resolved.
-func (m *questionManager) reply(id string, answers []string) bool {
+func (m *questionManager) reply(id string, answers []string, data map[string]any) bool {
 	m.mu.RLock()
 	req, ok := m.pending[id]
 	m.mu.RUnlock()
 	if !ok {
 		return false
 	}
-	req.answerCh <- questionAnswer{Answers: answers, Rejected: false}
+	req.answerCh <- questionAnswer{Answers: answers, Data: data, Rejected: false}
 	return true
 }
 
@@ -125,6 +142,137 @@ func (m *questionManager) listForSession(sessionID string) []*questionRequest {
 	return out
 }
 
+func validateQuestionReply(req *questionRequest, answers []string, data map[string]any) ([]string, map[string]any, error) {
+	if req == nil {
+		return nil, nil, fmt.Errorf("question request is required")
+	}
+
+	switch strings.TrimSpace(strings.ToLower(req.Kind)) {
+	case "form":
+		if len(data) == 0 {
+			return nil, nil, fmt.Errorf("form responses require data")
+		}
+		fields := map[string]questionField{}
+		for _, field := range req.Fields {
+			fields[field.Name] = field
+		}
+		if len(fields) == 0 {
+			return nil, nil, fmt.Errorf("form request has no fields")
+		}
+
+		normalized := map[string]any{}
+		for key, raw := range data {
+			field, ok := fields[key]
+			if !ok {
+				return nil, nil, fmt.Errorf("unknown form field: %s", key)
+			}
+			value, include, err := normalizeQuestionFieldReply(field, raw)
+			if err != nil {
+				return nil, nil, err
+			}
+			if include {
+				normalized[key] = value
+			}
+		}
+		for _, field := range req.Fields {
+			if !field.Required {
+				continue
+			}
+			if _, ok := normalized[field.Name]; !ok {
+				return nil, nil, fmt.Errorf("missing required field: %s", field.Name)
+			}
+		}
+		if len(normalized) == 0 {
+			return nil, nil, fmt.Errorf("form responses require at least one value")
+		}
+		return nil, normalized, nil
+	default:
+		if len(data) > 0 {
+			return nil, nil, fmt.Errorf("only form prompts accept data responses")
+		}
+		normalized := make([]string, 0, len(answers))
+		seen := map[string]struct{}{}
+		for _, answer := range answers {
+			answer = strings.TrimSpace(answer)
+			if answer == "" {
+				continue
+			}
+			if _, ok := seen[answer]; ok {
+				continue
+			}
+			seen[answer] = struct{}{}
+			normalized = append(normalized, answer)
+		}
+		if len(normalized) == 0 {
+			return nil, nil, fmt.Errorf("answers array is required and must not be empty")
+		}
+		if strings.EqualFold(req.Kind, "confirm") && len(normalized) != 1 {
+			return nil, nil, fmt.Errorf("confirm prompts require exactly one answer")
+		}
+		if !req.AllowCustom && len(req.Options) > 0 {
+			allowed := map[string]struct{}{}
+			for _, option := range req.Options {
+				allowed[option.Label] = struct{}{}
+			}
+			for _, answer := range normalized {
+				if _, ok := allowed[answer]; !ok {
+					return nil, nil, fmt.Errorf("invalid answer: %s", answer)
+				}
+			}
+		}
+		return normalized, nil, nil
+	}
+}
+
+func normalizeQuestionFieldReply(field questionField, raw any) (any, bool, error) {
+	text := strings.TrimSpace(fmt.Sprintf("%v", raw))
+	switch strings.TrimSpace(strings.ToLower(field.Type)) {
+	case "number":
+		if text == "" {
+			if field.Required {
+				return nil, false, fmt.Errorf("missing required field: %s", field.Name)
+			}
+			return nil, false, nil
+		}
+		if _, err := strconv.ParseFloat(text, 64); err != nil {
+			return nil, false, fmt.Errorf("field %s must be a number", field.Name)
+		}
+		return text, true, nil
+	case "email":
+		if text == "" {
+			if field.Required {
+				return nil, false, fmt.Errorf("missing required field: %s", field.Name)
+			}
+			return nil, false, nil
+		}
+		if _, err := mail.ParseAddress(text); err != nil {
+			return nil, false, fmt.Errorf("field %s must be a valid email", field.Name)
+		}
+		return text, true, nil
+	case "select":
+		if text == "" {
+			if field.Required {
+				return nil, false, fmt.Errorf("missing required field: %s", field.Name)
+			}
+			return nil, false, nil
+		}
+		for _, option := range field.Options {
+			if option == text {
+				return text, true, nil
+			}
+		}
+		return nil, false, fmt.Errorf("field %s must be one of the allowed options", field.Name)
+	default:
+		if text == "" {
+			if field.Required {
+				return nil, false, fmt.Errorf("missing required field: %s", field.Name)
+			}
+			return nil, false, nil
+		}
+		return text, true, nil
+	}
+}
+
 // ── QuestionAskerBridge ────────────────────────────────────────────────
 // QuestionAskerBridge implements tools.QuestionAsker by delegating to a
 // questionManager and emitting WS events via a notify callback.
@@ -144,23 +292,54 @@ func NewQuestionAskerBridge(mgr *questionManager, notify func(userID, eventType 
 
 // AskQuestion implements tools.QuestionAsker. It stores the question,
 // emits a "question.asked" WS event, and blocks until the user replies.
-func (b *QuestionAskerBridge) AskQuestion(ctx context.Context, sessionID string, question string, header string, options []map[string]any, allowCustom bool) ([]string, error) {
-	// Convert options from generic maps to typed structs.
+func (b *QuestionAskerBridge) AskQuestion(ctx context.Context, userID string, sessionID string, prompt tools.QuestionPrompt) (tools.QuestionResponse, error) {
+	// Convert options to typed structs.
 	var opts []questionOption
-	for _, o := range options {
-		label, _ := o["label"].(string)
-		desc, _ := o["description"].(string)
+	for _, o := range prompt.Options {
+		label := strings.TrimSpace(o.Label)
+		desc := strings.TrimSpace(o.Description)
 		if strings.TrimSpace(label) != "" {
 			opts = append(opts, questionOption{Label: label, Description: desc})
 		}
 	}
+	var fields []questionField
+	for _, f := range prompt.Fields {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			continue
+		}
+		label := strings.TrimSpace(f.Label)
+		if label == "" {
+			label = name
+		}
+		fieldType := strings.TrimSpace(f.Type)
+		if fieldType == "" {
+			fieldType = "text"
+		}
+		fields = append(fields, questionField{
+			Name:        name,
+			Label:       label,
+			Type:        fieldType,
+			Required:    f.Required,
+			Placeholder: strings.TrimSpace(f.Placeholder),
+			Options:     append([]string(nil), f.Options...),
+		})
+	}
+	kind := strings.TrimSpace(strings.ToLower(prompt.Kind))
+	if kind == "" {
+		kind = "choice"
+	}
 
 	req := &questionRequest{
 		SessionID:   sessionID,
-		Question:    question,
-		Header:      header,
+		ToolCallID:  strings.TrimSpace(prompt.ToolCallID),
+		Question:    prompt.Question,
+		Header:      prompt.Header,
+		Kind:        kind,
 		Options:     opts,
-		AllowCustom: allowCustom,
+		AllowCustom: prompt.AllowCustom,
+		Fields:      fields,
+		SubmitLabel: strings.TrimSpace(prompt.SubmitLabel),
 	}
 
 	// ask() assigns the ID and creates the channel. We need the ID
@@ -216,13 +395,17 @@ func (b *QuestionAskerBridge) AskQuestion(ctx context.Context, sessionID string,
 			}
 			payloadOpts = append(payloadOpts, entry)
 		}
-		b.notify(sessionID, "question.asked", map[string]any{
+		b.notify(userID, "question.asked", map[string]any{
 			"id":           questionID,
 			"session_id":   sessionID,
-			"question":     question,
-			"header":       header,
+			"tool_call_id": req.ToolCallID,
+			"question":     req.Question,
+			"header":       req.Header,
+			"kind":         req.Kind,
 			"options":      payloadOpts,
-			"allow_custom": allowCustom,
+			"allow_custom": req.AllowCustom,
+			"fields":       req.Fields,
+			"submit_label": req.SubmitLabel,
 			"created_at":   req.CreatedAt,
 		})
 	}
@@ -231,9 +414,9 @@ func (b *QuestionAskerBridge) AskQuestion(ctx context.Context, sessionID string,
 	answer := <-resultCh
 
 	if answer.Rejected {
-		return nil, fmt.Errorf("question rejected")
+		return tools.QuestionResponse{}, fmt.Errorf("question rejected")
 	}
-	return answer.Answers, nil
+	return tools.QuestionResponse{Answers: answer.Answers, Data: answer.Data}, nil
 }
 
 // ── HTTP Handlers ──────────────────────────────────────────────────────
@@ -292,29 +475,57 @@ func (h *Handler) handleQuestionsList(w http.ResponseWriter, r *http.Request) {
 // handleQuestionReply resolves a pending question with user-provided answers.
 func (h *Handler) handleQuestionReply(w http.ResponseWriter, r *http.Request, questionID string) {
 	var body struct {
-		Answers []string `json:"answers"`
+		Answers []string       `json:"answers"`
+		Data    map[string]any `json:"data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if len(body.Answers) == 0 {
-		httputil.WriteError(w, http.StatusBadRequest, "answers array is required and must not be empty")
+	if len(body.Answers) == 0 && len(body.Data) == 0 {
+		httputil.WriteError(w, http.StatusBadRequest, "answers or data is required")
 		return
 	}
-	if !h.questions.reply(questionID, body.Answers) {
+	req, ok := h.questions.get(questionID)
+	if !ok {
 		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
 		return
 	}
+	normalizedAnswers, normalizedData, err := validateQuestionReply(req, body.Answers, body.Data)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.questions.reply(questionID, normalizedAnswers, normalizedData) {
+		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
+		return
+	}
+	h.emit(sessUserIDFromStore(h, r.Context(), req.SessionID), "question.replied", map[string]any{
+		"session_id":   req.SessionID,
+		"request_id":   questionID,
+		"tool_call_id": req.ToolCallID,
+		"updated_at":   time.Now().UTC().Format(time.RFC3339Nano),
+	})
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID})
 }
 
 // handleQuestionReject dismisses a pending question.
 func (h *Handler) handleQuestionReject(w http.ResponseWriter, r *http.Request, questionID string) {
+	req, ok := h.questions.get(questionID)
+	if !ok {
+		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
+		return
+	}
 	if !h.questions.reject(questionID) {
 		httputil.WriteError(w, http.StatusNotFound, "question not found or already answered")
 		return
 	}
+	h.emit(sessUserIDFromStore(h, r.Context(), req.SessionID), "question.rejected", map[string]any{
+		"session_id":   req.SessionID,
+		"request_id":   questionID,
+		"tool_call_id": req.ToolCallID,
+		"updated_at":   time.Now().UTC().Format(time.RFC3339Nano),
+	})
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "question_id": questionID, "rejected": true})
 }
 

@@ -143,7 +143,7 @@ function SessionsContent() {
           variant="aether"
           size="sm"
           onClick={handleNewChat}
-          className="h-8 px-3 text-[12px]"
+          className="h-8 px-3 text-sm"
         >
           <Plus className="size-3.5 mr-1" />
           new
@@ -253,7 +253,7 @@ function SessionGroup({
 }) {
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground/50 font-medium mb-2">
+      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground/50 font-medium mb-2">
         {label}
       </p>
       <div className="space-y-2">
@@ -265,7 +265,7 @@ function SessionGroup({
           return (
             <div
               key={s.id}
-              className="group/item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-white/[0.06] hover:bg-white/[0.03] transition-colors"
+              className="group/item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border hover:bg-accent/30 transition-colors"
             >
               {isEditing ? (
                 <input
@@ -277,7 +277,7 @@ function SessionGroup({
                     if (e.key === "Enter") onCommitRename();
                     if (e.key === "Escape") onCancelRename();
                   }}
-                  className="h-7 min-w-0 flex-1 bg-transparent text-[13px] font-medium text-foreground outline-none"
+                  className="h-7 min-w-0 flex-1 bg-transparent text-sm font-medium text-foreground outline-none"
                 />
               ) : (
                 <>
@@ -286,7 +286,7 @@ function SessionGroup({
                     onDoubleClick={() => onRename(s)}
                     className="min-w-0 flex-1 text-left cursor-pointer"
                   >
-                    <span className="text-[13px] font-medium text-foreground flex items-center gap-2">
+                    <span className="text-sm font-medium text-foreground flex items-center gap-2">
                       {s.title || "New chat"}
                       {isRunning && (
                         <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />

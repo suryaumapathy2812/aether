@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { useSession } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   getUserPreference,
   setUserPreference,
   deleteUserPreference,
 } from "@/lib/preferences";
+import { toast } from "sonner";
 
 const DEFAULT_MODEL = "minimax/minimax-m2.5";
 
@@ -18,7 +20,6 @@ export default function ModelPreference() {
   const [model, setModel] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -31,13 +32,12 @@ export default function ModelPreference() {
   async function handleSave() {
     if (!userId) return;
     setSaving(true);
-    setMessage(null);
     const trimmed = model.trim();
     const success = await setUserPreference(userId, "model", trimmed);
     if (success) {
-      setMessage({ type: "success", text: "Model saved" });
+      toast.success("Model saved");
     } else {
-      setMessage({ type: "error", text: "Failed to save" });
+      toast.error("Failed to save");
     }
     setSaving(false);
   }
@@ -45,13 +45,12 @@ export default function ModelPreference() {
   async function handleReset() {
     if (!userId) return;
     setSaving(true);
-    setMessage(null);
     const success = await deleteUserPreference(userId, "model");
     if (success) {
       setModel("");
-      setMessage({ type: "success", text: "Reset to default" });
+      toast.success("Reset to default");
     } else {
-      setMessage({ type: "error", text: "Failed to reset" });
+      toast.error("Failed to reset");
     }
     setSaving(false);
   }
@@ -59,40 +58,31 @@ export default function ModelPreference() {
   if (loading) return null;
 
   return (
-    <div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder={DEFAULT_MODEL}
-          className="flex-1 h-8 px-3 text-[13px] bg-background border border-input rounded-md focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground/50"
-        />
+    <div className="flex gap-2">
+      <Input
+        value={model}
+        onChange={(e) => setModel(e.target.value)}
+        placeholder={DEFAULT_MODEL}
+        className="flex-1"
+      />
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={handleSave}
+        disabled={saving}
+      >
+        {saving ? "..." : "Save"}
+      </Button>
+      {model && (
         <Button
           variant="ghost"
           size="sm"
-          onClick={handleSave}
+          onClick={handleReset}
           disabled={saving}
-          className="h-8 px-3 text-[12px] text-foreground/70 hover:text-foreground"
+          className="text-muted-foreground hover:text-foreground"
         >
-          {saving ? "..." : "Save"}
+          Reset
         </Button>
-        {model && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleReset}
-            disabled={saving}
-            className="h-8 px-2 text-[12px] text-muted-foreground hover:text-foreground"
-          >
-            Reset
-          </Button>
-        )}
-      </div>
-      {message && (
-        <p className={`text-[11px] mt-2 ${message.type === "success" ? "text-emerald-400/80" : "text-red-400/80"}`}>
-          {message.text}
-        </p>
       )}
     </div>
   );

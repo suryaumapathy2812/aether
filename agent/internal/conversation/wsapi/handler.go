@@ -492,7 +492,7 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 		}
 	}
 	env := h.builder.Build(messages, policy, state.userID, sessionID)
-	rCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{UserID: state.userID})
+	rCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{UserID: state.userID, SessionID: sessionID})
 	answerParts := []string{}
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
@@ -543,17 +543,23 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 
 		case conversation.EventToolOutputAvailable, conversation.EventType("tool-output-error"):
 			callID, _ := ev.Payload["toolCallId"].(string)
+			toolName, _ := ev.Payload["toolName"].(string)
 			output, _ := ev.Payload["output"].(string)
 			errorText, _ := ev.Payload["errorText"].(string)
+			metadata, _ := ev.Payload["metadata"].(map[string]any)
 			if ev.EventType == conversation.EventType("tool-output-error") {
 				h.emit(conn, writeMu, state, sessionID, turnID, "assistant.tool-output-error", map[string]any{
 					"toolCallId": callID,
+					"toolName":   toolName,
 					"errorText":  errorText,
+					"metadata":   metadata,
 				})
 			} else {
 				h.emit(conn, writeMu, state, sessionID, turnID, "assistant.tool-output-available", map[string]any{
 					"toolCallId": callID,
+					"toolName":   toolName,
 					"output":     output,
+					"metadata":   metadata,
 				})
 			}
 			if h.store != nil && !assistantFlushedForToolBatch && len(pendingToolCalls) > 0 {
@@ -569,11 +575,15 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 					content = "[tool_error] " + errorText
 				}
 				if strings.TrimSpace(content) != "" {
-					_ = h.store.AppendChatMessage(ctx, state.userID, sessionID, map[string]any{
+					toolMessage := map[string]any{
 						"role":         "tool",
 						"tool_call_id": callID,
 						"content":      content,
-					})
+					}
+					if metadata != nil {
+						toolMessage["metadata"] = metadata
+					}
+					_ = h.store.AppendChatMessage(ctx, state.userID, sessionID, toolMessage)
 				}
 				if strings.TrimSpace(callID) != "" {
 					delete(pendingToolCallIDs, callID)

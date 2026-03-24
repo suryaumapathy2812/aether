@@ -6,9 +6,7 @@ import ContentShell from "@/components/ContentShell";
 import ListItem from "@/components/ListItem";
 import { useSession } from "@/lib/auth-client";
 import {
-  installSkill,
   listInstalledSkills,
-  removeSkill,
   searchMarketplaceSkills,
   type MarketplaceSkill,
   type SkillMeta,
@@ -28,7 +26,6 @@ export default function SkillsPage() {
   const [showTrending, setShowTrending] = useState(true);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [busySkill, setBusySkill] = useState("");
 
   useEffect(() => {
     if (isPending) return;
@@ -91,32 +88,6 @@ export default function SkillsPage() {
     }
   }
 
-  async function onInstall(skill: MarketplaceSkill) {
-    setBusySkill(skill.id);
-    setMessage("");
-    try {
-      await installSkill(skill.source, skill.skill_id || skill.name);
-      await loadInstalled();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Install failed");
-    } finally {
-      setBusySkill("");
-    }
-  }
-
-  async function onRemove(name: string) {
-    setBusySkill(name);
-    setMessage("");
-    try {
-      await removeSkill(name);
-      await loadInstalled();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Remove failed");
-    } finally {
-      setBusySkill("");
-    }
-  }
-
   if (isPending || !session) return null;
 
   return (
@@ -125,11 +96,11 @@ export default function SkillsPage() {
         <button
           onClick={() => setTab("browse")}
           className={`
-            px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
             ${
               tab === "browse"
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                ? "bg-accent/80 text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
@@ -138,19 +109,19 @@ export default function SkillsPage() {
         <button
           onClick={() => setTab("installed")}
           className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors
+            flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
             ${
               tab === "installed"
-                ? "bg-white/[0.08] text-foreground"
-                : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+                ? "bg-accent/80 text-foreground"
+                : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
           Installed
           <span
             className={`
-              text-[10px] tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
-              ${tab === "installed" ? "bg-white/[0.08] text-foreground/70" : "bg-white/[0.04] text-muted-foreground/60"}
+              text-xs tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
+              ${tab === "installed" ? "bg-accent/80 text-foreground/70" : "bg-accent/40 text-muted-foreground/60"}
             `}
           >
             {installed.length}
@@ -164,7 +135,7 @@ export default function SkillsPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={tab === "browse" ? "Search marketplace..." : "Search installed..."}
-          className="w-full h-9 pl-9 pr-3 text-[13px] bg-white/[0.03] border border-white/[0.06] rounded-lg focus:outline-none focus:border-white/[0.12] text-foreground placeholder:text-muted-foreground/40 transition-colors"
+          className="w-full h-9 pl-9 pr-3 text-sm bg-accent/30 border border-border rounded-lg focus:outline-none focus:border-input text-foreground placeholder:text-muted-foreground/40 transition-colors"
         />
       </div>
 
@@ -180,25 +151,21 @@ export default function SkillsPage() {
 
       {tab === "browse" ? (
         <div className="space-y-2">
-          {results.map((skill) => {
-            const isInstalled = installedNames.has(skill.name);
-            return (
-              <ListItem
-                key={skill.id}
-                title={skill.name}
-                description={skill.source}
-                action={
-                  <button
-                    className="h-8 px-3 text-[11px] border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    disabled={busySkill === skill.id || isInstalled}
-                    onClick={() => onInstall(skill)}
-                  >
-                    {isInstalled ? "Installed" : "Install"}
-                  </button>
-                }
-              />
-            );
-          })}
+          {results.map((skill) => (
+            <ListItem
+              key={skill.id}
+              title={skill.name}
+              description={skill.source}
+              href={`/skills/${encodeURIComponent(skill.name)}`}
+              action={
+                installedNames.has(skill.name) ? (
+                  <span className="shrink-0 text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+                    Installed
+                  </span>
+                ) : undefined
+              }
+            />
+          ))}
           {!loading && results.length === 0 && (
             <p className="text-xs text-muted-foreground">
               {search.trim() ? "No skills match your search." : "No results yet."}
@@ -212,15 +179,7 @@ export default function SkillsPage() {
               key={skill.name}
               title={skill.name || "Unnamed skill"}
               description={skill.description || "No description"}
-              action={
-                <button
-                  className="h-8 px-3 text-[11px] border border-white/[0.12] rounded-md hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                  disabled={busySkill === skill.name}
-                  onClick={() => onRemove(skill.name)}
-                >
-                  Remove
-                </button>
-              }
+              href={`/skills/${encodeURIComponent(skill.name)}`}
             />
           ))}
           {filteredInstalled.length === 0 && (

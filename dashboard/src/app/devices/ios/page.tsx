@@ -106,7 +106,7 @@ export default function IOSDevicePage() {
             className="size-5 shrink-0 text-muted-foreground mt-0.5"
             strokeWidth={1.5}
           />
-          <p className="text-[13px] text-muted-foreground leading-relaxed max-w-[72ch]">
+          <p className="text-sm text-muted-foreground leading-relaxed max-w-[72ch]">
             On your iPhone, open Aether and tap start pairing. Enter the code
             shown in the app here to link the device.
           </p>
@@ -119,7 +119,7 @@ export default function IOSDevicePage() {
             onChange={(v) => setPairingCode(v.toUpperCase())}
             placeholder="XXXX-XXXX"
           />
-          <p className="text-[10px] text-muted-foreground -mt-3 mb-4">
+          <p className="text-xs text-muted-foreground -mt-3 mb-4">
             Codes expire in 10 minutes. Keep the iOS app open until it shows
             paired.
           </p>
@@ -138,7 +138,7 @@ export default function IOSDevicePage() {
           <>
             <Separator />
             <div className="space-y-2">
-              <h2 className="text-[10px] tracking-[0.15em] text-muted-foreground uppercase font-normal">
+              <h2 className="text-xs tracking-[0.15em] text-muted-foreground uppercase font-normal">
                 Connected devices
               </h2>
               {channels.map((channel) => (
@@ -175,17 +175,17 @@ function IOSRow({
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
+    <div className="flex items-center justify-between gap-3 rounded-2xl bg-accent/30 border border-border px-4 py-3">
       <div className="flex items-center gap-3 min-w-0">
         <IconDeviceMobile
           className="size-4 shrink-0 text-muted-foreground"
           strokeWidth={1.5}
         />
         <div className="min-w-0">
-          <p className="text-[13px] text-foreground font-medium truncate">
+          <p className="text-sm text-foreground font-medium truncate">
             {channel.display_name}
           </p>
-          <p className="text-[11px] text-muted-foreground/60">
+          <p className="text-sm text-muted-foreground/60">
             {channel.channel_id}
           </p>
         </div>
@@ -194,10 +194,10 @@ function IOSRow({
       <div className="flex items-center gap-2 shrink-0">
         <button
           onClick={onToggle}
-          className={`text-[11px] tracking-wider px-2.5 py-1 rounded-full transition-colors ${
+          className={`text-sm tracking-wider px-2.5 py-1 rounded-full transition-colors ${
             channel.enabled
               ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
-              : "bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
+              : "bg-accent/40 text-muted-foreground hover:bg-accent/80"
           }`}
         >
           {channel.enabled ? "on" : "off"}
@@ -205,7 +205,7 @@ function IOSRow({
         <button
           onClick={handleDisconnect}
           disabled={busy}
-          className="text-[11px] tracking-wider px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+          className="text-sm tracking-wider px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
         >
           {busy ? "..." : "remove"}
         </button>

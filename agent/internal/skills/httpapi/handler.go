@@ -41,6 +41,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	for _, path := range []string{"/agent/v1/skills/remove", "/api/skills/remove"} {
 		mux.HandleFunc(path, h.handleRemove)
 	}
+	for _, path := range []string{"/agent/v1/skills/content", "/api/skills/content"} {
+		mux.HandleFunc(path, h.handleContent)
+	}
 }
 
 func (h *Handler) handleMarketplaceSearch(w http.ResponseWriter, r *http.Request) {
@@ -176,4 +179,30 @@ func (h *Handler) handleRemove(w http.ResponseWriter, r *http.Request) {
 		_ = h.store.DeleteSkill(r.Context(), name)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name})
+}
+
+func (h *Handler) handleContent(w http.ResponseWriter, r *http.Request) {
+	if err := agentauth.AuthorizeDirectRequest(r, h.validator); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if r.Method != http.MethodGet {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.manager == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "skills manager unavailable")
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	raw, err := h.manager.ReadRaw(name)
+	if err != nil {
+		httputil.WriteError(w, http.StatusNotFound, "skill not found")
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"content": raw})
 }

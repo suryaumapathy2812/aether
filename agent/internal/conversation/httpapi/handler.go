@@ -238,7 +238,7 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	env := h.builder.Build(messages, policy, userID, sessionID)
 
-	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID})
+	rCtx := tools.WithTaskRuntimeContext(r.Context(), tools.TaskRuntimeContext{UserID: userID, SessionID: sessionID})
 	r = r.WithContext(rCtx)
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -318,16 +318,21 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 				callID, _ := ev.Payload["toolCallId"].(string)
 				output, _ := ev.Payload["output"].(string)
 				errorText, _ := ev.Payload["errorText"].(string)
+				metadata, _ := ev.Payload["metadata"].(map[string]any)
 				content := output
 				if ev.EventType == conversation.EventType("tool-output-error") {
 					content = "[tool_error] " + errorText
 				}
 				if strings.TrimSpace(content) != "" {
-					_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, map[string]any{
+					toolMessage := map[string]any{
 						"role":         "tool",
 						"tool_call_id": callID,
 						"content":      content,
-					})
+					}
+					if metadata != nil {
+						toolMessage["metadata"] = metadata
+					}
+					_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, toolMessage)
 				}
 				if strings.TrimSpace(callID) != "" {
 					delete(pendingToolCallIDs, callID)

@@ -113,7 +113,22 @@ func (t *WebSearchTool) Execute(ctx context.Context, call tools.Call) tools.Resu
 		sb.WriteString("\n")
 	}
 
-	return tools.Success(sb.String(), map[string]any{"query": query, "count": len(results)})
+	structured := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		structured = append(structured, map[string]any{
+			"title":   result.title,
+			"url":     result.url,
+			"snippet": result.snippet,
+		})
+	}
+
+	return tools.Success(sb.String(), map[string]any{
+		"query":      query,
+		"count":      len(results),
+		"region":     region,
+		"time_range": timeRange,
+		"results":    structured,
+	})
 }
 
 // --- DuckDuckGo HTML parser ---

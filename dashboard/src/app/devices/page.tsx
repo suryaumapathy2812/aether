@@ -83,20 +83,20 @@ export default function DevicesPage() {
       <div className="flex items-center gap-1 mb-6">
         <button
           onClick={() => setTab("connected")}
-          className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
+          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             tab === "connected"
-              ? "bg-white/[0.08] text-foreground"
-              : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+              ? "bg-accent/80 text-foreground"
+              : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
           }`}
         >
           Connected
         </button>
         <button
           onClick={() => setTab("browse")}
-          className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
+          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             tab === "browse"
-              ? "bg-white/[0.08] text-foreground"
-              : "text-muted-foreground hover:text-foreground/80 hover:bg-white/[0.04]"
+              ? "bg-accent/80 text-foreground"
+              : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
           }`}
         >
           Browse
@@ -168,9 +168,9 @@ function ConnectedTab({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
               <IconBrandTelegram className="size-4 text-muted-foreground shrink-0" />
-              <span className="text-[13px] text-foreground font-medium">{d.name}</span>
+              <span className="text-sm text-foreground font-medium">{d.name}</span>
             </div>
-            <p className="text-[11px] text-muted-foreground mt-0.5 ml-6.5">
+            <p className="text-sm text-muted-foreground mt-0.5 ml-6.5">
               {d.device_type}{d.paired_at && ` · ${new Date(d.paired_at).toLocaleDateString()}`}
             </p>
           </div>
@@ -188,7 +188,7 @@ function ConnectedTab({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
               <IconDeviceMobile className="size-4 text-muted-foreground shrink-0" />
-              <span className="text-[13px] text-foreground font-medium">{c.display_name || "iOS"}</span>
+              <span className="text-sm text-foreground font-medium">{c.display_name || "iOS"}</span>
               <span className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
             </div>
           </div>
@@ -213,7 +213,7 @@ function ConnectedTab({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
               <IconBrandTelegram className="size-4 text-muted-foreground shrink-0" />
-              <span className="text-[13px] text-foreground font-medium">{c.display_name || "Telegram"}</span>
+              <span className="text-sm text-foreground font-medium">{c.display_name || "Telegram"}</span>
               <span className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
             </div>
           </div>

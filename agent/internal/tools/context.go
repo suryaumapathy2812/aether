@@ -14,15 +14,45 @@ type PushDeliverer interface {
 	DeliverPush(ctx context.Context, userID string, title, body, tag string) (sent int, failed int, err error)
 }
 
+type QuestionOption struct {
+	Label       string
+	Description string
+}
+
+type QuestionField struct {
+	Name        string
+	Label       string
+	Type        string
+	Required    bool
+	Placeholder string
+	Options     []string
+}
+
+type QuestionPrompt struct {
+	ToolCallID  string
+	Question    string
+	Header      string
+	Kind        string
+	Options     []QuestionOption
+	AllowCustom bool
+	Fields      []QuestionField
+	SubmitLabel string
+}
+
+type QuestionResponse struct {
+	Answers []string
+	Data    map[string]any
+}
+
 // QuestionAsker abstracts the ask_user tool's ability to pose a blocking
 // question to the user and wait for a reply. The handler implements this
 // interface and wires it into ExecContext so the tool can block during
 // execution while the HTTP/WS layer delivers the question to the client.
 type QuestionAsker interface {
 	// AskQuestion blocks until the user replies or dismisses the question.
-	// options is a slice of {label, description} maps. Returns the selected
-	// answers or an error if the question was rejected/cancelled.
-	AskQuestion(ctx context.Context, sessionID string, question string, header string, options []map[string]any, allowCustom bool) ([]string, error)
+	// Returns the submitted answers or form data, or an error if the request
+	// was rejected/cancelled.
+	AskQuestion(ctx context.Context, userID string, sessionID string, prompt QuestionPrompt) (QuestionResponse, error)
 }
 
 type ExecContext struct {

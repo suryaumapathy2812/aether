@@ -23,7 +23,7 @@ export default function MinimalInput({
 }) {
   return (
     <div className="w-full mb-6">
-      <Label className="block text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-2 font-normal">
+      <Label className="block text-xs tracking-[0.15em] uppercase text-muted-foreground mb-2 font-normal">
         {label}
       </Label>
       <Input
@@ -31,7 +31,7 @@ export default function MinimalInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder || label.toLowerCase()}
-        className="bg-white/6 border border-border/80 rounded-full shadow-none px-4 py-2.5 text-[0.9375rem] font-medium tracking-[0.01em] focus-visible:ring-0 focus-visible:border-ring focus-visible:bg-white/10 transition-colors duration-300 h-auto"
+        className="bg-accent/50 border border-border rounded-full shadow-none px-4 py-2.5 text-base font-medium tracking-[0.01em] focus-visible:ring-0 focus-visible:border-ring focus-visible:bg-accent/80 transition-colors duration-300 h-auto"
       />
     </div>
   );

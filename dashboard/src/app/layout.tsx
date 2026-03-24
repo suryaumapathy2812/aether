@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import SessionSync from "@/components/SessionSync";
 import NotificationProvider from "@/components/NotificationProvider";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
@@ -30,7 +31,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={jakarta.variable}>
+    <html lang="en" className={jakarta.variable} suppressHydrationWarning>
       <head>
         <meta
           name="viewport"
@@ -42,25 +43,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
       </head>
       <body className="font-sans">
-        <UIPreferencesProvider>
-          <TooltipProvider>
-            <SessionSync />
-            <ServiceWorkerRegistrar />
-            <NotificationProvider>
-              <KeyboardShortcutsProvider>
-                <div className="h-dvh flex flex-col overflow-hidden">
-                  <Suspense>
-                    <FloatingToolbar />
-                  </Suspense>
-                  <main id="app-main" className="flex-1 overflow-hidden">
-                    {children}
-                  </main>
-                </div>
-              </KeyboardShortcutsProvider>
-            </NotificationProvider>
-            <Toaster />
-          </TooltipProvider>
-        </UIPreferencesProvider>
+        <ThemeProvider>
+          <UIPreferencesProvider>
+            <TooltipProvider>
+              <SessionSync />
+              <ServiceWorkerRegistrar />
+              <NotificationProvider>
+                <KeyboardShortcutsProvider>
+                  <div className="h-dvh flex flex-col overflow-hidden">
+                    <Suspense>
+                      <FloatingToolbar />
+                    </Suspense>
+                    <main id="app-main" className="flex-1 overflow-hidden">
+                      {children}
+                    </main>
+                  </div>
+                </KeyboardShortcutsProvider>
+              </NotificationProvider>
+              <Toaster />
+            </TooltipProvider>
+          </UIPreferencesProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

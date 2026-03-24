@@ -4,10 +4,19 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ContentShell from "@/components/ContentShell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import PushOptIn from "@/components/PushOptIn";
 import ModelPreference from "@/components/ModelPreference";
 import { useSession, signOut } from "@/lib/auth-client";
-import { IconChevronRight, IconLogout } from "@tabler/icons-react";
+import { IconLogout } from "@tabler/icons-react";
 
 export default function AccountPage() {
   const router = useRouter();
@@ -36,102 +45,75 @@ export default function AccountPage() {
 
   return (
     <ContentShell title="Settings">
-      {/* Profile */}
-      <div className="flex items-center gap-4 pb-8 mb-8 border-b border-border">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-foreground/10 to-foreground/5 flex items-center justify-center text-sm font-medium text-foreground/60 shrink-0">
-          {(name || email).charAt(0).toUpperCase()}
-        </div>
-        <div className="min-w-0 flex-1">
-          {editingName ? (
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => setEditingName(false)}
-              onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
-              autoFocus
-              className="bg-transparent text-[14px] font-medium text-foreground outline-none border-b border-foreground/20 pb-0.5 w-full"
-            />
-          ) : (
-            <button
-              className="text-[14px] font-medium text-foreground hover:text-foreground/70 transition-colors text-left"
-              onClick={() => setEditingName(true)}
-            >
-              {name || "Add name"}
-            </button>
-          )}
-          <p className="text-[12px] text-muted-foreground mt-0.5">{email}</p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleLogout}
-          className="text-muted-foreground hover:text-red-400 hover:bg-red-500/5 h-8 px-2.5 text-[12px] font-normal shrink-0"
-        >
-          <IconLogout className="size-3.5 mr-1.5" />
-          Log out
-        </Button>
-      </div>
+      <div className="flex flex-col gap-6">
+        {/* Profile */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Profile</CardTitle>
+            <CardDescription>Manage your account details</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4">
+              <Avatar className="size-11">
+                <AvatarFallback className="text-base font-medium">
+                  {(name || email).charAt(0).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                {editingName ? (
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    onBlur={() => setEditingName(false)}
+                    onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
+                    autoFocus
+                    className="h-9"
+                  />
+                ) : (
+                  <button
+                    className="text-base font-medium text-foreground hover:text-foreground/70 transition-colors text-left"
+                    onClick={() => setEditingName(true)}
+                  >
+                    {name || "Add name"}
+                  </button>
+                )}
+                <p className="text-sm text-muted-foreground mt-0.5">{email}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+              >
+                <IconLogout data-icon="inline-start" />
+                Log out
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Settings */}
-      <div className="space-y-8">
-        <SettingsRow
-          label="Model"
-          description="Override the default model for AI tasks"
-        >
-          <ModelPreference />
-        </SettingsRow>
+        {/* Notifications */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Notifications</CardTitle>
+            <CardDescription>Push notifications for updates</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PushOptIn />
+          </CardContent>
+        </Card>
 
-        <SettingsRow
-          label="Notifications"
-          description="Push notifications for updates"
-        >
-          <PushOptIn />
-        </SettingsRow>
-
-        <button
-          onClick={() => router.push("/plugins")}
-          className="w-full flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[13px] text-foreground text-left">Plugins</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5 text-left">
-              Manage Gmail, Calendar, and other integrations
-            </p>
-          </div>
-          <IconChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
-        </button>
-
-        <button
-          onClick={() => router.push("/memory")}
-          className="w-full flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[13px] text-foreground text-left">Memory</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5 text-left">
-              Facts, conversations, and decisions
-            </p>
-          </div>
-          <IconChevronRight className="size-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
-        </button>
+        {/* Model */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Model</CardTitle>
+            <CardDescription>Override the default model for AI tasks</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ModelPreference />
+          </CardContent>
+        </Card>
       </div>
     </ContentShell>
-  );
-}
-
-function SettingsRow({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <p className="text-[13px] text-foreground">{label}</p>
-      <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
-      <div className="mt-3">{children}</div>
-    </div>
   );
 }

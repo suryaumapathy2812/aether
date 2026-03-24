@@ -449,11 +449,11 @@ type lazyQuestionAsker struct {
 	inner tools.QuestionAsker
 }
 
-func (l *lazyQuestionAsker) AskQuestion(ctx context.Context, sessionID string, question string, header string, options []map[string]any, allowCustom bool) ([]string, error) {
+func (l *lazyQuestionAsker) AskQuestion(ctx context.Context, userID string, sessionID string, prompt tools.QuestionPrompt) (tools.QuestionResponse, error) {
 	if l.inner == nil {
-		return nil, fmt.Errorf("question system not initialized")
+		return tools.QuestionResponse{}, fmt.Errorf("question system not initialized")
 	}
-	return l.inner.AskQuestion(ctx, sessionID, question, header, options, allowCustom)
+	return l.inner.AskQuestion(ctx, userID, sessionID, prompt)
 }
 
 func anyToString(v any) string {

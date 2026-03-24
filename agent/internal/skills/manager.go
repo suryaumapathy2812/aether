@@ -213,6 +213,21 @@ func (m *Manager) Read(name string) (string, error) {
 	return parsed.Body, nil
 }
 
+func (m *Manager) ReadRaw(name string) (string, error) {
+	meta, ok := m.Get(name)
+	if !ok {
+		return "", ErrNotFound
+	}
+	raw, err := os.ReadFile(meta.Location)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return string(raw), nil
+}
+
 func (m *Manager) Search(query string) []SkillMeta {
 	query = normalizeName(query)
 	if query == "" {

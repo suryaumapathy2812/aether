@@ -23,7 +23,12 @@ func (t *WikipediaSearchTool) Execute(ctx context.Context, call tools.Call) tool
 		return tools.Fail("Wikipedia search failed: "+err.Error(), nil)
 	}
 	out := fmt.Sprintf("%s\n%s\n\n%s\n\n%s", s.Title, s.Description, s.Extract, s.PageURL)
-	return tools.Success(out, map[string]any{"title": s.Title, "url": s.PageURL})
+	return tools.Success(out, map[string]any{
+		"title":       s.Title,
+		"description": s.Description,
+		"extract":     s.Extract,
+		"url":         s.PageURL,
+	})
 }
 
 func (t *WikipediaGetArticleTool) Definition() tools.Definition {
@@ -38,7 +43,12 @@ func (t *WikipediaGetArticleTool) Execute(ctx context.Context, call tools.Call) 
 		return tools.Fail("Wikipedia article fetch failed: "+err.Error(), nil)
 	}
 	out := fmt.Sprintf("%s\n%s\n\n%s\n\n%s", s.Title, s.Description, s.Extract, s.PageURL)
-	return tools.Success(out, map[string]any{"title": s.Title, "url": s.PageURL})
+	return tools.Success(out, map[string]any{
+		"title":       s.Title,
+		"description": s.Description,
+		"extract":     s.Extract,
+		"url":         s.PageURL,
+	})
 }
 
 var (

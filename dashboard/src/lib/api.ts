@@ -852,6 +852,19 @@ export async function removeSkill(name: string) {
   });
 }
 
+export async function getSkillContent(name: string) {
+  return api<{ content: string }>(
+    `${agentPath("/skills/content")}?name=${encodeURIComponent(name)}`,
+  );
+}
+
+export async function fetchMarketplaceSkillContent(source: string, skillId: string) {
+  const params = new URLSearchParams({ source, skillId });
+  const res = await fetch(`/api/skills/content?${params.toString()}`);
+  if (!res.ok) return { content: "" };
+  return res.json() as Promise<{ content: string }>;
+}
+
 // ── Chat sessions ──
 
 export interface ChatSession {
@@ -886,6 +899,31 @@ export async function getChatSession(sessionId: string) {
     session: ChatSession;
     messages: Array<{ id: number; role?: string; content: unknown; created_at?: string }>;
   }>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`);
+}
+
+export async function getPendingQuestions(sessionId: string) {
+  return api<{
+    questions: Array<{
+      id?: string;
+      session_id?: string;
+      tool_call_id?: string;
+      question?: string;
+      header?: string;
+      kind?: string;
+      options?: Array<{ label?: string; description?: string }>;
+      allow_custom?: boolean;
+      fields?: Array<{
+        name?: string;
+        label?: string;
+        type?: string;
+        required?: boolean;
+        placeholder?: string;
+        options?: string[];
+      }>;
+      submit_label?: string;
+      created_at?: string;
+    }>;
+  }>(`${agentPath("/questions")}?session_id=${encodeURIComponent(sessionId)}`);
 }
 
 export async function updateChatSessionTitle(sessionId: string, title: string) {
@@ -1115,12 +1153,17 @@ export async function claimPairingCode(code: string): Promise<{ status: string }
 
 // ── Questions (ask_user tool) ──
 
-export async function replyToQuestion(questionId: string, answers: string[]) {
+export type QuestionReplyPayload = {
+  answers?: string[];
+  data?: Record<string, unknown>;
+};
+
+export async function replyToQuestion(questionId: string, payload: QuestionReplyPayload) {
   return api<{ ok: boolean }>(
     `${agentPath("/questions")}/${encodeURIComponent(questionId)}/reply`,
     {
       method: "POST",
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify(payload),
     },
   );
 }
