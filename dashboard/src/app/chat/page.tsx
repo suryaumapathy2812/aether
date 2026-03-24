@@ -3,7 +3,12 @@
 import { Suspense, useEffect, useRef, useState, Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
-import { createChatSession, replyToQuestion, rejectQuestion } from "@/lib/api";
+import {
+  createChatSession,
+  replyToQuestion,
+  rejectQuestion,
+  type QuestionReplyPayload,
+} from "@/lib/api";
 import { chatRuntime, useChatSessionRuntime } from "@/lib/chat-runtime";
 import {
   Conversation,
@@ -12,14 +17,8 @@ import {
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import {
-  Tool,
-  ToolHeader,
-  ToolContent,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
 import { QuestionDock } from "@/components/ai-elements/question-dock";
+import { getToolRenderer, type ToolPartRecord } from "@/components/ai-elements/tool-renderer";
 import {
   PromptInput,
   PromptInputTextarea,
@@ -229,6 +228,31 @@ function ChatView({
 
   // ── Derived state ────────────────────────────────────────────────────
   const isStreaming = status === "streaming";
+  const hasInlineQuestion = Boolean(
+    questionRequest?.toolCallId &&
+      messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.parts.some((part) => {
+            if (!String(part.type).startsWith("tool-")) return false;
+            const candidate = part as Record<string, unknown>;
+            return (
+              String(candidate.toolCallId || "") === questionRequest.toolCallId &&
+              String(candidate.state || "") === "input-available"
+            );
+          }),
+      ),
+  );
+
+  async function handleQuestionSubmit(payload: QuestionReplyPayload) {
+    if (!questionRequest) return;
+    await replyToQuestion(questionRequest.id, payload);
+  }
+
+  async function handleQuestionDismiss() {
+    if (!questionRequest) return;
+    await rejectQuestion(questionRequest.id);
+  }
 
   const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
   const latestAssistantMessage = [...messages].reverse().find((m) => m.role === "assistant");
@@ -277,7 +301,7 @@ function ChatView({
             </div>
 
             {/* Status label */}
-            <p className="text-[13px] text-white/70 tracking-wide select-none">
+            <p className="text-sm text-white/70 tracking-wide select-none">
               {voiceState === "recording"
                 ? `Listening · ${recordingSeconds}s`
                 : voiceState === "thinking"
@@ -355,13 +379,13 @@ function ChatView({
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
         {/*<div className="absolute top-5 right-5 z-10 flex items-center gap-2">
           {loopLabel && (
-            <span className="text-[10px] text-muted-foreground/60 animate-pulse">{loopLabel}</span>
+            <span className="text-xs text-muted-foreground/60 animate-pulse">{loopLabel}</span>
           )}
           <StatusOrb status={isStreaming ? "thinking" : "connected"} size={8} />
         </div>*/}
 
         <Conversation className="flex-1 min-h-0">
-          <ConversationContent className="gap-5 px-6 pt-16 pb-4 max-w-180 mx-auto w-full">
+          <ConversationContent className="gap-10 px-6 pt-20 pb-4 max-w-180 mx-auto w-full">
             {loading ? (
               <div className="flex items-center justify-center h-full">
                 <p className="text-muted-foreground/60 text-xs">loading...</p>
@@ -397,41 +421,17 @@ function ChatView({
                         }
                         default:
                           if (part.type.startsWith("tool-")) {
-                            const toolPart = part as {
-                              type: string;
-                              state: string;
-                              toolCallId: string;
-                              input?: unknown;
-                              output?: unknown;
-                              errorText?: string;
-                            };
+                            const toolPart = part as ToolPartRecord;
                             const toolName = toolPart.type.replace("tool-", "");
-                            const inputObj = toolPart.input as Record<string, unknown> | undefined;
-                            const subtitle = inputObj
-                              ? ((inputObj.query ||
-                                  inputObj.message_id ||
-                                  inputObj.name ||
-                                  inputObj.summary ||
-                                  "") as string)
-                              : "";
+                            const Renderer = getToolRenderer(toolName);
                             return (
-                              <Tool key={key}>
-                                <ToolHeader
-                                  type={toolPart.type as "tool-invocation"}
-                                  state={toolPart.state as "input-available"}
-                                  title={subtitle ? `${toolName} ${subtitle}` : toolName}
-                                />
-                                <ToolContent>
-                                  <ToolInput input={toolPart.input} />
-                                  {(toolPart.state === "output-available" ||
-                                    toolPart.state === "output-error") && (
-                                    <ToolOutput
-                                      output={toolPart.output}
-                                      errorText={toolPart.errorText}
-                                    />
-                                  )}
-                                </ToolContent>
-                              </Tool>
+                              <Renderer
+                                key={key}
+                                part={toolPart}
+                                questionRequest={questionRequest}
+                                onQuestionSubmit={handleQuestionSubmit}
+                                onQuestionDismiss={handleQuestionDismiss}
+                              />
                             );
                           }
                           return null;
@@ -456,29 +456,21 @@ function ChatView({
 
         {error && (
           <div className="max-w-180 mx-auto w-full px-6 py-1">
-            <p className="text-[11px] text-red-400/80">{error}</p>
+            <p className="text-sm text-red-400/80">{error}</p>
           </div>
         )}
 
         <div className="max-w-180 mx-auto w-full px-6 pb-5 pt-2">
-          {questionRequest ? (
+          {questionRequest && !hasInlineQuestion ? (
             <QuestionDock
               request={questionRequest}
-              onSubmit={async (answers) => {
-                try {
-                  await replyToQuestion(questionRequest.id, answers);
-                } catch {
-                  /* ignore */
-                }
-              }}
-              onDismiss={async () => {
-                try {
-                  await rejectQuestion(questionRequest.id);
-                } catch {
-                  /* ignore */
-                }
-              }}
+              onSubmit={handleQuestionSubmit}
+              onDismiss={handleQuestionDismiss}
             />
+          ) : questionRequest && hasInlineQuestion ? (
+            <div className="rounded-lg border border-border bg-accent/20 px-3 py-2 text-xs text-muted-foreground">
+              Respond to the inline prompt above to continue.
+            </div>
           ) : (
             <PromptInput onSubmit={handleSubmit}>
               <PromptInputBody>
@@ -499,12 +491,13 @@ function ChatView({
                     variant="default"
                     className="rounded-full"
                   >
-                    <AudioLines className="size-4" />
+                    <AudioLines className="size-5" />
                   </PromptInputButton>
                 ) : (
                   <PromptInputSubmit
                     status={isStreaming ? "streaming" : "ready"}
                     disabled={!input.trim() && !isStreaming}
+                    size="icon-sm"
                     onStop={() => {
                       if (!sessionId) return;
                       void chatRuntime.cancelTurn(sessionId);
