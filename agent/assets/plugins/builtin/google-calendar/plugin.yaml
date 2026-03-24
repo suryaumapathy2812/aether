@@ -1,169 +1,31 @@
 name: google-calendar
 display_name: Google Calendar
-description: View, search, and create calendar events
+description: Google Calendar scheduling and event management
 version: 1.0.0
-
+plugin_type: sensor
 auth:
   type: oauth2
   provider: google
   token_url: https://oauth2.googleapis.com/token
+  use_basic_auth: false
   auto_refresh: true
   refresh_interval: 3000
   scopes:
-    - https://www.googleapis.com/auth/calendar.readonly
+    - https://www.googleapis.com/auth/calendar
     - https://www.googleapis.com/auth/calendar.events
   config_fields:
-    - key: account_email
-      label: Google Account
+    - key: client_id
+      label: Client ID
       type: text
-      required: false
-
-webhook:
-  protocol: http
-  pubsub_topic: aether-calendar
-  setup_tool: setup_calendar_watch
-  handle_tool: handle_calendar_event
-  renew_interval: 518400
-
+      required: true
+    - key: client_secret
+      label: Client Secret
+      type: password
+      required: true
 api:
   base_url: https://www.googleapis.com/calendar/v3
-
-tools:
-  - name: upcoming_events
-    description: Get upcoming Google Calendar events.
-    status_text: Loading calendar events...
-    http:
-      method: GET
-      path: /calendars/primary/events
-      query:
-        singleEvents: "true"
-        orderBy: startTime
-    parameters:
-      - name: days
-        type: integer
-        required: false
-        default: 7
-        description: Number of days ahead to look
-      - name: max_results
-        type: integer
-        required: false
-        default: 10
-        map_to: query.maxResults
-    response:
-      extract: items
-
-  - name: search_events
-    description: Search Google Calendar events by keyword.
-    status_text: Searching calendar...
-    http:
-      method: GET
-      path: /calendars/primary/events
-      query:
-        singleEvents: "true"
-        orderBy: startTime
-    parameters:
-      - name: query
-        type: string
-        required: true
-        map_to: query.q
-      - name: max_results
-        type: integer
-        required: false
-        default: 10
-        map_to: query.maxResults
-    response:
-      extract: items
-
-  - name: get_event
-    description: Get a Google Calendar event by id.
-    status_text: Loading event...
-    http:
-      method: GET
-      path: /calendars/primary/events/{{event_id}}
-    parameters:
-      - name: event_id
-        type: string
-        required: true
-
-  - name: create_event
-    description: Create a Google Calendar event.
-    status_text: Creating event...
-    http:
-      method: POST
-      path: /calendars/primary/events
-    parameters:
-      - name: summary
-        type: string
-        required: true
-        description: Event title
-      - name: start_time
-        type: string
-        required: true
-        description: Start time in RFC3339 format
-      - name: end_time
-        type: string
-        required: true
-        description: End time in RFC3339 format
-      - name: description
-        type: string
-        required: false
-      - name: location
-        type: string
-        required: false
-    transform: calendar_event
-    response:
-      success_msg: Event created.
-
-  - name: update_event
-    description: Update fields on an existing Google Calendar event.
-    status_text: Updating event...
-    http:
-      method: PATCH
-      path: /calendars/primary/events/{{event_id}}
-    parameters:
-      - name: event_id
-        type: string
-        required: true
-      - name: summary
-        type: string
-        required: false
-        description: Updated event title
-      - name: start_time
-        type: string
-        required: false
-        description: Updated start time in RFC3339 format
-      - name: end_time
-        type: string
-        required: false
-        description: Updated end time in RFC3339 format
-      - name: description
-        type: string
-        required: false
-      - name: location
-        type: string
-        required: false
-    transform: calendar_event_update
-    response:
-      success_msg: Event updated.
-
-  - name: delete_event
-    description: Delete a Google Calendar event.
-    status_text: Deleting event...
-    http:
-      method: DELETE
-      path: /calendars/primary/events/{{event_id}}
-    parameters:
-      - name: event_id
-        type: string
-        required: true
-    response:
-      success_msg: Event deleted.
-
-  - name: list_calendars
-    description: List available Google Calendars.
-    status_text: Loading calendars...
-    http:
-      method: GET
-      path: /users/me/calendarList
-    response:
-      extract: items
+webhook:
+  protocol: pubsub
+  event_field: eventType
+  supported_events:
+    - sync

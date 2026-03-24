@@ -1,63 +1,83 @@
-# Weather Plugin
+# Weather API
 
-Current weather conditions and multi-day forecasts for any location.
+## Authentication
+- **Env var**: None required (uses Open-Meteo free API)
+- **Credentials**: No credentials needed
+- **Base URL**: `https://api.open-meteo.com/v1`
 
-## Core Workflow
+Open-Meteo is a free, open-source weather API. No API key or authentication required.
 
-```
-"What's the weather?"       →  current_weather
-"Will it rain this week?"   →  weather_forecast
-```
+## Geocoding — Resolve City Name to Coordinates
 
-Two tools, straightforward choice: `current_weather` for right now, `weather_forecast` for upcoming days.
+The weather endpoints require latitude/longitude. First, resolve a city name:
 
-## Decision Rules
-
-**Which tool:**
-- "What's the weather?" / "Is it raining?" / today's conditions → `current_weather`
-- "Will it rain tomorrow?" → `weather_forecast` with `days=2` (today + tomorrow)
-- "What's the weather this week?" → `weather_forecast` with `days=7`
-- "Should I bring an umbrella Friday?" → `weather_forecast` covering that date
-
-**Location handling:**
-- The parameter is `location` (not `city`). It accepts city names, regions, or countries.
-- If the user doesn't specify a location, check memory for their known location first.
-- If no location is in memory, ask: "Which city would you like the weather for?"
-- For ambiguous names, add the country: "Paris, France" vs "Paris, Texas"
-
-**Presenting weather:**
-- Be conversational: "It's 32°C and sunny in Chennai right now, feels like 36°C with high humidity"
-- Translate raw numbers into meaning: "wind at 25 km/h" → "breezy"
-- Highlight notable conditions: heavy rain, extreme heat/cold, storms, poor visibility.
-- For forecasts, lead with the most important info: "Rain expected Thursday and Friday, clear for the weekend"
-
-**Practical advice:**
-- Offer relevant suggestions for notable conditions:
-  - Heavy rain → "You might want an umbrella"
-  - Extreme heat → "Stay hydrated, avoid going out midday"
-  - Storm → "Might be best to stay indoors"
-
-**Units:**
-- Use Celsius (°C) by default.
-- Switch to Fahrenheit if the user is in the US or explicitly asks.
-
-## Example Workflows
-
-**User: "What's the weather in Chennai?"**
-```
-1. current_weather location="Chennai"
-2. "It's 34°C and partly cloudy in Chennai right now. Feels like 38°C with 78% humidity and a light breeze."
+```bash
+curl -s "https://geocoding-api.open-meteo.com/v1/search?name=Chennai&count=1"
 ```
 
-**User: "Will it rain this week?"**
-```
-1. (Check memory for user's city if not specified)
-2. weather_forecast location="Chennai" days=7
-3. "Rain is expected Wednesday through Friday. The weekend looks clear with temperatures around 30°C."
+Response contains `results[0].latitude` and `results[0].longitude`.
+
+## Current Weather
+
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=13.08&longitude=80.27&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto"
 ```
 
-**User: "I'm traveling to London next week"**
+### Key Response Fields
+- `current.temperature_2m` — temperature in °C
+- `current.apparent_temperature` — feels-like temperature
+- `current.relative_humidity_2m` — humidity percentage
+- `current.weather_code` — WMO weather code (see below)
+- `current.wind_speed_10m` — wind speed in km/h
+
+### WMO Weather Codes
+| Code | Condition |
+|------|-----------|
+| 0 | Clear sky |
+| 1-3 | Mainly clear, partly cloudy, overcast |
+| 45, 48 | Fog |
+| 51-55 | Drizzle |
+| 61-65 | Rain |
+| 71-75 | Snow |
+| 80-82 | Rain showers |
+| 95-99 | Thunderstorm |
+
+## Weather Forecast (Multi-Day)
+
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=13.08&longitude=80.27&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&timezone=auto&forecast_days=7"
 ```
-1. weather_forecast location="London, UK" days=7
-2. "London next week: mostly cloudy, 8-14°C. Rain expected Tuesday and Wednesday. Pack a light jacket and umbrella."
+
+### Query Parameters
+- `forecast_days` — number of days (1-16, default 7)
+- `daily=temperature_2m_max,temperature_2m_min` — daily high/low
+- `daily=precipitation_sum` — total precipitation in mm
+- `daily=weather_code` — dominant weather condition
+- `timezone=auto` — use local timezone of the coordinates
+
+### Combining Current + Forecast
+
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=13.08&longitude=80.27&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=5"
 ```
+
+## Hourly Forecast
+
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=13.08&longitude=80.27&hourly=temperature_2m,precipitation_probability,weather_code&timezone=auto&forecast_days=2"
+```
+
+## Units
+
+Default units: temperature in °C, wind in km/h, precipitation in mm.
+
+To use Fahrenheit and mph:
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=40.71&longitude=-74.01&current=temperature_2m&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto"
+```
+
+## Error Handling
+- **400 Bad Request**: Invalid coordinates or parameters — check latitude/longitude values
+- **No auth errors**: API is free, no 401/403 possible
+- **Rate limits**: Open-Meteo allows 10,000 requests/day on the free tier
+- If geocoding returns no results, the city name is misspelled or ambiguous — try adding country code

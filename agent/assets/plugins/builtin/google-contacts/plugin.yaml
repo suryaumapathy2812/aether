@@ -19,39 +19,3 @@ auth:
 
 api:
   base_url: https://people.googleapis.com/v1
-
-tools:
-  - name: search_contacts
-    description: Search Google Contacts by name or email.
-    status_text: Searching contacts...
-    http:
-      method: GET
-      path: /people:searchContacts
-      query:
-        readMask: names,emailAddresses,phoneNumbers,organizations
-    parameters:
-      - name: query
-        type: string
-        required: true
-        map_to: query.query
-      - name: page_size
-        type: integer
-        required: false
-        default: 10
-        map_to: query.pageSize
-    response:
-      extract: results
-
-  - name: get_contact
-    description: Get a specific Google Contact by resource name.
-    status_text: Loading contact...
-    http:
-      method: GET
-      path: /{{resource_name}}
-      query:
-        personFields: names,emailAddresses,phoneNumbers,organizations,addresses,birthdays,biographies
-    parameters:
-      - name: resource_name
-        type: string
-        required: true
-        description: "Contact resource name (e.g. people/c12345)"

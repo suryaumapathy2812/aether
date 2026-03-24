@@ -1,75 +1,103 @@
-# Brave Search Plugin
+# Brave Search API
 
-Real-time web search for current events, live information, news, and anything beyond training knowledge.
+## Authentication
+- **Env var**: `$BRAVE_SEARCH_API_KEY`
+- **Credentials**: Pass `credentials=["brave-search"]` to the execute tool
+- **Base URL**: `https://api.search.brave.com/res/v1`
+- **Header**: `X-Subscription-Token: $BRAVE_SEARCH_API_KEY`
+- Get your API key at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com)
 
-## Core Workflow
+## Web Search
 
-Pick the right search tool based on what the user needs:
-
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/web/search?q=iPhone+16+price+India&count=10&country=IN"
 ```
-Factual question / current info  →  brave_web_search
-Breaking news / recent events    →  news_search
-Complex research / synthesis     →  llm_context_search
+
+### Query Parameters
+- `q` — search query (required)
+- `count` — number of results (1-20, default 10)
+- `offset` — pagination offset (for getting more results)
+- `country` — country code for localized results (e.g., `IN`, `US`, `GB`)
+- `search_lang` — language code (e.g., `en`, `hi`, `fr`)
+- `safesearch` — `off`, `moderate`, `strict`
+- `freshness` — `pd` (past day), `pw` (past week), `pm` (past month), `py` (past year)
+
+### Response Fields
+- `web.results[].title` — page title
+- `web.results[].url` — page URL
+- `web.results[].description` — snippet text
+- `web.results[].age` — relative age (e.g., "2 days ago")
+- `web.results[].language` — detected language
+
+## News Search
+
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/news/search?q=India+budget+2026&count=10&country=IN&freshness=pw"
 ```
 
-## Decision Rules
+### News-Specific Response Fields
+- `results[].title` — headline
+- `results[].url` — article URL
+- `results[].description` — summary
+- `results[].age` — time since publication
+- `results[].source` — news source name
+- `results[].thumbnail.src` — thumbnail image URL
+- `results[].breaking` — whether it's a breaking story
 
-**Which tool to use:**
-- "What is X?" / "How does X work?" / "Latest on X" / prices / specs → `brave_web_search`
-- "What's in the news about X?" / "Recent news on X" / breaking events → `news_search`
-- Complex research where you need to synthesize from multiple sources → `llm_context_search` (returns clean, cited text passages optimized for building an answer)
+## Image Search
 
-**When to search at all:**
-- Anything with "current", "today", "latest", "now", "recent", "price of"
-- Questions about events after your training cutoff
-- Specific product specs, documentation, or API details that may have changed
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/images/search?q=Golden+Gate+Bridge&count=5"
+```
 
-**Country code:**
-- Default is `IN` for India-localized results.
-- Use `US` or other codes only if the user explicitly asks about results from another region.
+## Video Search
 
-**Presenting results:**
-- Don't dump all URLs. Synthesize the key information from snippets and cite the source.
-- For news: lead with the most important headline, then summarize 2-3 others.
-- For web search: extract the answer from snippets, include the URL for the most relevant result.
-- If no results, try rephrasing with different keywords.
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/videos/search?q=React+tutorial+2026&count=5"
+```
+
+## Suggest (Autocomplete)
+
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/suggest?q=how+to+learn"
+```
+
+## Spell Check
+
+```bash
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/spellcheck?q=recieve+a+package"
+```
 
 ## Pagination
 
-Brave Search supports an `offset` parameter. For comprehensive research:
-1. First call with `count=20`
-2. Follow-up with `offset=20` if the user needs more
+For comprehensive results beyond the first page:
+```bash
+# First page
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/web/search?q=machine+learning&count=20"
+
+# Second page
+curl -s -H "X-Subscription-Token: $BRAVE_SEARCH_API_KEY" \
+  "https://api.search.brave.com/res/v1/web/search?q=machine+learning&count=20&offset=20"
+```
 
 ## Rate Limits
-
 | Plan | Limit |
-|---|---|
-| Free tier | 2,000 queries/month (1 query/second) |
+|------|-------|
+| Free | 2,000 queries/month, 1 req/sec |
 | Basic | 20,000 queries/month |
 | Pro | 100,000+ queries/month |
 
-On the free tier, be conservative — one search per request is usually enough. On paid tiers, parallel calls (web + news simultaneously) are fine.
-
-## Example Workflows
-
-**User: "What's the latest news on the Indian budget?"**
-```
-1. news_search query="India budget 2026" country="IN"
-2. "Here's the latest:
-   - [Headline 1] — key figures and dates
-   - [Headline 2] — summary
-   - [Headline 3] — summary
-   [source link]"
-```
-
-**User: "What's the price of iPhone 16 in India?"**
-```
-1. brave_web_search query="iPhone 16 price India 2026" country="IN"
-2. "The iPhone 16 starts at ₹79,900 in India (source: Apple India). [link]"
-```
-
-**User: "Explain how React Server Components work"**
-```
-1. llm_context_search query="React Server Components how they work"
-2. Synthesize a clear explanation from the retrieved context passages, citing sources.
-```
+## Error Handling
+- **401 Unauthorized**: Invalid or missing API key — check `$BRAVE_SEARCH_API_KEY`
+- **403 Forbidden**: API key doesn't have access to this endpoint
+- **422 Unprocessable Entity**: Invalid query parameters
+- **429 Rate Limited**: Exceeded rate limit — wait and retry, respect `Retry-After` header
+- **Empty results**: Rephrase the query with different keywords or broaden the search
+- On free tier, limit to 1 search per user request to conserve quota

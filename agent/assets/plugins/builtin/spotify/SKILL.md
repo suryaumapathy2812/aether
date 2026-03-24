@@ -1,72 +1,127 @@
-# Spotify Plugin
+# Spotify API
 
-Control music playback, search for tracks, and view listening history.
+## Authentication
+- **Env var**: `$SPOTIFY_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["spotify"]` to the execute tool
+- **Base URL**: `https://api.spotify.com/v1`
+- Token auto-refreshes on 401 response
 
-## Core Workflow
-
-Playing a specific song requires searching first to get the Spotify URI, then queuing it:
-
+## Get Currently Playing
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/currently-playing"
 ```
-"Play [song]"  →  search_spotify → queue_track → skip_track (to jump to it)
-"What's playing?" → now_playing
-"Pause" / "Resume" → play_pause (action="pause" or action="play")
-"Next" / "Skip" → skip_track
-"What did I listen to?" → recent_tracks
+Returns `null` if nothing is playing. When active, response includes `item.name`, `item.artists[].name`, `item.album.name`.
+
+## Get Playback State
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player"
+```
+Returns device info, progress, shuffle/repeat state.
+
+## Play / Resume
+```bash
+# Resume playback
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/play"
+
+# Play specific track
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"uris": ["spotify:track:TRACK_ID"]}' \
+  "https://api.spotify.com/v1/me/player/play"
+
+# Play a playlist
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"context_uri": "spotify:playlist:PLAYLIST_ID"}' \
+  "https://api.spotify.com/v1/me/player/play"
 ```
 
-## Decision Rules
+## Pause
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/pause"
+```
 
-**Playing a specific song or artist:**
-- Search first with `search_spotify` to get the Spotify URI, then `queue_track` to add it, then `skip_track` to jump to it immediately.
-- Be specific in search queries: "Blinding Lights The Weeknd" works better than just "Weeknd".
-- Show the user what you found before queuing if the match might not be exact.
+## Skip Track
+```bash
+# Next
+curl -s -X POST \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/next"
 
-**Resuming playback:**
-- If the user says "play music" or "play something" without specifying a track, check `now_playing` first. If something is already loaded, just resume with `play_pause action="play"`.
+# Previous
+curl -s -X POST \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/previous"
+```
 
-**Checking state:**
-- Call `now_playing` when you're unsure of the current playback state before issuing play/pause commands.
+## Set Volume
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/volume?volume_percent=50"
+```
 
-**Presenting results:**
-- Be natural: "Now playing: Blinding Lights by The Weeknd (2:34 / 3:22)"
-- For search results, show track name and artist. Skip album unless relevant.
-- For `recent_tracks`, group by day if showing many results.
+## Set Shuffle / Repeat
+```bash
+# Shuffle on/off
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/shuffle?state=true"
 
-**Error handling:**
-- 403 error → Spotify Premium is required for playback control. Tell the user.
-- 404 error → No active device. Tell the user: "Open Spotify on a device first, then I can control it."
-- No search results → Try a broader search or ask the user to clarify.
+# Repeat: off, track, context
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/repeat?state=track"
+```
+
+## Search
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/search?q=artist:Daft+Punk&type=track&limit=5"
+```
+Types: `track`, `artist`, `album`, `playlist`, `show`, `episode`
+
+## Get User Playlists
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/playlists?limit=20"
+```
+
+## Recently Played
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/recently-played?limit=10"
+```
+
+## Transfer Playback to Device
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"device_ids": ["DEVICE_ID"]}' \
+  "https://api.spotify.com/v1/me/player"
+```
+
+## Get Available Devices
+```bash
+curl -s -H "Authorization: Bearer $SPOTIFY_TOKEN" \
+  "https://api.spotify.com/v1/me/player/devices"
+```
 
 ## Rate Limits
+- ~180 requests per minute per user
+- No official hard limit published
 
-| Quota | Limit |
-|---|---|
-| Requests per 30 seconds | ~180 (rolling window) |
-
-Spotify is lenient. Playback control has no practical limit. If you get a 429, wait the `Retry-After` seconds before retrying.
-
-## Example Workflows
-
-**User: "Play Daft Punk"**
-```
-1. search_spotify query="Daft Punk" type="track" limit=5
-2. queue_track uri="spotify:track:..." (top result)
-3. skip_track → jump to it immediately
-4. "Now playing: Get Lucky by Daft Punk"
-```
-
-**User: "What's playing?"**
-```
-1. now_playing
-2. "You're listening to Blinding Lights by The Weeknd (2:34 / 3:22)"
-```
-
-**User: "What did I listen to earlier?"**
-```
-1. recent_tracks limit=10
-2. "Here's what you've been listening to today:
-   - Get Lucky — Daft Punk
-   - Blinding Lights — The Weeknd
-   - Starboy — The Weeknd
-   ..."
-```
+## Error Handling
+- **401**: Token expired — auto-refreshes, retry
+- **403**: Insufficient scope for this action
+- **404**: Resource not found or no active device
+- **429**: Rate limited — respect `Retry-After` header

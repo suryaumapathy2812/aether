@@ -6,34 +6,43 @@ import (
 	"testing"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 )
 
-type pluginEchoTool struct{}
+type echoTool struct{}
 
-func (t *pluginEchoTool) Definition() Definition {
-	return Definition{Name: "plugin_echo", Description: "echo", Parameters: []Param{{Name: "v", Type: "string", Required: true}}}
+func (t *echoTool) Definition() Definition {
+	return Definition{Name: "echo", Description: "echo", Parameters: []Param{{Name: "v", Type: "string", Required: true}}}
 }
 
-func (t *pluginEchoTool) Execute(ctx context.Context, call Call) Result {
+func (t *echoTool) Execute(ctx context.Context, call Call) Result {
 	return Success(call.Args["v"].(string), nil)
 }
 
-func TestOrchestratorBlocksDisabledPlugin(t *testing.T) {
+func TestOrchestratorExecutesTool(t *testing.T) {
 	store := openToolStore(t)
 	defer store.Close()
-	ctx := context.Background()
-	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "brave-search", DisplayName: "Brave", Enabled: false}); err != nil {
-		t.Fatalf("upsert plugin: %v", err)
-	}
-	pm := plugins.NewManager(plugins.ManagerOptions{})
-	pm.AttachDirectory(t.TempDir(), plugins.SourceBuiltin)
+
 	r := NewRegistry()
-	_ = r.Register(&pluginEchoTool{}, "brave-search")
-	o := NewOrchestrator(r, ExecContext{Store: store, Plugins: pm})
-	res := o.Execute(ctx, "plugin_echo", map[string]any{"v": "x"}, "c1")
+	_ = r.Register(&echoTool{}, "")
+	o := NewOrchestrator(r, ExecContext{Store: store})
+	res := o.Execute(context.Background(), "echo", map[string]any{"v": "hello"}, "c1")
+	if res.Error {
+		t.Fatalf("expected success, got error: %s", res.Output)
+	}
+	if res.Output != "hello" {
+		t.Fatalf("expected 'hello', got %q", res.Output)
+	}
+}
+
+func TestOrchestratorUnknownTool(t *testing.T) {
+	store := openToolStore(t)
+	defer store.Close()
+
+	r := NewRegistry()
+	o := NewOrchestrator(r, ExecContext{Store: store})
+	res := o.Execute(context.Background(), "nonexistent", map[string]any{}, "c1")
 	if !res.Error {
-		t.Fatalf("expected disabled plugin block")
+		t.Fatalf("expected error for unknown tool")
 	}
 }
 

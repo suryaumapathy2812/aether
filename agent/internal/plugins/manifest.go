@@ -37,19 +37,6 @@ func parseManifest(raw []byte) (PluginManifest, error) {
 	if m.Webhook == nil {
 		m.Webhook = map[string]any{}
 	}
-	if m.Tools == nil {
-		m.Tools = []ManifestTool{}
-	}
-
-	// Normalize tool definitions.
-	for i := range m.Tools {
-		m.Tools[i].Name = strings.TrimSpace(m.Tools[i].Name)
-		m.Tools[i].Description = strings.TrimSpace(m.Tools[i].Description)
-		m.Tools[i].HTTP.Method = strings.ToUpper(strings.TrimSpace(m.Tools[i].HTTP.Method))
-		if m.Tools[i].HTTP.Method == "" {
-			m.Tools[i].HTTP.Method = "GET"
-		}
-	}
 
 	return m, nil
 }

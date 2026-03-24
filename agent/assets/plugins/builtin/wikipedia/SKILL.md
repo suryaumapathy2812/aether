@@ -1,49 +1,94 @@
-# Wikipedia Plugin
+# Wikipedia API
 
-Search Wikipedia and read articles for encyclopedic knowledge on any topic.
+## Authentication
+- **Env var**: None required (Wikipedia API is free)
+- **Credentials**: No credentials needed
+- **Base URL**: `https://en.wikipedia.org/api/rest_v1` (REST API)
+- **Alternative**: `https://en.wikipedia.org/w/api.php` (Action API for search)
 
-## Core Workflow
+## Search Articles
 
-```
-"Who is X?" / "What is X?"  →  wikipedia_search
-Need the full article        →  wikipedia_get_article (requires exact title)
-```
+Use the Action API for search (the REST API doesn't have a search endpoint):
 
-`wikipedia_search` returns a concise summary with the article title and link. Use `wikipedia_get_article` only when you need more depth than the search summary provides — it requires the exact article title (which you get from `wikipedia_search`).
-
-## Decision Rules
-
-**When to use Wikipedia:**
-- Established facts, historical events, well-known people/places, scientific concepts, organizations
-- Anything encyclopedic where a stable, well-sourced answer exists
-
-**When NOT to use Wikipedia:**
-- Current events or recent news → use web search instead
-- Topics too new or niche for Wikipedia to cover
-- Calculations or conversions → use Wolfram Alpha
-
-**Presenting results:**
-- Paraphrase and highlight key facts naturally. Don't just paste the raw extract.
-- Keep it conversational: "Sundar Pichai is the CEO of Google and Alphabet. Born in Chennai, he joined Google in 2004 and became CEO in 2015."
-- Include the article link if the user might want to read more.
-
-## Example Workflows
-
-**User: "Who is Sundar Pichai?"**
-```
-1. wikipedia_search query="Sundar Pichai"
-2. "Sundar Pichai is the CEO of Google and Alphabet. Born in Chennai, India, he joined Google in 2004, led the development of Chrome, and became CEO in 2015."
+```bash
+curl -s "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=Sundar+Pichai&srlimit=5&format=json"
 ```
 
-**User: "Tell me about the history of the Mughal Empire"**
-```
-1. wikipedia_search query="Mughal Empire"
-2. Summarize the key points from the extract
-3. If the user wants more depth: wikipedia_get_article title="Mughal Empire"
+### Response Fields
+- `query.search[].title` — article title
+- `query.search[].snippet` — highlighted snippet (contains HTML `<span>` tags)
+- `query.search[].pageid` — page ID
+
+## Get Article Summary
+
+The REST API provides a clean summary for any article by title:
+
+```bash
+curl -s "https://en.wikipedia.org/api/rest_v1/page/summary/Sundar_Pichai"
 ```
 
-**User: "What's the capital of Nagaland?"**
+### Response Fields
+- `title` — article title
+- `extract` — plain-text summary (first few paragraphs)
+- `description` — short description (e.g., "CEO of Google and Alphabet")
+- `content_urls.desktop.page` — full article URL
+- `thumbnail.source` — thumbnail image URL (if available)
+
+### Handling Redirects
+If the title has spaces, replace them with underscores:
+```bash
+curl -s "https://en.wikipedia.org/api/rest_v1/page/summary/Mughal_Empire"
 ```
-1. wikipedia_search query="Nagaland"
-2. "The capital of Nagaland is Kohima."
+
+The response `type` field indicates:
+- `standard` — normal article
+- `disambiguation` — disambiguation page (multiple topics match)
+- `no-exists` — page not found
+
+## Get Full Article Content
+
+For the full HTML or wikitext content:
+
+```bash
+# HTML content
+curl -s "https://en.wikipedia.org/api/rest_v1/page/html/Sundar_Pichai"
+
+# Mobile-optimized HTML
+curl -s "https://en.wikipedia.org/api/rest_v1/page/mobile-html/Sundar_Pichai"
 ```
+
+## Get Article Links and Categories
+
+```bash
+# Links from the article
+curl -s "https://en.wikipedia.org/w/api.php?action=query&titles=Sundar_Pichai&prop=links&pllimit=50&format=json"
+
+# Categories of the article
+curl -s "https://en.wikipedia.org/w/api.php?action=query&titles=Sundar_Pichai&prop=categories&cllimit=50&format=json"
+```
+
+## Get Related Articles
+
+```bash
+curl -s "https://en.wikipedia.org/api/rest_v1/page/related/Sundar_Pichai"
+```
+
+Returns up to 20 related articles with summaries.
+
+## Multi-Language Support
+
+Replace `en` with the language code:
+```bash
+# French Wikipedia
+curl -s "https://fr.wikipedia.org/api/rest_v1/page/summary/Paris"
+
+# Hindi Wikipedia
+curl -s "https://hi.wikipedia.org/api/rest_v1/page/summary/दिल्ली"
+```
+
+## Error Handling
+- **404 Not Found**: Article doesn't exist — try searching first with the Action API
+- **400 Bad Request**: Malformed title — ensure URL encoding for special characters
+- **Disambiguation pages**: Check `type: "disambiguation"` in summary response — refine the search term
+- **Rate limits**: Wikipedia allows ~200 requests/second per IP. Be respectful; cache results when possible.
+- No authentication errors possible — API is fully open

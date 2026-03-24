@@ -1,62 +1,99 @@
-# Google Contacts Plugin
+# Google Contacts API
 
-Search and look up contact information from the user's Google Contacts.
+## Authentication
+- **Env var**: `$GOOGLE_CONTACTS_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-contacts"]` to the execute tool
+- **Base URL**: `https://people.googleapis.com/v1`
+- Token auto-refreshes on 401 response
 
-## Core Workflow
+## Search Contacts
 
-Contact lookups are usually one or two steps:
-
-```
-search_contacts → present result
-                → get_contact (only if more detail needed)
-```
-
-`search_contacts` handles name, email, and phone lookups and returns the most common fields (name, emails, phones, organization). Use `get_contact` only when you need fields not in the search result — like birthday, full address, or notes.
-
-## Decision Rules
-
-**Looking up contacts:**
-- If multiple contacts match (e.g., searching "John"), list them and ask which one the user means.
-- If no contacts match, say "I couldn't find anyone named [X] in your contacts" and suggest trying a different spelling.
-
-**Presenting contact info:**
-- Be natural: "Priya's email is priya@example.com" — not raw field names.
-- Only share the specific detail the user asked for. Don't dump the entire contact record.
-- If a contact has multiple emails (work/personal), mention both and ask which to use.
-
-**Privacy:**
-- Don't volunteer contact details the user didn't ask for. If they ask for a phone number, give just the phone number.
-
-**Cross-plugin integration:**
-- When the user says "email Priya", use `search_contacts` to find Priya's email address, then hand off to the Gmail plugin to compose.
-- When the user says "call Priya", look up her phone number and present it.
-
-## Rate Limits
-
-| Quota | Limit |
-|---|---|
-| Read requests per minute per user | 90 |
-| Concurrent requests | 10 per user |
-
-Contact API rate limits are tighter than other Google APIs. Avoid more than 5-10 parallel requests. A single lookup is usually one call.
-
-## Example Workflows
-
-**User: "What's Priya's email?"**
-```
-1. search_contacts query="Priya"
-2. "Priya Sharma's email is priya.sharma@company.com"
-   (If multiple Priyas: "I found 2 contacts named Priya — which one?")
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/people:searchContacts?query=Priya&readMask=names,emailAddresses,phoneNumbers,organizations&pageSize=10"
 ```
 
-**User: "Email Rahul about the project update"**
-```
-1. search_contacts query="Rahul" → get email address
-2. Hand off to Gmail plugin to compose the email to rahul@example.com
+### Query Parameter
+- `query` — matches against name, email, phone number, and organization
+- `readMask` — comma-separated fields to return (required)
+- `pageSize` — max results (default 10, max 30)
+
+### Available Read Mask Fields
+- `names` — display name
+- `emailAddresses` — email addresses
+- `phoneNumbers` — phone numbers
+- `organizations` — company/title
+- `addresses` — physical addresses
+- `birthdays` — birthday
+- `photos` — profile photo URL
+- `biographies` — notes/bio
+
+## Get a Specific Contact
+
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/people/{RESOURCE_NAME}?personFields=names,emailAddresses,phoneNumbers,organizations,addresses,birthdays"
 ```
 
-**User: "What's the phone number for Acme Corp?"**
+### Resource Name Format
+Contact resource names look like `people/c1234567890`. Get this from search results.
+
+## List All Contacts
+
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/people/me/connections?readMask=names,emailAddresses,phoneNumbers&pageSize=100"
 ```
-1. search_contacts query="Acme Corp"
-2. "Acme Corp's main number is +1-555-0100 (contact: John Smith, Sales Director)"
+
+### Pagination
+Response includes `nextPageToken` when more contacts exist:
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/people/me/connections?readMask=names,emailAddresses,phoneNumbers&pageSize=100&pageToken=NEXT_PAGE_TOKEN"
 ```
+
+## Response Structure
+
+### Search Response
+```json
+{
+  "results": [
+    {
+      "person": {
+        "resourceName": "people/c1234567890",
+        "names": [{"displayName": "Priya Sharma", "givenName": "Priya"}],
+        "emailAddresses": [{"value": "priya@example.com", "type": "work"}],
+        "phoneNumbers": [{"value": "+1-555-0100", "type": "mobile"}],
+        "organizations": [{"name": "Acme Corp", "title": "Engineer"}]
+      }
+    }
+  ]
+}
+```
+
+### Multiple Matches
+When a search returns multiple contacts, iterate through `results[]` and present options to the user.
+
+## List Contact Groups
+
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/contactGroups?pageSize=50"
+```
+
+## Get Contacts in a Group
+
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+  "https://people.googleapis.com/v1/contactGroups/{GROUP_ID}?maxMembers=100"
+```
+
+Then fetch each member's details with `people/{RESOURCE_NAME}`.
+
+## Error Handling
+- **401 Unauthorized**: Token expired — system auto-refreshes, retry the command
+- **403 Forbidden**: Insufficient scopes — ensure `contacts.readonly` scope is granted
+- **404 Not Found**: Contact resource name is invalid or contact was deleted
+- **429 Rate Limited**: Contact API allows ~90 read requests/minute per user — wait and retry
+- **Empty results**: Contact doesn't exist — suggest trying a different spelling or search term
+- If search returns too many results, refine the query with more specific terms

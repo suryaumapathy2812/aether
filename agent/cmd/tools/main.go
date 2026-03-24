@@ -13,7 +13,6 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
-	plugintools "github.com/suryaumapathy2812/core-ai/agent/internal/tools/plugins"
 )
 
 type cfg struct {
@@ -100,7 +99,6 @@ func bootstrap(c cfg) (*tools.Orchestrator, *tools.Registry, *db.Store, func()) 
 
 	registry := tools.NewRegistry()
 	must(builtin.RegisterAll(registry))
-	must(plugintools.RegisterAvailable(registry, pluginsManager))
 	orchestrator := tools.NewOrchestrator(registry, tools.ExecContext{
 		WorkingDir: workspace,
 		Store:      store,

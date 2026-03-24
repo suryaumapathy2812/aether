@@ -1,94 +1,119 @@
-# Google Drive Plugin
+# Google Drive API
 
-Search, browse, and organize files in the user's Google Drive.
+## Authentication
+- **Env var**: `$GOOGLE_DRIVE_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-drive"]` to the execute tool
+- **Base URL**: `https://www.googleapis.com/drive/v3`
+- Token auto-refreshes on 401 response
 
-## Core Workflow
+## Search Files
 
-Drive operations always start by finding the file ID, then acting on it:
-
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files?q=name+contains+'Q4+report'&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=20"
 ```
-Find file ID                    →  Act on it
-──────────────────────             ─────────────────────
-search_drive (by name/content)     get_file_info (metadata)
-list_drive_files (browse folder)   create_folder
-list_shared_drives                 
+
+### Search Query Syntax
+- `name contains 'budget'` — name contains text
+- `fullText contains 'quarterly'` — content search
+- `mimeType='application/vnd.google-apps.document'` — Google Docs only
+- `mimeType='application/vnd.google-apps.spreadsheet'` — Sheets only
+- `mimeType='application/vnd.google-apps.folder'` — Folders only
+- `'folderId' in parents` — files inside a specific folder
+- `trashed=false` — exclude trashed files (recommended)
+- Combine with `and`/`or`: `name contains 'report' and mimeType='application/vnd.google-apps.document'`
+
+## List Files in a Folder
+
+```bash
+# Root folder
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files?q='root'+in+parents+and+trashed=false&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=50"
+
+# Specific folder
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files?q='FOLDER_ID'+in+parents+and+trashed=false&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=50"
 ```
 
-## Autonomy Rules
+## Get File Metadata
 
-**Never ask the user to provide search terms.** When they say "find the document about X", search for X. When they say "find my files", start with `list_drive_files` at root. When the request is vague, try multiple search strategies:
-- Try the exact phrase first, then individual keywords
-- If no results, try broader terms or synonyms
-- Try at least 2-3 different queries before reporting nothing found
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files/{FILE_ID}?fields=id,name,mimeType,size,createdTime,modifiedTime,owners,sharingUser,webViewLink,webContentLink,parents,permissions"
+```
 
-## Decision Rules
+### Key Response Fields
+- `name` — file name
+- `mimeType` — file type (e.g., `application/vnd.google-apps.document`)
+- `size` — file size in bytes (not set for Google Docs/Sheets)
+- `owners[].emailAddress` — file owner
+- `webViewLink` — link to open in browser
+- `modifiedTime` — last modified timestamp
 
-**Finding files:**
-- Use `search_drive` when the user wants to find a file by name or content — it's faster than browsing.
-- Use `list_drive_files` when the user wants to browse a specific folder's contents. Pass `folder_id="root"` for the top-level Drive.
-- Get the file ID from search/list results before calling `get_file_info`.
+## Download File Content
 
-**File details:**
-- `get_file_info` returns full metadata: size, created/modified dates, owner, sharing settings, MIME type, and web link.
-- Keep file listings concise: name, type, and last modified date. Include the web link when referencing a specific file.
+```bash
+# For Google Docs (export as PDF or other format)
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files/{FILE_ID}/export?mimeType=application/pdf" -o document.pdf
 
-**Creating folders:**
-- Confirm the folder name and location with the user before creating.
-- `create_folder` defaults to the Drive root if no `parent_id` is specified.
+# For binary files (images, PDFs, etc.)
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files/{FILE_ID}?alt=media" -o downloaded_file
+```
 
-**Shared drives:**
-- Use `list_shared_drives` when the user asks about team drives or shared workspaces.
+## Create Folder
 
-**File deletion:**
-- This plugin cannot delete files (by design — deletion is irreversible). If the user asks to delete, explain: "I can't delete files for security reasons, but I can help you find and organize them."
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "New Folder",
+    "mimeType": "application/vnd.google-apps.folder",
+    "parents": ["root"]
+  }' \
+  "https://www.googleapis.com/drive/v3/files"
+```
 
-**Presenting results:**
-- Show the most relevant files first with name, type, and modified date.
-- For search results, offer to get more details on specific files.
-- Always include the web link so the user can open files directly.
+## Upload File
 
-**Error handling:**
-- If a file isn't found, suggest different search terms.
-- 403 errors usually mean the Drive API isn't enabled or the user needs to reconnect the plugin.
+```bash
+# 1. Get upload URL
+UPLOAD_URL="https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+
+# 2. Upload with metadata
+curl -s -X POST \
+  -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  -F 'metadata={"name":"uploaded.txt","parents":["FOLDER_ID"]};type=application/json' \
+  -F 'file=@./local-file.txt;type=text/plain' \
+  "$UPLOAD_URL"
+```
+
+## List Shared Drives
+
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/drives?fields=drives(id,name)"
+```
 
 ## Pagination
 
-The Drive API returns up to 100 files per request (max 1000). Responses include `nextPageToken` when more files exist — pass it as `page_token` in follow-up calls.
+Responses include `nextPageToken` when more results exist:
+```bash
+curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files?q=...&pageSize=100&pageToken=NEXT_PAGE_TOKEN"
+```
+
+Max `pageSize` is 100. Up to 1,000 files per query with pagination.
 
 ## Rate Limits
+- 12,000 queries per minute
+- 25 concurrent requests per user
 
-| Quota | Limit |
-|---|---|
-| Queries per minute per user | 600 |
-| Concurrent requests | 25 per user |
-
-Safe to make 20+ parallel file info reads.
-
-## Example Workflows
-
-**User: "Find the Q4 report"**
-```
-1. search_drive query="Q4 report"
-2. "I found 3 files matching 'Q4 report':
-   - Q4 Report 2025.docx (modified Jan 15) [link]
-   - Q4 Report Draft.docx (modified Dec 20) [link]
-   - Q4 Revenue Report.xlsx (modified Jan 10) [link]
-   Which one do you need?"
-```
-
-**User: "What's in my Drive root folder?"**
-```
-1. list_drive_files folder_id="root" max_results=20
-2. List files grouped by type: "Your Drive root has 12 items:
-   Folders: Projects, Archive, Shared
-   Docs: Meeting Notes, Project Proposal
-   Sheets: Budget 2026, Expense Tracker
-   ..."
-```
-
-**User: "Who owns the budget spreadsheet?"**
-```
-1. search_drive query="budget spreadsheet" → get file_id
-2. get_file_info file_id="..."
-3. "The Budget 2026 spreadsheet is owned by priya@company.com, last modified on March 10. It's shared with 3 people. [link]"
-```
+## Error Handling
+- **401 Unauthorized**: Token expired — system auto-refreshes, retry the command
+- **403 Forbidden**: Drive API not enabled, or insufficient permissions/scopes
+- **404 Not Found**: File ID doesn't exist or was deleted
+- **429 Rate Limited**: Wait and retry
+- If search returns no results, try broader terms or `fullText contains` for content search

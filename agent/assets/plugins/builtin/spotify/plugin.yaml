@@ -1,8 +1,8 @@
 name: spotify
 display_name: Spotify
-description: Control playback, search music, and view listening history
+description: Spotify music and podcast control
 version: 1.0.0
-
+plugin_type: actuator
 auth:
   type: oauth2
   provider: spotify
@@ -13,114 +13,19 @@ auth:
   scopes:
     - user-read-playback-state
     - user-modify-playback-state
+    - user-read-currently-playing
     - user-read-recently-played
-  config_fields: []
-
+    - user-library-read
+    - playlist-read-private
+    - playlist-read-collaborative
+  config_fields:
+    - key: client_id
+      label: Client ID
+      type: text
+      required: true
+    - key: client_secret
+      label: Client Secret
+      type: password
+      required: true
 api:
   base_url: https://api.spotify.com/v1
-
-tools:
-  - name: now_playing
-    description: Get the currently playing track on Spotify.
-    status_text: Checking now playing...
-    http:
-      method: GET
-      path: /me/player/currently-playing
-
-  - name: play_pause
-    description: Play or pause Spotify playback.
-    status_text: Updating playback...
-    http:
-      method: PUT
-      path: /me/player/play
-    parameters:
-      - name: action
-        type: string
-        required: false
-        default: play
-        description: "play or pause"
-
-  - name: skip_track
-    description: Skip to next track on Spotify.
-    status_text: Skipping track...
-    http:
-      method: POST
-      path: /me/player/next
-    response:
-      success_msg: Skipped to next track.
-
-  - name: previous_track
-    description: Skip to the previous track on Spotify.
-    status_text: Going to previous track...
-    http:
-      method: POST
-      path: /me/player/previous
-    response:
-      success_msg: Returned to previous track.
-
-  - name: set_volume
-    description: Set Spotify playback volume.
-    status_text: Setting volume...
-    http:
-      method: PUT
-      path: /me/player/volume
-    parameters:
-      - name: volume_percent
-        type: integer
-        required: true
-        description: Volume percentage from 0 to 100
-        map_to: query.volume_percent
-    response:
-      success_msg: Volume updated.
-
-  - name: search_spotify
-    description: Search for tracks, artists, or albums on Spotify.
-    status_text: Searching Spotify...
-    http:
-      method: GET
-      path: /search
-    parameters:
-      - name: query
-        type: string
-        required: true
-        map_to: query.q
-      - name: type
-        type: string
-        required: false
-        default: track
-        map_to: query.type
-      - name: limit
-        type: integer
-        required: false
-        default: 10
-        map_to: query.limit
-
-  - name: recent_tracks
-    description: Get recently played tracks on Spotify.
-    status_text: Loading recent tracks...
-    http:
-      method: GET
-      path: /me/player/recently-played
-    parameters:
-      - name: limit
-        type: integer
-        required: false
-        default: 10
-        map_to: query.limit
-    response:
-      extract: items
-
-  - name: queue_track
-    description: Add a track to the Spotify play queue.
-    status_text: Adding to queue...
-    http:
-      method: POST
-      path: /me/player/queue
-    parameters:
-      - name: uri
-        type: string
-        required: true
-        description: "Spotify track URI (e.g. spotify:track:...)"
-        map_to: query.uri
-    response:
-      success_msg: Track added to queue.

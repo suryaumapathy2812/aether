@@ -8,24 +8,3 @@ auth:
 
 api:
   base_url: https://en.wikipedia.org/api/rest_v1
-
-tools:
-  - name: wikipedia_search
-    description: Search Wikipedia for a topic and get a summary.
-    status_text: Searching Wikipedia...
-    class: WikipediaSearchTool
-    parameters:
-      - name: query
-        type: string
-        description: Search query or topic name
-        required: true
-
-  - name: wikipedia_get_article
-    description: Get a full Wikipedia article by title.
-    status_text: Loading article...
-    class: WikipediaGetArticleTool
-    parameters:
-      - name: title
-        type: string
-        description: Exact Wikipedia article title
-        required: true

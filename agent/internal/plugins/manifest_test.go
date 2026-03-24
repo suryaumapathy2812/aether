@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseManifest(t *testing.T) {
-	raw := []byte("name: gmail\ndisplay_name: Gmail\ndescription: Mail\nversion: 1.0.0\nplugin_type: sensor\nauth:\n  type: oauth2\ntools:\n  - class: SendTool\n")
+	raw := []byte("name: gmail\ndisplay_name: Gmail\ndescription: Mail\nversion: 1.0.0\nplugin_type: sensor\nauth:\n  type: oauth2\n")
 	m, err := parseManifest(raw)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -14,8 +14,8 @@ func TestParseManifest(t *testing.T) {
 	if m.Name != "gmail" || m.DisplayName != "Gmail" {
 		t.Fatalf("unexpected manifest: %#v", m)
 	}
-	if len(m.Tools) != 1 {
-		t.Fatalf("expected 1 tool")
+	if m.Auth.Type != "oauth2" {
+		t.Fatalf("expected oauth2 auth type, got %s", m.Auth.Type)
 	}
 }
 

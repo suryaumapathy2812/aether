@@ -16,32 +16,3 @@ auth:
       type: password
       required: false
       description: Your ExchangeRate-API key from exchangerate-api.com. Leave blank to use the free open fallback.
-
-tools:
-  - name: wolfram_query
-    description: Query Wolfram Alpha for mathematical computations, science facts, or data lookups.
-    status_text: Computing...
-    class: WolframQueryTool
-    parameters:
-      - name: query
-        type: string
-        description: Natural language query for Wolfram Alpha
-        required: true
-
-  - name: currency_convert
-    description: Convert between currencies using live exchange rates.
-    status_text: Converting currency...
-    class: CurrencyConvertTool
-    parameters:
-      - name: amount
-        type: string
-        description: Amount to convert (e.g. "100")
-        required: true
-      - name: from
-        type: string
-        description: Source currency code (e.g. USD, EUR, INR)
-        required: true
-      - name: to
-        type: string
-        description: Target currency code
-        required: true

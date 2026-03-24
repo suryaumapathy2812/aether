@@ -24,7 +24,9 @@ type PluginMeta struct {
 }
 
 // PluginManifest is the parsed representation of a plugin.yaml file.
-// It describes a plugin's identity, auth requirements, API configuration, and tools.
+// It describes a plugin's identity, auth requirements, and API configuration.
+// Tools are no longer defined in the manifest — agents use the execute tool with
+// SKILL.md documentation to interact with APIs dynamically.
 type PluginManifest struct {
 	Name        string         `yaml:"name" json:"name"`
 	DisplayName string         `yaml:"display_name" json:"display_name"`
@@ -34,7 +36,6 @@ type PluginManifest struct {
 	Auth        ManifestAuth   `yaml:"auth" json:"auth"`
 	API         ManifestAPI    `yaml:"api" json:"api"`
 	Webhook     map[string]any `yaml:"webhook" json:"webhook"`
-	Tools       []ManifestTool `yaml:"tools" json:"tools"`
 	Extra       map[string]any `yaml:",inline" json:"extra,omitempty"`
 	Location    string         `yaml:"-" json:"location"`
 	Source      SourceType     `yaml:"-" json:"source"`
@@ -75,43 +76,6 @@ type ManifestAPI struct {
 	BaseURL string            `yaml:"base_url" json:"base_url,omitempty"`
 	Headers map[string]string `yaml:"headers" json:"headers,omitempty"`
 	Timeout int               `yaml:"timeout" json:"timeout,omitempty"` // seconds, default 20
-}
-
-// ManifestTool defines a single tool exposed by a plugin.
-type ManifestTool struct {
-	Name        string           `yaml:"name" json:"name"`
-	Description string           `yaml:"description" json:"description"`
-	StatusText  string           `yaml:"status_text" json:"status_text,omitempty"`
-	HTTP        ManifestHTTP     `yaml:"http" json:"http"`
-	Parameters  []ManifestParam  `yaml:"parameters" json:"parameters,omitempty"`
-	Response    ManifestResponse `yaml:"response" json:"response,omitempty"`
-	Transform   string           `yaml:"transform" json:"transform,omitempty"` // named transform for complex request building
-	Class       string           `yaml:"class" json:"class,omitempty"`         // legacy: Go class name (deprecated, for migration)
-}
-
-// ManifestHTTP describes the HTTP call a tool makes.
-type ManifestHTTP struct {
-	Method  string            `yaml:"method" json:"method"`             // GET | POST | PUT | PATCH | DELETE
-	Path    string            `yaml:"path" json:"path"`                 // e.g. /messages/{{message_id}}
-	Query   map[string]string `yaml:"query" json:"query,omitempty"`     // static query params
-	Body    map[string]any    `yaml:"body" json:"body,omitempty"`       // static body fields
-	Headers map[string]string `yaml:"headers" json:"headers,omitempty"` // per-tool headers
-}
-
-// ManifestParam defines a parameter for a tool.
-type ManifestParam struct {
-	Name        string `yaml:"name" json:"name"`
-	Type        string `yaml:"type" json:"type"` // string | integer | boolean | array | object
-	Description string `yaml:"description" json:"description,omitempty"`
-	Required    bool   `yaml:"required" json:"required"`
-	Default     any    `yaml:"default" json:"default,omitempty"`
-	MapTo       string `yaml:"map_to" json:"map_to,omitempty"` // query.paramName | path.paramName | body.fieldName
-}
-
-// ManifestResponse describes how to process the HTTP response.
-type ManifestResponse struct {
-	Extract    string `yaml:"extract" json:"extract,omitempty"`         // JSON field to extract (e.g. "messages", "items")
-	SuccessMsg string `yaml:"success_msg" json:"success_msg,omitempty"` // override success message
 }
 
 type InstallResult struct {

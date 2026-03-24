@@ -1,57 +1,90 @@
-# Wolfram Alpha & Currency Plugin
+# Wolfram Alpha & Currency API
 
-Precise mathematical computations, scientific queries, and live currency conversion.
+## Authentication
 
-## Core Workflow
+### Wolfram Alpha (Short Answers API)
+- **Env var**: `$WOLFRAM_APP_ID`
+- **Credentials**: Pass `credentials=["wolfram"]` to the execute tool
+- **Base URL**: `https://api.wolframalpha.com/v1`
+- Get your App ID at [developer.wolframalpha.com](https://developer.wolframalpha.com)
 
-```
-Math / science / units / data  →  wolfram_query
-Currency conversion            →  currency_convert
-```
+### ExchangeRate-API (Currency Conversion)
+- **Env var**: `$EXCHANGERATE_API_KEY` (optional — free tier works without key)
+- **Base URL**: `https://v6.exchangerate-api.com/v6`
 
-## Decision Rules
+## Wolfram Alpha — Short Answers
 
-**When to use `wolfram_query`:**
-- Arithmetic, algebra, calculus, statistics
-- Unit conversions (km to miles, kg to lbs, °C to °F)
-- Scientific constants, nutritional data, physical properties
-- Date calculations, distance between cities
-- Cryptocurrency prices (Wolfram has live crypto data)
+Returns a plain-text answer for math, science, unit conversions, and factual queries:
 
-**When to use `currency_convert`:**
-- Any fiat currency conversion (USD→INR, EUR→GBP, etc.)
-- The `from` and `to` parameters use standard currency codes: USD, EUR, INR, GBP, AED, SGD, JPY, etc.
-
-**When NOT to use these tools:**
-- Simple mental math (2+2, 10% of 50) — just answer directly, no need for an API call.
-- General knowledge questions → use Wikipedia instead.
-- Live stock prices or current news → use web search instead.
-
-**When Wolfram Alpha is not configured:**
-- The tool will tell you if the App ID is missing. Suggest: "Add your Wolfram Alpha App ID in the plugin settings."
-- For simple arithmetic and common unit conversions, calculate it yourself as a fallback.
-
-**Presenting results:**
-- Be natural: "15% of 3,200 is 480" — not "Wolfram Alpha result: 480"
-- For currency: "100 USD is about ₹8,342 right now" — include the rate if helpful.
-- Round to sensible decimal places for the context.
-
-## Example Workflows
-
-**User: "What's 18% GST on ₹15,000?"**
-```
-1. wolfram_query query="18% of 15000"
-2. "18% GST on ₹15,000 is ₹2,700. Total with GST: ₹17,700."
+```bash
+curl -s "https://api.wolframalpha.com/v1/result?i=18%25+of+15000&appid=$WOLFRAM_APP_ID"
 ```
 
-**User: "How much is $1,000 in rupees?"**
-```
-1. currency_convert amount="1000" from="USD" to="INR"
-2. "$1,000 = ₹83,620 at today's rate (1 USD = ₹83.62)"
+### Query Examples
+```bash
+# Arithmetic
+curl -s "https://api.wolframalpha.com/v1/result?i=2%5E10&appid=$WOLFRAM_APP_ID"
+
+# Unit conversion
+curl -s "https://api.wolframalpha.com/v1/result?i=37+celsius+to+fahrenheit&appid=$WOLFRAM_APP_ID"
+
+# Date calculation
+curl -s "https://api.wolframalpha.com/v1/result?i=days+until+December+25&appid=$WOLFRAM_APP_ID"
+
+# Scientific constants
+curl -s "https://api.wolframalpha.com/v1/result?i=speed+of+light&appid=$WOLFRAM_APP_ID"
+
+# Distance between cities
+curl -s "https://api.wolframalpha.com/v1/result?i=distance+from+Chennai+to+London&appid=$WOLFRAM_APP_ID"
 ```
 
-**User: "Convert 37°C to Fahrenheit"**
+### URL-Encode Your Queries
+- Spaces → `+` or `%20`
+- Percent → `%25` (e.g., `18%` → `18%25`)
+- Special chars must be encoded
+
+## Wolfram Alpha — Full Results (XML/JSON)
+
+For multi-pod results with more detail:
+
+```bash
+curl -s "https://api.wolframalpha.com/v2/query?input=population+of+India&format=plaintext&output=JSON&appid=$WOLFRAM_APP_ID"
 ```
-1. wolfram_query query="37 degrees Celsius to Fahrenheit"
-2. "37°C = 98.6°F"
+
+### Response Structure
+- `queryresult.success` — whether the query was understood
+- `queryresult.pods[].title` — pod title (e.g., "Result", "Plot", "Statistics")
+- `queryresult.pods[].subpods[].plaintext` — the answer text
+
+## Currency Conversion (ExchangeRate-API)
+
+### Get Latest Rates for a Base Currency
+```bash
+curl -s "https://v6.exchangerate-api.com/v6/$EXCHANGERATE_API_KEY/latest/USD"
 ```
+
+### Convert Specific Amount
+```bash
+# Pair conversion
+curl -s "https://v6.exchangerate-api.com/v6/$EXCHANGERATE_API_KEY/pair/USD/INR/1000"
+```
+
+Response includes `conversion_rate` and `conversion_result`.
+
+### Free Tier (No API Key)
+```bash
+curl -s "https://open.er-api.com/v6/latest/USD"
+```
+
+The open endpoint has no auth but may have lower rate limits.
+
+### Supported Currency Codes
+Standard ISO 4217 codes: `USD`, `EUR`, `INR`, `GBP`, `AED`, `SGD`, `JPY`, `CAD`, `AUD`, `CHF`, `CNY`, etc.
+
+## Error Handling
+- **Wolfram 403**: Invalid or missing App ID — check `$WOLFRAM_APP_ID`
+- **Wolfram 501**: Query not understood — rephrase the query or try simpler terms
+- **ExchangeRate 401**: Invalid API key — check `$EXCHANGERATE_API_KEY`
+- **ExchangeRate 404**: Unsupported currency code — verify the ISO code
+- **Rate limits**: Wolfram free tier allows ~2,000 queries/month; ExchangeRate free tier allows 1,500 requests/month
+- If Wolfram is unavailable, fall back to direct calculation for simple arithmetic

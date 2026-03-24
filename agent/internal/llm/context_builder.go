@@ -387,25 +387,40 @@ func (b *ContextBuilder) pluginsPromptSection() string {
 	if len(enabled) == 0 {
 		return ""
 	}
-	lines := []string{"Active plugins:"}
+	lines := []string{"Available API services (use execute tool with credentials=[...]) to interact with these APIs:"}
 	for _, name := range enabled {
 		meta, ok := b.plugins.Get(name)
 		if !ok {
 			continue
 		}
-		line := fmt.Sprintf("- %s (%s): %s", meta.Name, meta.DisplayName, meta.Description)
+		envVar := envVarNameForPlugin(name)
+		line := fmt.Sprintf("- %s: %s. Env var: $%s", meta.DisplayName, meta.Description, envVar)
 		lines = append(lines, strings.TrimSpace(line))
-		if skillText, err := b.plugins.ReadSkill(name); err == nil {
-			snippet := compressSnippet(skillText, 900)
-			if snippet != "" {
-				lines = append(lines, fmt.Sprintf("  Plugin guidance: %s", snippet))
-			}
-		}
 	}
 	if len(lines) <= 1 {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// envVarNameForPlugin returns the environment variable name for a plugin's credential.
+// Keep in sync with internal/tools/builtin/execute_tool.go credentialEnvMapping.
+func envVarNameForPlugin(pluginName string) string {
+	mapping := map[string]string{
+		"gmail":           "GMAIL_ACCESS_TOKEN",
+		"google-calendar": "GOOGLE_CALENDAR_ACCESS_TOKEN",
+		"google-contacts": "GOOGLE_CONTACTS_ACCESS_TOKEN",
+		"google-drive":    "GOOGLE_DRIVE_ACCESS_TOKEN",
+		"spotify":         "SPOTIFY_ACCESS_TOKEN",
+		"weather":         "WEATHER_API_KEY",
+		"brave-search":    "BRAVE_SEARCH_API_KEY",
+		"wolfram":         "WOLFRAM_APP_ID",
+	}
+	if env, ok := mapping[pluginName]; ok && env != "" {
+		return env
+	}
+	upper := strings.ToUpper(strings.ReplaceAll(pluginName, "-", "_"))
+	return upper + "_ACCESS_TOKEN"
 }
 
 func (b *ContextBuilder) enabledPluginNames() []string {
@@ -433,18 +448,4 @@ func (b *ContextBuilder) enabledPluginNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func compressSnippet(input string, max int) string {
-	v := strings.TrimSpace(input)
-	if v == "" {
-		return ""
-	}
-	v = strings.ReplaceAll(v, "\r\n", "\n")
-	v = strings.ReplaceAll(v, "\n", " ")
-	v = strings.Join(strings.Fields(v), " ")
-	if len(v) <= max {
-		return v
-	}
-	return strings.TrimSpace(v[:max]) + "..."
 }

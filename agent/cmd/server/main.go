@@ -21,6 +21,7 @@ import (
 	channelshttp "github.com/suryaumapathy2812/core-ai/agent/internal/channels/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/channels/telegram"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/config"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/container"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/conversation"
 	convhttp "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/httpapi"
 	convws "github.com/suryaumapathy2812/core-ai/agent/internal/conversation/wsapi"
@@ -41,7 +42,6 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
 	toolhttp "github.com/suryaumapathy2812/core-ai/agent/internal/tools/httpapi"
-	plugintools "github.com/suryaumapathy2812/core-ai/agent/internal/tools/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/updater"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/ws"
 )
@@ -135,15 +135,25 @@ func main() {
 	if err := builtin.RegisterAll(toolRegistry); err != nil {
 		log.Fatalf("failed to register core tools: %v", err)
 	}
-	if err := plugintools.RegisterAvailable(toolRegistry, pluginsManager); err != nil {
-		log.Fatalf("failed to register plugin tools: %v", err)
-	}
 	workspaceDir := filepath.Join(cfg.AssetsDir, "workspace")
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		log.Fatalf("failed to create workspace dir: %v", err)
 	}
 	pushDeliverer := ws.NewPushDeliverer(store, pushSender, wsHub)
 	directValidator := agentauth.NewValidator(cfg.DirectTokenSecret, cfg.Channels.AgentID)
+
+	// ── Container manager (per-user sandbox) ──────────────────────────
+	var containerMgr *container.Manager
+	containerRuntimeHint := map[string]any{}
+	if container.DockerAvailable() {
+		containerCfg := container.DefaultConfig()
+		containerCfg.BaseDataDir = filepath.Join(cfg.AssetsDir, "users")
+		containerMgr = container.NewManager(containerCfg)
+		containerRuntimeHint["container_manager"] = containerMgr
+		log.Printf("container: Docker available, per-user sandbox enabled")
+	} else {
+		log.Printf("container: Docker not available, falling back to host execution")
+	}
 
 	// ── Question system & WS notify ────────────────────────────────
 	// Shared WS notify callback used by both the conversation handler and
@@ -163,6 +173,7 @@ func main() {
 		Plugins:       pluginsManager,
 		PushDeliverer: pushDeliverer,
 		QuestionAsker: questionAskerHolder,
+		RuntimeHints:  containerRuntimeHint,
 	})
 
 	// ── LLM & Media ────────────────────────────────────────────────
@@ -185,6 +196,7 @@ func main() {
 		PushDeliverer:     pushDeliverer,
 		QuestionAsker:     questionAskerHolder,
 		EmbeddingProvider: embeddingProvider,
+		RuntimeHints:      containerRuntimeHint,
 	})
 
 	mediaService, err := media.New(context.Background(), cfg.S3)
@@ -524,18 +536,8 @@ func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skill
 	}
 
 	totalTools := 0
-	builtinTools := 0
-	pluginTools := 0
 	if toolRegistry != nil {
-		names := toolRegistry.ToolNames()
-		totalTools = len(names)
-		for _, name := range names {
-			if toolRegistry.PluginForTool(name) == "" {
-				builtinTools++
-			} else {
-				pluginTools++
-			}
-		}
+		totalTools = len(toolRegistry.ToolNames())
 	}
 
 	cronTotal := 0
@@ -570,7 +572,7 @@ func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skill
 	}
 
 	log.Printf("startup report: skills=%d plugins=%d enabled_plugins=%d", skillCount, pluginCount, enabledPlugins)
-	log.Printf("startup report: tools_total=%d builtin_tools=%d plugin_tools=%d", totalTools, builtinTools, pluginTools)
+	log.Printf("startup report: tools_total=%d", totalTools)
 	log.Printf("startup report: cron_jobs_total=%d scheduled=%d retry=%d running=%d", cronTotal, cronScheduled, cronRetry, cronRunning)
 	log.Printf("startup report: cron_handlers token_rotators=%d watch_renewers=%d reminder_handler=%t", rotatorCount, renewerCount, reminderHandler)
 }
