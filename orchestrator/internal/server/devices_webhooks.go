@@ -427,41 +427,49 @@ func (s *Server) handlePubsubWebhookIngress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	userID := notificationData["user_id"]
-	if userID == "" {
-		userID = lookupUserByPlugin(r.Context(), s.db, pluginName)
+	// Fan-out: resolve ALL users with this email address in email_mappings
+	emailAddress := notificationData["emailAddress"]
+	userIDs := lookupUsersByEmail(r.Context(), s.db, emailAddress, pluginName)
+	if len(userIDs) == 0 {
+		// Fallback: check notification payload for user_id, then LIMIT 1 lookup
+		if uid := notificationData["user_id"]; uid != "" {
+			userIDs = []string{uid}
+		} else {
+			if uid := lookupUserByPlugin(r.Context(), s.db, pluginName); uid != "" {
+				userIDs = []string{uid}
+			}
+		}
 	}
-	if userID == "" {
-		log.Printf("pubsub: no user found for plugin %s", pluginName)
+	if len(userIDs) == 0 {
+		log.Printf("pubsub: no user found for plugin %s email=%s", pluginName, emailAddress)
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ignored"})
-		return
-	}
-
-	deviceID := lookupDeviceByPlugin(r.Context(), s.db, pluginName, userID)
-
-	target, err := s.resolveAgent(r.Context(), userID)
-	if err != nil {
-		log.Printf("pubsub: resolveAgent failed plugin=%s user=%s err=%v", pluginName, userID, err)
-		writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": false})
 		return
 	}
 
 	notificationBody, _ := json.Marshal(map[string]any{
 		"plugin":       pluginName,
 		"source":       "pubsub",
-		"device_id":    deviceID,
 		"notification": notificationData,
 		"attributes":   pushMsg.Message.Attributes,
 		"message_id":   pushMsg.Message.MessageID,
 	})
 
-	if err := s.forwardHookToAgent(r.Context(), target, pluginName, userID, deviceID, notificationBody, r.Header); err != nil {
-		log.Printf("pubsub: forward failed plugin=%s user=%s err=%v", pluginName, userID, err)
-		writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": false})
-		return
+	delivered := 0
+	for _, userID := range userIDs {
+		deviceID := lookupDeviceByPlugin(r.Context(), s.db, pluginName, userID)
+		target, err := s.resolveAgent(r.Context(), userID)
+		if err != nil {
+			log.Printf("pubsub: resolveAgent failed plugin=%s user=%s err=%v", pluginName, userID, err)
+			continue
+		}
+		if err := s.forwardHookToAgent(r.Context(), target, pluginName, userID, deviceID, notificationBody, r.Header); err != nil {
+			log.Printf("pubsub: forward failed plugin=%s user=%s err=%v", pluginName, userID, err)
+			continue
+		}
+		delivered++
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": true})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "downstream": delivered > 0, "users": len(userIDs), "delivered": delivered})
 }
 
 func decodePubsubData(encoded string) (map[string]string, error) {
@@ -487,6 +495,92 @@ func lookupUserByPlugin(ctx context.Context, db *pgxpool.Pool, pluginName string
 		return ""
 	}
 	return userID
+}
+
+func lookupUsersByEmail(ctx context.Context, db *pgxpool.Pool, email, pluginName string) []string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+	rows, err := db.Query(ctx, `
+		SELECT user_id FROM email_mappings WHERE email = $1 AND plugin_name = $2
+	`, email, pluginName)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var userIDs []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err == nil {
+			userIDs = append(userIDs, uid)
+		}
+	}
+	return userIDs
+}
+
+func (s *Server) handleEmailMappings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var req struct {
+			Email      string `json:"email"`
+			UserID     string `json:"user_id"`
+			PluginName string `json:"plugin_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		email := strings.TrimSpace(req.Email)
+		userID := strings.TrimSpace(req.UserID)
+		pluginName := strings.TrimSpace(req.PluginName)
+		if email == "" || userID == "" {
+			writeError(w, http.StatusBadRequest, "email and user_id are required")
+			return
+		}
+		if pluginName == "" {
+			pluginName = "google-workspace"
+		}
+		_, err := s.db.Exec(r.Context(), `
+			INSERT INTO email_mappings (email, user_id, plugin_name, created_at)
+			VALUES ($1, $2, $3, now())
+			ON CONFLICT (email, user_id) DO UPDATE SET plugin_name = $3, created_at = now()
+		`, email, userID, pluginName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		var req struct {
+			Email      string `json:"email"`
+			UserID     string `json:"user_id"`
+			PluginName string `json:"plugin_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		email := strings.TrimSpace(req.Email)
+		userID := strings.TrimSpace(req.UserID)
+		pluginName := strings.TrimSpace(req.PluginName)
+		if pluginName == "" {
+			pluginName = "google-workspace"
+		}
+		if email == "" || userID == "" {
+			writeError(w, http.StatusBadRequest, "email and user_id are required")
+			return
+		}
+		_, _ = s.db.Exec(r.Context(), `
+			DELETE FROM email_mappings WHERE email = $1 AND user_id = $2 AND plugin_name = $3
+		`, email, userID, pluginName)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+		return
+	}
+
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 func lookupDeviceByPlugin(ctx context.Context, db *pgxpool.Pool, pluginName, userID string) string {

@@ -128,7 +128,7 @@ func (t *RemoveSkillTool) Execute(ctx context.Context, call tools.Call) tools.Re
 }
 
 func (t *ListIntegrationsTool) Definition() tools.Definition {
-	return tools.Definition{Name: "list_integrations", Description: "List discovered integrations and status.", StatusText: "Listing integrations..."}
+	return tools.Definition{Name: "list_integrations", Description: "List enabled integrations and status.", StatusText: "Listing integrations..."}
 }
 
 func (t *ListIntegrationsTool) Execute(ctx context.Context, call tools.Call) tools.Result {
@@ -149,9 +149,15 @@ func (t *ListIntegrationsTool) Execute(ctx context.Context, call tools.Call) too
 				enabled = rec.Enabled
 			}
 		}
-		lines = append(lines, fmt.Sprintf("- %s [%s] enabled=%t %s", p.Name, p.Source, enabled, p.Description))
+		if !enabled {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", p.Name, p.Description))
 	}
-	return tools.Success(strings.Join(lines, "\n"), map[string]any{"count": len(items)})
+	if len(lines) == 0 {
+		return tools.Success("No integrations are enabled. Use the dashboard to connect services.", map[string]any{"count": 0})
+	}
+	return tools.Success(strings.Join(lines, "\n"), map[string]any{"count": len(lines)})
 }
 
 func (t *ReadIntegrationManifestTool) Definition() tools.Definition {

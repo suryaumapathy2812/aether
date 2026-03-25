@@ -812,6 +812,7 @@ export interface IntegrationInfo {
   enabled: boolean;
   connected: boolean;
   needs_reconnect: boolean;
+  oauth_env_configured: boolean;
 }
 
 export async function listIntegrations() {

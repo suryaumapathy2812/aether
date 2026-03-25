@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -500,6 +501,7 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 		rec := byName[p.Name]
 		authType, authProvider, fields := integrationAuthDetails(manifest)
 		fields = filterEnvBackedOAuthFields(fields, authProvider)
+		oauthEnvConfigured := authType == "oauth2" && hasEnvBackedCredentials(authProvider)
 		requiredKeys := []string{}
 		for _, f := range fields {
 			required, _ := f["required"].(bool)
@@ -525,17 +527,18 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 		needsReconnect, _ := strconv.ParseBool(strings.TrimSpace(rec.Config["needs_reconnect"]))
 
 		out = append(out, map[string]any{
-			"name":            p.Name,
-			"display_name":    p.DisplayName,
-			"description":     p.Description,
-			"auth_type":       authType,
-			"auth_provider":   authProvider,
-			"config_fields":   fields,
-			"installed":       true,
-			"integration_id":  p.Name,
-			"enabled":         rec.Enabled,
-			"connected":       connected,
-			"needs_reconnect": needsReconnect,
+			"name":                 p.Name,
+			"display_name":         p.DisplayName,
+			"description":          p.Description,
+			"auth_type":            authType,
+			"auth_provider":        authProvider,
+			"config_fields":        fields,
+			"installed":            true,
+			"integration_id":       p.Name,
+			"enabled":              rec.Enabled,
+			"connected":            connected,
+			"needs_reconnect":      needsReconnect,
+			"oauth_env_configured": oauthEnvConfigured,
 		})
 	}
 
@@ -753,6 +756,7 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 
 	if email, err := lookupOAuthAccountEmail(ctx, provider, tokenResp.AccessToken); err == nil && strings.TrimSpace(email) != "" {
 		cfg["account_email"] = email
+		registerEmailWithOrchestrator(email, name)
 	}
 
 	if err := h.store.SetPluginConfig(ctx, name, cfg); err != nil {
@@ -844,6 +848,11 @@ func filterEnvBackedOAuthFields(fields []map[string]any, provider string) []map[
 		filtered = append(filtered, field)
 	}
 	return filtered
+}
+
+func hasEnvBackedCredentials(provider string) bool {
+	envClientID, envClientSecret := oauthProviderEnvCredentials(provider)
+	return strings.TrimSpace(envClientID) != "" && strings.TrimSpace(envClientSecret) != ""
 }
 
 func oauthScopes(manifest integrations.PluginManifest) []string {
@@ -976,6 +985,42 @@ func lookupOAuthAccountEmail(ctx context.Context, provider, accessToken string) 
 	}
 	email, _ := obj["email"].(string)
 	return strings.TrimSpace(email), nil
+}
+
+func registerEmailWithOrchestrator(email, pluginName string) {
+	orchURL := strings.TrimSpace(os.Getenv("ORCHESTRATOR_URL"))
+	if orchURL == "" || strings.TrimSpace(email) == "" {
+		return
+	}
+	userID := strings.TrimSpace(os.Getenv("AETHER_USER_ID"))
+	if userID == "" {
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"email":       email,
+		"user_id":     userID,
+		"plugin_name": pluginName,
+	})
+	url := strings.TrimRight(orchURL, "/") + "/api/email-mappings"
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			log.Printf("email mapping: failed to create request: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("email mapping: request failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			log.Printf("email mapping: orchestrator responded %d", resp.StatusCode)
+		}
+	}()
 }
 
 func (h *Handler) ensureIntegrationInstalled(ctx context.Context, manifest integrations.PluginManifest) error {

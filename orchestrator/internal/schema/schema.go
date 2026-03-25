@@ -76,6 +76,16 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool) error {
 		CREATE INDEX IF NOT EXISTS idx_devices_token ON devices(token);
 		CREATE INDEX IF NOT EXISTS idx_devices_user_type ON devices(user_id, device_type, plugin_name);
 		CREATE INDEX IF NOT EXISTS idx_pair_requests_expires_at ON pair_requests(expires_at);
+
+		CREATE TABLE IF NOT EXISTS email_mappings (
+			email TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			plugin_name TEXT NOT NULL DEFAULT 'google-workspace',
+			created_at TIMESTAMPTZ DEFAULT now(),
+			PRIMARY KEY (email, user_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_email_mappings_email ON email_mappings(email);
 	`)
 	return err
 }

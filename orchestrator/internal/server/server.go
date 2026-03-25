@@ -104,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	registerRouteAliases(mux, []string{"/api/devices/", orchestratorAPIPrefix + "/devices/"}, s.requireIdentity(s.handleDeviceByID))
 	registerRouteAliases(mux, []string{"/api/hooks/pubsub/", orchestratorAPIPrefix + "/hooks/pubsub/"}, s.handlePubsubWebhookIngress)
 	registerRouteAliases(mux, []string{"/api/hooks/", orchestratorAPIPrefix + "/hooks/"}, s.handlePluginWebhookIngress)
+	registerRouteAliases(mux, []string{"/api/email-mappings", orchestratorAPIPrefix + "/email-mappings"}, s.handleEmailMappings)
 
 	registerRouteAliases(mux, []string{"/v1/", agentAPIPrefix + "/"}, s.requireIdentity(s.handleV1Proxy))
 	registerRouteAliases(mux, []string{"/api/memory/", "/api/preferences", "/api/preferences/", "/api/plugins", "/api/plugins/", "/api/skills", "/api/skills/", "/api/push/vapid-key", "/api/push/subscribe", "/api/push/test", "/api/channels", "/api/channels/"}, s.requireIdentity(s.proxyToAgentSamePath))

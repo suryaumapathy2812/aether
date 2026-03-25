@@ -153,6 +153,7 @@ export default function IntegrationDetailPage() {
 
   const fields = visibleFields();
   const isOAuth = integration.auth_type === "oauth2";
+  const hasOAuthEnv = integration.oauth_env_configured;
   const hasConfig = Object.keys(config).length > 0;
   const missingRequired = fields
     .filter((f) => f.required)
@@ -234,7 +235,7 @@ export default function IntegrationDetailPage() {
           </div>
         )}
 
-        {integration.installed && hasConfig && isOAuth && !integration.connected && (
+        {integration.installed && (hasConfig || hasOAuthEnv) && isOAuth && !integration.connected && (
           <div className="space-y-2">
             <h3 className="text-sm font-medium">Connect</h3>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
