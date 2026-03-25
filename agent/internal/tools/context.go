@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 )
 
@@ -56,14 +56,14 @@ type QuestionAsker interface {
 }
 
 type ExecContext struct {
-	WorkingDir    string
-	Store         *db.Store
-	Skills        *skills.Manager
-	Plugins       *plugins.Manager
-	PluginName    string
-	PluginState   plugins.PluginState
-	RuntimeHints  map[string]any
-	PushDeliverer PushDeliverer
+	WorkingDir       string
+	Store            *db.Store
+	Skills           *skills.Manager
+	Integrations     *integrations.Manager
+	IntegrationName  string
+	IntegrationState integrations.PluginState
+	RuntimeHints     map[string]any
+	PushDeliverer    PushDeliverer
 	// QuestionAsker enables the ask_user tool to pose blocking questions (optional).
 	QuestionAsker QuestionAsker
 	// EmbeddingProvider generates embeddings for semantic search (optional)

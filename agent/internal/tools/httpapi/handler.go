@@ -19,7 +19,7 @@ import (
 	agentauth "github.com/suryaumapathy2812/core-ai/agent/internal/auth"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
@@ -28,7 +28,7 @@ const maskedSecretValue = "__configured__"
 type Handler struct {
 	registry     *tools.Registry
 	orchestrator *tools.Orchestrator
-	plugins      *plugins.Manager
+	integrations *integrations.Manager
 	store        *db.Store
 	validator    *agentauth.Validator
 }
@@ -36,29 +36,29 @@ type Handler struct {
 type Options struct {
 	Registry     *tools.Registry
 	Orchestrator *tools.Orchestrator
-	Plugins      *plugins.Manager
+	Integrations *integrations.Manager
 	Store        *db.Store
 	Validator    *agentauth.Validator
 }
 
 func New(opts Options) *Handler {
-	return &Handler{registry: opts.Registry, orchestrator: opts.Orchestrator, plugins: opts.Plugins, store: opts.Store, validator: opts.Validator}
+	return &Handler{registry: opts.Registry, orchestrator: opts.Orchestrator, integrations: opts.Integrations, store: opts.Store, validator: opts.Validator}
 }
 
 func (h *Handler) EnsurePluginCronJobs(ctx context.Context) error {
-	if h == nil || h.plugins == nil {
+	if h == nil || h.integrations == nil {
 		return nil
 	}
-	recs, err := h.plugins.ListEnabled(ctx)
+	recs, err := h.integrations.ListEnabled(ctx)
 	if err != nil {
 		return err
 	}
 	for _, rec := range recs {
-		manifest, err := h.plugins.ReadManifest(rec.Name)
+		manifest, err := h.integrations.ReadManifest(rec.Name)
 		if err != nil {
 			continue
 		}
-		_ = h.ensurePluginCronJobs(ctx, manifest, rec.Config)
+		_ = h.ensureIntegrationCronJobs(ctx, manifest, rec.Config)
 	}
 	return nil
 }
@@ -69,11 +69,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/internal/tools/schemas/openai", h.handleOpenAISchemas)
 	mux.HandleFunc("/internal/tools/execute", h.handleExecute)
 	mux.HandleFunc("/internal/hooks/", h.handleInternalHooks)
-	mux.HandleFunc("/internal/plugins/status", h.handlePluginsStatus)
-	for _, path := range []string{"/agent/v1/plugins", "/api/plugins"} {
+	mux.HandleFunc("/internal/integrations/status", h.handlePluginsStatus)
+	for _, path := range []string{"/agent/v1/integrations", "/api/integrations"} {
 		mux.HandleFunc(path, h.handlePluginsAPI)
 	}
-	for _, path := range []string{"/agent/v1/plugins/", "/api/plugins/"} {
+	for _, path := range []string{"/agent/v1/integrations/", "/api/integrations/"} {
 		mux.HandleFunc(path, h.handlePluginsAPI)
 	}
 }
@@ -90,7 +90,7 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 
 	pluginName := strings.Trim(strings.TrimPrefix(r.URL.Path, "/internal/hooks/"), "/")
 	if pluginName == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "plugin name is required")
+		httputil.WriteError(w, http.StatusBadRequest, "integration name is required")
 		return
 	}
 	userID := strings.TrimSpace(r.Header.Get("X-Aether-User-ID"))
@@ -110,19 +110,19 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 
 	if rec, recErr := h.store.GetPlugin(r.Context(), pluginName); recErr == nil {
 		if !rec.Enabled {
-			httputil.WriteError(w, http.StatusConflict, "plugin is disabled")
+			httputil.WriteError(w, http.StatusConflict, "integration is disabled")
 			return
 		}
 	}
 
-	webhookReq := plugins.WebhookRequest{
+	webhookReq := integrations.WebhookRequest{
 		Plugin:   pluginName,
 		UserID:   userID,
 		DeviceID: strings.TrimSpace(r.Header.Get("X-Aether-Device-ID")),
 		Body:     body,
 		Header:   r.Header,
 	}
-	task, err := plugins.DefaultWebhookRegistry().BuildTask(r.Context(), webhookReq)
+	task, err := integrations.DefaultWebhookRegistry().BuildTask(r.Context(), webhookReq)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -145,11 +145,11 @@ func (h *Handler) handleInternalHooks(w http.ResponseWriter, r *http.Request) {
 
 	// Webhook events are acknowledged and logged. When the agent system
 	// is rebuilt, these will be routed to the LLM for processing.
-	log.Printf("webhook received: plugin=%s title=%s user=%s", pluginName, task.Title, userID)
+	log.Printf("webhook received: integration=%s title=%s user=%s", pluginName, task.Title, userID)
 	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{
-		"status": "acknowledged",
-		"plugin": pluginName,
-		"title":  task.Title,
+		"status":      "acknowledged",
+		"integration": pluginName,
+		"title":       task.Title,
 	})
 }
 
@@ -236,14 +236,14 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if h.plugins == nil || h.store == nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "plugins status unavailable")
+	if h.integrations == nil || h.store == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "integrations status unavailable")
 		return
 	}
 	ctx := r.Context()
-	_, _ = h.plugins.Discover(ctx)
+	_, _ = h.integrations.Discover(ctx)
 
-	pluginMetas := h.plugins.List()
+	pluginMetas := h.integrations.List()
 	storeRecords, err := h.store.ListPlugins(ctx)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -267,7 +267,7 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 	out := make([]item, 0, len(pluginMetas))
 	for _, meta := range pluginMetas {
 		rec := byName[meta.Name]
-		requiredKeys, _ := h.plugins.RequiredConfigKeys(meta.Name)
+		requiredKeys, _ := h.integrations.RequiredConfigKeys(meta.Name)
 		missing := []string{}
 		for _, key := range requiredKeys {
 			if strings.TrimSpace(rec.Config[key]) == "" {
@@ -287,7 +287,7 @@ func (h *Handler) handlePluginsStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"integrations": out, "count": len(out)})
 }
 
 func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
@@ -295,14 +295,14 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	if h.plugins == nil || h.store == nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "plugins api unavailable")
+	if h.integrations == nil || h.store == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "integrations api unavailable")
 		return
 	}
 	ctx := r.Context()
-	_, _ = h.plugins.Discover(ctx)
+	_, _ = h.integrations.Discover(ctx)
 
-	if r.URL.Path == "/api/plugins" || r.URL.Path == "/agent/v1/plugins" {
+	if r.URL.Path == "/api/integrations" || r.URL.Path == "/agent/v1/integrations" {
 		if r.Method != http.MethodGet {
 			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -311,7 +311,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/agent/v1/plugins/"), "/api/plugins/")
+	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/agent/v1/integrations/"), "/api/integrations/")
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
@@ -324,7 +324,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if err := h.store.SetPluginEnabled(ctx, name, false); err != nil {
 				if err == db.ErrNotFound {
-					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "integration not found")
 					return
 				}
 				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -351,21 +351,21 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		manifest, manifestErr := h.plugins.ReadManifest(name)
+		manifest, manifestErr := h.integrations.ReadManifest(name)
 		if manifestErr != nil {
-			httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+			httputil.WriteError(w, http.StatusNotFound, "integration not found")
 			return
 		}
 		if err := h.store.SetPluginEnabled(ctx, name, true); err != nil {
 			if err == db.ErrNotFound {
-				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "integration not found")
 				return
 			}
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if rec, err := h.store.GetPlugin(ctx, name); err == nil {
-			_ = h.ensurePluginCronJobs(ctx, manifest, rec.Config)
+			_ = h.ensureIntegrationCronJobs(ctx, manifest, rec.Config)
 		}
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "enabled"})
 		return
@@ -376,7 +376,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.store.SetPluginEnabled(ctx, name, false); err != nil {
 			if err == db.ErrNotFound {
-				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "integration not found")
 				return
 			}
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -390,15 +390,15 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			rec, err := h.store.GetPlugin(ctx, name)
 			if err != nil {
 				if err == db.ErrNotFound {
-					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "integration not found")
 					return
 				}
 				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			manifest, err := h.plugins.ReadManifest(name)
+			manifest, err := h.integrations.ReadManifest(name)
 			if err != nil {
-				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "integration not found")
 				return
 			}
 			httputil.WriteJSON(w, http.StatusOK, scrubSecretConfig(rec.Config, secretConfigKeys(manifest)))
@@ -417,21 +417,21 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			rec, err := h.store.GetPlugin(ctx, name)
 			if err != nil {
 				if err == db.ErrNotFound {
-					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "integration not found")
 					return
 				}
 				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			manifest, err := h.plugins.ReadManifest(name)
+			manifest, err := h.integrations.ReadManifest(name)
 			if err != nil {
-				httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+				httputil.WriteError(w, http.StatusNotFound, "integration not found")
 				return
 			}
-			merged := mergePluginConfig(rec.Config, req.Config, secretConfigKeys(manifest))
+			merged := mergeIntegrationConfig(rec.Config, req.Config, secretConfigKeys(manifest))
 			if err := h.store.SetPluginConfig(ctx, name, encryptSecretConfig(merged, h.store, secretConfigKeys(manifest))); err != nil {
 				if err == db.ErrNotFound {
-					httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+					httputil.WriteError(w, http.StatusNotFound, "integration not found")
 					return
 				}
 				httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -439,8 +439,8 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			}
 
 			autoEnabled := false
-			authType, _, _ := pluginAuthDetails(manifest)
-			required, reqErr := h.plugins.RequiredConfigKeys(name)
+			authType, _, _ := integrationAuthDetails(manifest)
+			required, reqErr := h.integrations.RequiredConfigKeys(name)
 			if authType == "api_key" && reqErr == nil && len(required) > 0 {
 				complete := true
 				for _, key := range required {
@@ -480,7 +480,7 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	plugs := h.plugins.List()
+	plugs := h.integrations.List()
 	recs, err := h.store.ListPlugins(ctx)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -493,12 +493,12 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]map[string]any, 0, len(plugs))
 	for _, p := range plugs {
-		manifest, err := h.plugins.ReadManifest(p.Name)
+		manifest, err := h.integrations.ReadManifest(p.Name)
 		if err != nil {
 			continue
 		}
 		rec := byName[p.Name]
-		authType, authProvider, fields := pluginAuthDetails(manifest)
+		authType, authProvider, fields := integrationAuthDetails(manifest)
 		fields = filterEnvBackedOAuthFields(fields, authProvider)
 		requiredKeys := []string{}
 		for _, f := range fields {
@@ -532,7 +532,7 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 			"auth_provider":   authProvider,
 			"config_fields":   fields,
 			"installed":       true,
-			"plugin_id":       p.Name,
+			"integration_id":  p.Name,
 			"enabled":         rec.Enabled,
 			"connected":       connected,
 			"needs_reconnect": needsReconnect,
@@ -544,9 +544,9 @@ func (h *Handler) listPluginsCompat(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePluginInstallCompat(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
-	manifest, err := h.plugins.ReadManifest(name)
+	manifest, err := h.integrations.ReadManifest(name)
 	if err != nil {
-		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "integration not found")
 		return
 	}
 	base := db.PluginRecord{
@@ -564,23 +564,23 @@ func (h *Handler) handlePluginInstallCompat(w http.ResponseWriter, r *http.Reque
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"plugin_id": name, "status": "installed"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"integration_id": name, "status": "installed"})
 }
 
 func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
-	manifest, err := h.plugins.ReadManifest(name)
+	manifest, err := h.integrations.ReadManifest(name)
 	if err != nil {
-		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "integration not found")
 		return
 	}
-	authType, provider, _ := pluginAuthDetails(manifest)
+	authType, provider, _ := integrationAuthDetails(manifest)
 	if authType != "oauth2" {
-		httputil.WriteError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		httputil.WriteError(w, http.StatusBadRequest, "integration does not use oauth2")
 		return
 	}
 
-	if err := h.ensurePluginInstalled(ctx, manifest); err != nil {
+	if err := h.ensureIntegrationInstalled(ctx, manifest); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -617,11 +617,11 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 	}
 
 	if clientID == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_id in plugin config")
+		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_id in integration config")
 		return
 	}
 	if strings.TrimSpace(clientSecret) == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_secret in plugin config")
+		httputil.WriteError(w, http.StatusBadRequest, "missing oauth client_secret in integration config")
 		return
 	}
 
@@ -665,14 +665,14 @@ func (h *Handler) handlePluginOAuthStart(w http.ResponseWriter, r *http.Request,
 
 func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
-	manifest, err := h.plugins.ReadManifest(name)
+	manifest, err := h.integrations.ReadManifest(name)
 	if err != nil {
-		httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+		httputil.WriteError(w, http.StatusNotFound, "integration not found")
 		return
 	}
-	authType, provider, _ := pluginAuthDetails(manifest)
+	authType, provider, _ := integrationAuthDetails(manifest)
 	if authType != "oauth2" {
-		httputil.WriteError(w, http.StatusBadRequest, "plugin does not use oauth2")
+		httputil.WriteError(w, http.StatusBadRequest, "integration does not use oauth2")
 		return
 	}
 
@@ -692,7 +692,7 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 	rec, err := h.store.GetPlugin(ctx, name)
 	if err != nil {
 		if err == db.ErrNotFound {
-			httputil.WriteError(w, http.StatusNotFound, "plugin not found")
+			httputil.WriteError(w, http.StatusNotFound, "integration not found")
 			return
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -763,9 +763,9 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_ = h.ensurePluginCronJobs(ctx, manifest, cfg)
+	_ = h.ensureIntegrationCronJobs(ctx, manifest, cfg)
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "connected", "plugin": name})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "connected", "integration": name})
 }
 
 type oauthProvider struct {
@@ -846,7 +846,7 @@ func filterEnvBackedOAuthFields(fields []map[string]any, provider string) []map[
 	return filtered
 }
 
-func oauthScopes(manifest plugins.PluginManifest) []string {
+func oauthScopes(manifest integrations.PluginManifest) []string {
 	return manifest.Auth.Scopes
 }
 
@@ -857,17 +857,17 @@ func oauthRedirectURI(r *http.Request, pluginName string) string {
 		if proto == "" {
 			proto = "https"
 		}
-		return fmt.Sprintf("%s://%s/plugins/%s/oauth/callback", proto, host, url.PathEscape(pluginName))
+		return fmt.Sprintf("%s://%s/integrations/%s/oauth/callback", proto, host, url.PathEscape(pluginName))
 	}
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
-		return strings.TrimRight(origin, "/") + "/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+		return strings.TrimRight(origin, "/") + "/integrations/" + url.PathEscape(pluginName) + "/oauth/callback"
 	}
 	if ref := strings.TrimSpace(r.Header.Get("Referer")); ref != "" {
 		if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
-			return u.Scheme + "://" + u.Host + "/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+			return u.Scheme + "://" + u.Host + "/integrations/" + url.PathEscape(pluginName) + "/oauth/callback"
 		}
 	}
-	return "http://localhost:3000/plugins/" + url.PathEscape(pluginName) + "/oauth/callback"
+	return "http://localhost:3000/integrations/" + url.PathEscape(pluginName) + "/oauth/callback"
 }
 
 func generateOAuthState() (string, error) {
@@ -978,7 +978,7 @@ func lookupOAuthAccountEmail(ctx context.Context, provider, accessToken string) 
 	return strings.TrimSpace(email), nil
 }
 
-func (h *Handler) ensurePluginInstalled(ctx context.Context, manifest plugins.PluginManifest) error {
+func (h *Handler) ensureIntegrationInstalled(ctx context.Context, manifest integrations.PluginManifest) error {
 	if _, err := h.store.GetPlugin(ctx, manifest.Name); err == nil {
 		return nil
 	} else if err != db.ErrNotFound {
@@ -997,8 +997,8 @@ func (h *Handler) ensurePluginInstalled(ctx context.Context, manifest plugins.Pl
 	})
 }
 
-func (h *Handler) ensurePluginCronJobs(ctx context.Context, manifest plugins.PluginManifest, cfg map[string]string) error {
-	scope := h.store.ScopeCronModule(plugins.CronModulePlugins)
+func (h *Handler) ensureIntegrationCronJobs(ctx context.Context, manifest integrations.PluginManifest, cfg map[string]string) error {
+	scope := h.store.ScopeCronModule(integrations.CronModulePlugins)
 	jobs, err := scope.List(ctx)
 	if err != nil {
 		return err
@@ -1012,27 +1012,27 @@ func (h *Handler) ensurePluginCronJobs(ctx context.Context, manifest plugins.Plu
 				runAt = t
 			}
 		}
-		if !hasActivePluginCronJob(jobs, manifest.Name, plugins.CronJobTypeRotate) {
-			_, _ = scope.ScheduleRecurring(ctx, plugins.CronJobTypeRotate, map[string]any{"plugin": manifest.Name}, runAt, rotateInterval, 5)
+		if !hasActiveIntegrationCronJob(jobs, manifest.Name, integrations.CronJobTypeRotate) {
+			_, _ = scope.ScheduleRecurring(ctx, integrations.CronJobTypeRotate, map[string]any{"integration": manifest.Name}, runAt, rotateInterval, 5)
 		}
 	}
 
 	renewInterval := int64FromAny(manifest.Webhook["renew_interval"])
 	if renewInterval > 0 {
 		runAt := time.Now().UTC().Add(time.Duration(renewInterval) * time.Second)
-		if !hasActivePluginCronJob(jobs, manifest.Name, plugins.CronJobTypeRenewWatch) {
-			_, _ = scope.ScheduleRecurring(ctx, plugins.CronJobTypeRenewWatch, map[string]any{"plugin": manifest.Name}, runAt, renewInterval, 5)
+		if !hasActiveIntegrationCronJob(jobs, manifest.Name, integrations.CronJobTypeRenewWatch) {
+			_, _ = scope.ScheduleRecurring(ctx, integrations.CronJobTypeRenewWatch, map[string]any{"integration": manifest.Name}, runAt, renewInterval, 5)
 		}
 	}
 	return nil
 }
 
-func hasActivePluginCronJob(jobs []db.CronJobRecord, pluginName, jobType string) bool {
+func hasActiveIntegrationCronJob(jobs []db.CronJobRecord, pluginName, jobType string) bool {
 	for _, job := range jobs {
 		if job.JobType != jobType || !job.Enabled {
 			continue
 		}
-		if !jobPayloadHasPlugin(job.PayloadJSON, pluginName) {
+		if !jobPayloadHasIntegration(job.PayloadJSON, pluginName) {
 			continue
 		}
 		if job.Status == db.CronStatusCancelled || job.Status == db.CronStatusDone || job.Status == db.CronStatusFailed {
@@ -1043,12 +1043,12 @@ func hasActivePluginCronJob(jobs []db.CronJobRecord, pluginName, jobType string)
 	return false
 }
 
-func jobPayloadHasPlugin(payloadJSON, pluginName string) bool {
+func jobPayloadHasIntegration(payloadJSON, pluginName string) bool {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return false
 	}
-	v, ok := payload["plugin"].(string)
+	v, ok := payload["integration"].(string)
 	if !ok || strings.TrimSpace(v) == "" {
 		v, _ = payload["plugin_name"].(string)
 	}
@@ -1080,7 +1080,7 @@ func cloneConfig(src map[string]string) map[string]string {
 	return out
 }
 
-func secretConfigKeys(manifest plugins.PluginManifest) map[string]bool {
+func secretConfigKeys(manifest integrations.PluginManifest) map[string]bool {
 	keys := map[string]bool{}
 	for _, f := range manifest.Auth.ConfigFields {
 		if strings.EqualFold(strings.TrimSpace(f.Type), "password") && strings.TrimSpace(f.Key) != "" {
@@ -1103,7 +1103,7 @@ func scrubSecretConfig(cfg map[string]string, secretKeys map[string]bool) map[st
 	return out
 }
 
-func mergePluginConfig(existing, incoming map[string]string, secretKeys map[string]bool) map[string]string {
+func mergeIntegrationConfig(existing, incoming map[string]string, secretKeys map[string]bool) map[string]string {
 	merged := cloneConfig(existing)
 	for k, v := range incoming {
 		if secretKeys[k] && v == maskedSecretValue {
@@ -1159,7 +1159,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func pluginAuthDetails(manifest plugins.PluginManifest) (string, string, []map[string]any) {
+func integrationAuthDetails(manifest integrations.PluginManifest) (string, string, []map[string]any) {
 	authType := manifest.Auth.Type
 	if strings.TrimSpace(authType) == "" {
 		authType = "none"

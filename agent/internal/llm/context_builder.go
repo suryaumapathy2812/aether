@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
@@ -30,7 +30,7 @@ const executionPolicyAppendix = "\n\nExecution policy:" +
 type ContextBuilder struct {
 	registry     *tools.Registry
 	skills       *skills.Manager
-	plugins      *plugins.Manager
+	integrations *integrations.Manager
 	store        *db.Store
 	embedder     EmbeddingProvider
 	systemPrompt string
@@ -53,16 +53,16 @@ type EmbeddingProvider interface {
 	EmbedSingle(ctx context.Context, text string) ([]float32, error)
 }
 
-func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, pluginsManager *plugins.Manager, store *db.Store, cfg ContextBuilderConfig) *ContextBuilder {
+func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, integrationsManager *integrations.Manager, store *db.Store, cfg ContextBuilderConfig) *ContextBuilder {
 	b := &ContextBuilder{
-		registry:   registry,
-		skills:     skillsManager,
-		plugins:    pluginsManager,
-		store:      store,
-		embedder:   cfg.Embedder,
-		promptEnv:  strings.TrimSpace(cfg.SystemPrompt),
-		promptFile: strings.TrimSpace(cfg.PromptFile),
-		assetsDir:  strings.TrimSpace(cfg.AssetsDir),
+		registry:     registry,
+		skills:       skillsManager,
+		integrations: integrationsManager,
+		store:        store,
+		embedder:     cfg.Embedder,
+		promptEnv:    strings.TrimSpace(cfg.SystemPrompt),
+		promptFile:   strings.TrimSpace(cfg.PromptFile),
+		assetsDir:    strings.TrimSpace(cfg.AssetsDir),
 	}
 	basePrompt := b.promptEnv
 	if basePrompt == "" {
@@ -80,7 +80,7 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 	toolsSchema := []map[string]any{}
 	if b != nil && b.registry != nil {
 		enabled := map[string]bool{}
-		for _, name := range b.enabledPluginNames() {
+		for _, name := range b.enabledIntegrationNames() {
 			enabled[name] = true
 		}
 		for _, schema := range b.registry.OpenAISchemas() {
@@ -107,7 +107,7 @@ func (b *ContextBuilder) Build(messages []map[string]any, policy map[string]any,
 		if section := b.skillsPromptSection(); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
-		if section := b.pluginsPromptSection(); strings.TrimSpace(section) != "" {
+		if section := b.integrationsPromptSection(); strings.TrimSpace(section) != "" {
 			promptParts = append(promptParts, section)
 		}
 		if section := b.decisionsPromptSection(userID); strings.TrimSpace(section) != "" {
@@ -356,12 +356,24 @@ func (b *ContextBuilder) skillsPromptSection() string {
 	if len(all) == 0 {
 		return ""
 	}
-	var alwaysLoaded []string
+
+	// Get set of enabled integration names for auto-loading.
+	enabledSet := map[string]bool{}
+	for _, name := range b.enabledIntegrationNames() {
+		enabledSet[name] = true
+	}
+
+	var loaded []string
 	listLines := []string{"Available skills (load with read_skill as needed):"}
 	for _, s := range all {
-		if s.AlwaysLoad {
+		shouldAutoLoad := s.AlwaysLoad
+		// Auto-load skills whose integration is enabled.
+		if !shouldAutoLoad && s.Integration != "" && s.Integration != "none" && enabledSet[s.Integration] {
+			shouldAutoLoad = true
+		}
+		if shouldAutoLoad {
 			if content, err := b.skills.Read(s.Name); err == nil && strings.TrimSpace(content) != "" {
-				alwaysLoaded = append(alwaysLoaded, strings.TrimSpace(content))
+				loaded = append(loaded, strings.TrimSpace(content))
 			}
 		} else {
 			desc := strings.TrimSpace(s.Description)
@@ -372,44 +384,30 @@ func (b *ContextBuilder) skillsPromptSection() string {
 		}
 	}
 	var parts []string
-	parts = append(parts, alwaysLoaded...)
+	parts = append(parts, loaded...)
 	if len(listLines) > 1 {
 		parts = append(parts, strings.Join(listLines, "\n"))
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func (b *ContextBuilder) pluginsPromptSection() string {
-	if b == nil || b.plugins == nil {
+func (b *ContextBuilder) integrationsPromptSection() string {
+	if b == nil || b.integrations == nil {
 		return ""
 	}
-	enabled := b.enabledPluginNames()
+	enabled := b.enabledIntegrationNames()
 	if len(enabled) == 0 {
 		return ""
 	}
-	lines := []string{"Available API services (use execute tool with credentials=[...]) to interact with these APIs:"}
+	lines := []string{"Enabled integrations (use execute tool with credentials=[...]):"}
 	for _, name := range enabled {
-		meta, ok := b.plugins.Get(name)
+		meta, ok := b.integrations.Get(name)
 		if !ok {
 			continue
 		}
-		envVar := envVarNameForPlugin(name)
+		envVar := envVarNameForIntegration(name)
 		line := fmt.Sprintf("- %s: %s. Env var: $%s", meta.DisplayName, meta.Description, envVar)
 		lines = append(lines, strings.TrimSpace(line))
-	}
-	if _, ok := b.plugins.Get("google-workspace"); ok {
-		lines = append(lines, "Google Workspace services (all use $GOOGLE_WORKSPACE_ACCESS_TOKEN):")
-		lines = append(lines, "- Gmail: https://gmail.googleapis.com/gmail/v1 — email send, read, search, labels")
-		lines = append(lines, "- Calendar: https://www.googleapis.com/calendar/v3 — events, calendars, free/busy")
-		lines = append(lines, "- Drive: https://www.googleapis.com/drive/v3 — files, folders, permissions")
-		lines = append(lines, "- Contacts: https://people.googleapis.com/v1 — contacts, directory")
-		lines = append(lines, "- Sheets: https://sheets.googleapis.com/v4/spreadsheets — read/write spreadsheets")
-		lines = append(lines, "- Docs: https://docs.googleapis.com/v1/documents — create/edit documents")
-		lines = append(lines, "- Slides: https://slides.googleapis.com/v1/presentations — create/edit presentations")
-		lines = append(lines, "- Tasks: https://tasks.googleapis.com/v1 — task lists and tasks")
-		lines = append(lines, "- Forms: https://forms.googleapis.com/v1 — create/manage forms")
-		lines = append(lines, "- Keep: https://keep.googleapis.com/v1 — notes management")
-		lines = append(lines, "- Meet: https://meet.googleapis.com/v2 — meeting spaces")
 	}
 	if len(lines) <= 1 {
 		return ""
@@ -417,9 +415,9 @@ func (b *ContextBuilder) pluginsPromptSection() string {
 	return strings.Join(lines, "\n")
 }
 
-// envVarNameForPlugin returns the environment variable name for a plugin's credential.
+// envVarNameForIntegration returns the environment variable name for an integration's credential.
 // Keep in sync with internal/tools/builtin/execute_tool.go credentialEnvMapping.
-func envVarNameForPlugin(pluginName string) string {
+func envVarNameForIntegration(integrationName string) string {
 	mapping := map[string]string{
 		"google-workspace": "GOOGLE_WORKSPACE_ACCESS_TOKEN",
 		"spotify":          "SPOTIFY_ACCESS_TOKEN",
@@ -427,19 +425,19 @@ func envVarNameForPlugin(pluginName string) string {
 		"brave-search":     "BRAVE_SEARCH_API_KEY",
 		"wolfram":          "WOLFRAM_APP_ID",
 	}
-	if env, ok := mapping[pluginName]; ok && env != "" {
+	if env, ok := mapping[integrationName]; ok && env != "" {
 		return env
 	}
-	upper := strings.ToUpper(strings.ReplaceAll(pluginName, "-", "_"))
+	upper := strings.ToUpper(strings.ReplaceAll(integrationName, "-", "_"))
 	return upper + "_ACCESS_TOKEN"
 }
 
-func (b *ContextBuilder) enabledPluginNames() []string {
-	if b == nil || b.plugins == nil {
+func (b *ContextBuilder) enabledIntegrationNames() []string {
+	if b == nil || b.integrations == nil {
 		return []string{}
 	}
 	if b.store == nil {
-		metas := b.plugins.List()
+		metas := b.integrations.List()
 		names := make([]string, 0, len(metas))
 		for _, m := range metas {
 			names = append(names, m.Name)

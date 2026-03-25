@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 )
 
 type config struct {
@@ -129,7 +129,7 @@ func parseGlobal(args []string) (config, []string) {
 	}, fs.Args()
 }
 
-func mustManager(cfg config) *plugins.Manager {
+func mustManager(cfg config) *integrations.Manager {
 	assetsDir := cfg.assetsDir
 	if strings.TrimSpace(assetsDir) == "" {
 		assetsDir = defaultAssetsDir()
@@ -157,7 +157,7 @@ func mustManager(cfg config) *plugins.Manager {
 	_ = os.MkdirAll(userDir, 0o755)
 	_ = os.MkdirAll(externalDir, 0o755)
 
-	return plugins.NewManager(plugins.ManagerOptions{
+	return integrations.NewManager(integrations.ManagerOptions{
 		BuiltinDirs: builtinDirs,
 		UserDir:     userDir,
 		ExternalDir: externalDir,
@@ -165,7 +165,7 @@ func mustManager(cfg config) *plugins.Manager {
 	})
 }
 
-func discoverOrDie(ctx context.Context, mgr *plugins.Manager) {
+func discoverOrDie(ctx context.Context, mgr *integrations.Manager) {
 	_, err := mgr.Discover(ctx)
 	exitIfErr(err)
 }
@@ -188,13 +188,13 @@ func exitIfErr(err error) {
 	if err == nil {
 		return
 	}
-	if errors.Is(err, plugins.ErrNotFound) {
+	if errors.Is(err, integrations.ErrNotFound) {
 		exitWith("not found")
 	}
-	if errors.Is(err, plugins.ErrProtected) {
+	if errors.Is(err, integrations.ErrProtected) {
 		exitWith("plugin is protected and cannot be removed")
 	}
-	if errors.Is(err, plugins.ErrDuplicateName) {
+	if errors.Is(err, integrations.ErrDuplicateName) {
 		exitWith("duplicate plugin name")
 	}
 	exitWith(err.Error())

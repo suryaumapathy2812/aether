@@ -9,6 +9,7 @@ type parsedSkill struct {
 	Name        string
 	Description string
 	AlwaysLoad  bool
+	Integration string
 	Body        string
 }
 
@@ -50,13 +51,14 @@ func parseSkillMarkdown(raw string) (parsedSkill, error) {
 		return parsedSkill{}, fmt.Errorf("%w: name and description required", ErrInvalidSkill)
 	}
 	alwaysLoad := strings.EqualFold(strings.TrimSpace(meta["always_load"]), "true")
+	integration := strings.TrimSpace(meta["integration"])
 
 	body := ""
 	if end+1 < len(lines) {
 		body = strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
 	}
 
-	return parsedSkill{Name: name, Description: desc, AlwaysLoad: alwaysLoad, Body: body}, nil
+	return parsedSkill{Name: name, Description: desc, AlwaysLoad: alwaysLoad, Integration: integration, Body: body}, nil
 }
 
 func buildSkillMarkdown(name, description, body string) string {

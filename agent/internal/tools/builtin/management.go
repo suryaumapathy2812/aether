@@ -18,12 +18,12 @@ type CreateSkillTool struct{}
 type InstallSkillTool struct{}
 type RemoveSkillTool struct{}
 
-type ListPluginsTool struct{}
-type ReadPluginManifestTool struct{}
-type InstallPluginTool struct{}
-type EnablePluginTool struct{}
-type DisablePluginTool struct{}
-type SetPluginConfigTool struct{}
+type ListIntegrationsTool struct{}
+type ReadIntegrationManifestTool struct{}
+type InstallIntegrationTool struct{}
+type EnableIntegrationTool struct{}
+type DisableIntegrationTool struct{}
+type SetIntegrationConfigTool struct{}
 
 type ListJobsTool struct{}
 type ScheduleJobTool struct{}
@@ -127,18 +127,18 @@ func (t *RemoveSkillTool) Execute(ctx context.Context, call tools.Call) tools.Re
 	return tools.Success("Skill removed.", map[string]any{"name": name})
 }
 
-func (t *ListPluginsTool) Definition() tools.Definition {
-	return tools.Definition{Name: "list_plugins", Description: "List discovered plugins and status.", StatusText: "Listing plugins..."}
+func (t *ListIntegrationsTool) Definition() tools.Definition {
+	return tools.Definition{Name: "list_integrations", Description: "List discovered integrations and status.", StatusText: "Listing integrations..."}
 }
 
-func (t *ListPluginsTool) Execute(ctx context.Context, call tools.Call) tools.Result {
-	if call.Ctx.Plugins == nil {
-		return tools.Fail("Plugins manager is unavailable", nil)
+func (t *ListIntegrationsTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	if call.Ctx.Integrations == nil {
+		return tools.Fail("Integrations manager is unavailable", nil)
 	}
-	_, _ = call.Ctx.Plugins.Discover(ctx)
-	items := call.Ctx.Plugins.List()
+	_, _ = call.Ctx.Integrations.Discover(ctx)
+	items := call.Ctx.Integrations.List()
 	if len(items) == 0 {
-		return tools.Success("No plugins found.", map[string]any{"count": 0})
+		return tools.Success("No integrations found.", map[string]any{"count": 0})
 	}
 	lines := make([]string, 0, len(items))
 	for _, p := range items {
@@ -154,19 +154,19 @@ func (t *ListPluginsTool) Execute(ctx context.Context, call tools.Call) tools.Re
 	return tools.Success(strings.Join(lines, "\n"), map[string]any{"count": len(items)})
 }
 
-func (t *ReadPluginManifestTool) Definition() tools.Definition {
-	return tools.Definition{Name: "read_plugin_manifest", Description: "Read plugin manifest as JSON.", StatusText: "Reading plugin manifest...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Plugin name", Required: true}}}
+func (t *ReadIntegrationManifestTool) Definition() tools.Definition {
+	return tools.Definition{Name: "read_integration_manifest", Description: "Read integration manifest as JSON.", StatusText: "Reading plugin manifest...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}}}
 }
 
-func (t *ReadPluginManifestTool) Execute(ctx context.Context, call tools.Call) tools.Result {
-	if call.Ctx.Plugins == nil {
-		return tools.Fail("Plugins manager is unavailable", nil)
+func (t *ReadIntegrationManifestTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	if call.Ctx.Integrations == nil {
+		return tools.Fail("Integrations manager is unavailable", nil)
 	}
-	_, _ = call.Ctx.Plugins.Discover(ctx)
+	_, _ = call.Ctx.Integrations.Discover(ctx)
 	name, _ := call.Args["name"].(string)
-	m, err := call.Ctx.Plugins.ReadManifest(name)
+	m, err := call.Ctx.Integrations.ReadManifest(name)
 	if err != nil {
-		return tools.Fail("Failed to read plugin manifest: "+err.Error(), nil)
+		return tools.Fail("Failed to read integration manifest: "+err.Error(), nil)
 	}
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -175,58 +175,58 @@ func (t *ReadPluginManifestTool) Execute(ctx context.Context, call tools.Call) t
 	return tools.Success(string(b), map[string]any{"name": name})
 }
 
-func (t *InstallPluginTool) Definition() tools.Definition {
-	return tools.Definition{Name: "install_plugin", Description: "Install an external plugin from source owner/repo[@plugin-path].", StatusText: "Installing plugin...", Parameters: []tools.Param{{Name: "source", Type: "string", Description: "External source", Required: true}}}
+func (t *InstallIntegrationTool) Definition() tools.Definition {
+	return tools.Definition{Name: "install_integration", Description: "Install an external integration from source owner/repo[@integration-path].", StatusText: "Installing integration...", Parameters: []tools.Param{{Name: "source", Type: "string", Description: "External source", Required: true}}}
 }
 
-func (t *InstallPluginTool) Execute(ctx context.Context, call tools.Call) tools.Result {
-	if call.Ctx.Plugins == nil {
-		return tools.Fail("Plugins manager is unavailable", nil)
+func (t *InstallIntegrationTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	if call.Ctx.Integrations == nil {
+		return tools.Fail("Integrations manager is unavailable", nil)
 	}
 	source, _ := call.Args["source"].(string)
-	res, err := call.Ctx.Plugins.InstallFromSource(ctx, source)
+	res, err := call.Ctx.Integrations.InstallFromSource(ctx, source)
 	if err != nil {
-		return tools.Fail("Failed to install plugin: "+err.Error(), nil)
+		return tools.Fail("Failed to install integration: "+err.Error(), nil)
 	}
-	_, _ = call.Ctx.Plugins.Discover(ctx)
-	return tools.Success("Plugin installed.", map[string]any{"name": res.Installed.Name, "source": source, "remote_url": res.RemoteURL})
+	_, _ = call.Ctx.Integrations.Discover(ctx)
+	return tools.Success("Integration installed.", map[string]any{"name": res.Installed.Name, "source": source, "remote_url": res.RemoteURL})
 }
 
-func (t *EnablePluginTool) Definition() tools.Definition {
-	return tools.Definition{Name: "enable_plugin", Description: "Enable a plugin in persistent state.", StatusText: "Enabling plugin...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Plugin name", Required: true}}}
+func (t *EnableIntegrationTool) Definition() tools.Definition {
+	return tools.Definition{Name: "enable_integration", Description: "Enable an integration in persistent state.", StatusText: "Enabling integration...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}}}
 }
 
-func (t *EnablePluginTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+func (t *EnableIntegrationTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	if call.Ctx.Store == nil {
 		return tools.Fail("State store is unavailable", nil)
 	}
 	name, _ := call.Args["name"].(string)
 	if err := call.Ctx.Store.SetPluginEnabled(ctx, name, true); err != nil {
-		return tools.Fail("Failed to enable plugin: "+err.Error(), nil)
+		return tools.Fail("Failed to enable integration: "+err.Error(), nil)
 	}
-	return tools.Success("Plugin enabled.", map[string]any{"name": name})
+	return tools.Success("Integration enabled.", map[string]any{"name": name})
 }
 
-func (t *DisablePluginTool) Definition() tools.Definition {
-	return tools.Definition{Name: "disable_plugin", Description: "Disable a plugin in persistent state.", StatusText: "Disabling plugin...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Plugin name", Required: true}}}
+func (t *DisableIntegrationTool) Definition() tools.Definition {
+	return tools.Definition{Name: "disable_integration", Description: "Disable an integration in persistent state.", StatusText: "Disabling integration...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}}}
 }
 
-func (t *DisablePluginTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+func (t *DisableIntegrationTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	if call.Ctx.Store == nil {
 		return tools.Fail("State store is unavailable", nil)
 	}
 	name, _ := call.Args["name"].(string)
 	if err := call.Ctx.Store.SetPluginEnabled(ctx, name, false); err != nil {
-		return tools.Fail("Failed to disable plugin: "+err.Error(), nil)
+		return tools.Fail("Failed to disable integration: "+err.Error(), nil)
 	}
-	return tools.Success("Plugin disabled.", map[string]any{"name": name})
+	return tools.Success("Integration disabled.", map[string]any{"name": name})
 }
 
-func (t *SetPluginConfigTool) Definition() tools.Definition {
-	return tools.Definition{Name: "set_plugin_config", Description: "Set plugin config map (string values).", StatusText: "Updating plugin config...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Plugin name", Required: true}, {Name: "config", Type: "object", Description: "Configuration object", Required: true}}}
+func (t *SetIntegrationConfigTool) Definition() tools.Definition {
+	return tools.Definition{Name: "set_integration_config", Description: "Set integration config map (string values).", StatusText: "Updating integration config...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}, {Name: "config", Type: "object", Description: "Configuration object", Required: true}}}
 }
 
-func (t *SetPluginConfigTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+func (t *SetIntegrationConfigTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	if call.Ctx.Store == nil {
 		return tools.Fail("State store is unavailable", nil)
 	}
@@ -237,9 +237,9 @@ func (t *SetPluginConfigTool) Execute(ctx context.Context, call tools.Call) tool
 		cfg[k] = fmt.Sprintf("%v", v)
 	}
 	if err := call.Ctx.Store.SetPluginConfig(ctx, name, cfg); err != nil {
-		return tools.Fail("Failed to set plugin config: "+err.Error(), nil)
+		return tools.Fail("Failed to set integration config: "+err.Error(), nil)
 	}
-	return tools.Success("Plugin config updated.", map[string]any{"name": name, "keys": sortedKeys(cfg)})
+	return tools.Success("Integration config updated.", map[string]any{"name": name, "keys": sortedKeys(cfg)})
 }
 
 func (t *ListJobsTool) Definition() tools.Definition {
@@ -377,12 +377,12 @@ var (
 	_ tools.Tool = (*CreateSkillTool)(nil)
 	_ tools.Tool = (*InstallSkillTool)(nil)
 	_ tools.Tool = (*RemoveSkillTool)(nil)
-	_ tools.Tool = (*ListPluginsTool)(nil)
-	_ tools.Tool = (*ReadPluginManifestTool)(nil)
-	_ tools.Tool = (*InstallPluginTool)(nil)
-	_ tools.Tool = (*EnablePluginTool)(nil)
-	_ tools.Tool = (*DisablePluginTool)(nil)
-	_ tools.Tool = (*SetPluginConfigTool)(nil)
+	_ tools.Tool = (*ListIntegrationsTool)(nil)
+	_ tools.Tool = (*ReadIntegrationManifestTool)(nil)
+	_ tools.Tool = (*InstallIntegrationTool)(nil)
+	_ tools.Tool = (*EnableIntegrationTool)(nil)
+	_ tools.Tool = (*DisableIntegrationTool)(nil)
+	_ tools.Tool = (*SetIntegrationConfigTool)(nil)
 	_ tools.Tool = (*ListJobsTool)(nil)
 	_ tools.Tool = (*ScheduleJobTool)(nil)
 	_ tools.Tool = (*CancelJobTool)(nil)

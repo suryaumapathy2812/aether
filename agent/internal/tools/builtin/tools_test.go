@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
@@ -229,14 +229,14 @@ func TestManagementTools(t *testing.T) {
 	})
 	_, _ = skillsManager.Discover(context.Background())
 
-	pluginsManager := plugins.NewManager(plugins.ManagerOptions{
+	pluginsManager := integrations.NewManager(integrations.ManagerOptions{
 		BuiltinDirs: []string{filepath.Join(root, "plugins", "builtin")},
 		UserDir:     filepath.Join(root, "plugins", "user"),
 		ExternalDir: filepath.Join(root, "plugins", "external"),
 		StateStore:  store,
 	})
 
-	ctx := tools.ExecContext{WorkingDir: root, Store: store, Skills: skillsManager, Plugins: pluginsManager}
+	ctx := tools.ExecContext{WorkingDir: root, Store: store, Skills: skillsManager, Integrations: pluginsManager}
 
 	create := (&CreateSkillTool{}).Execute(context.Background(), tools.Call{Args: map[string]any{"name": "notes", "description": "note workflow", "content": "# hello"}, Ctx: ctx})
 	if create.Error {
@@ -252,7 +252,7 @@ func TestManagementTools(t *testing.T) {
 		t.Fatalf("upsert plugin: %v", err)
 	}
 
-	enable := (&EnablePluginTool{}).Execute(context.Background(), tools.Call{Args: map[string]any{"name": "weather"}, Ctx: ctx})
+	enable := (&EnableIntegrationTool{}).Execute(context.Background(), tools.Call{Args: map[string]any{"name": "weather"}, Ctx: ctx})
 	if enable.Error {
 		t.Fatalf("enable plugin failed: %#v", enable)
 	}

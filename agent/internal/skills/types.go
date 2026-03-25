@@ -14,6 +14,7 @@ type SkillMeta struct {
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
 	AlwaysLoad  bool       `json:"always_load"`
+	Integration string     `json:"integration,omitempty"`
 	Location    string     `json:"location"`
 	Source      SourceType `json:"source"`
 }

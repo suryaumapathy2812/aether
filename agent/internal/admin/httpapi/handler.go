@@ -7,30 +7,30 @@ import (
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/buildinfo"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/httputil"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/updater"
 )
 
 type Handler struct {
-	updater    *updater.Updater
-	builder    *llm.ContextBuilder
-	skills     *skills.Manager
-	plugins    *plugins.Manager
-	adminToken string
+	updater      *updater.Updater
+	builder      *llm.ContextBuilder
+	skills       *skills.Manager
+	integrations *integrations.Manager
+	adminToken   string
 }
 
 type Options struct {
-	Updater    *updater.Updater
-	Builder    *llm.ContextBuilder
-	Skills     *skills.Manager
-	Plugins    *plugins.Manager
-	AdminToken string
+	Updater      *updater.Updater
+	Builder      *llm.ContextBuilder
+	Skills       *skills.Manager
+	Integrations *integrations.Manager
+	AdminToken   string
 }
 
 func New(opts Options) *Handler {
-	return &Handler{updater: opts.Updater, builder: opts.Builder, skills: opts.Skills, plugins: opts.Plugins, adminToken: opts.AdminToken}
+	return &Handler{updater: opts.Updater, builder: opts.Builder, skills: opts.Skills, integrations: opts.Integrations, adminToken: opts.AdminToken}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -106,8 +106,8 @@ func (h *Handler) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	if h.skills != nil {
 		_, _ = h.skills.Discover(r.Context())
 	}
-	if h.plugins != nil {
-		_, _ = h.plugins.Discover(r.Context())
+	if h.integrations != nil {
+		_, _ = h.integrations.Discover(r.Context())
 	}
 
 	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{
@@ -143,8 +143,8 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pluginCount := 0
-	if h.plugins != nil {
-		if discovered, err := h.plugins.Discover(r.Context()); err == nil {
+	if h.integrations != nil {
+		if discovered, err := h.integrations.Discover(r.Context()); err == nil {
 			pluginCount = discovered
 		}
 	}
@@ -176,5 +176,3 @@ func (h *Handler) requireAdminAuth(r *http.Request) error {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-

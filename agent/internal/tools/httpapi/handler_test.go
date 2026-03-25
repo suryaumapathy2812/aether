@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
@@ -55,12 +55,12 @@ func TestExecuteEndpoint(t *testing.T) {
 func TestPluginsStatusEndpoint(t *testing.T) {
 	ctx := context.Background()
 	assets := t.TempDir()
-	builtin := filepath.Join(assets, "plugins", "builtin")
+	builtin := filepath.Join(assets, "integrations", "builtin")
 	if err := os.MkdirAll(filepath.Join(builtin, "local-search"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	manifest := "name: local-search\ndisplay_name: Local Search\ndescription: test\nauth:\n  type: api_key\n  config_fields:\n    - key: google_api_key\n      required: true\n"
-	if err := os.WriteFile(filepath.Join(builtin, "local-search", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(builtin, "local-search", "integration.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
@@ -70,18 +70,18 @@ func TestPluginsStatusEndpoint(t *testing.T) {
 	}
 	defer store.Close()
 
-	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	pm := integrations.NewManager(integrations.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
 	if _, err := pm.Discover(ctx); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 
 	r := tools.NewRegistry()
-	o := tools.NewOrchestrator(r, tools.ExecContext{Store: store, Plugins: pm})
-	h := New(Options{Registry: r, Orchestrator: o, Plugins: pm, Store: store})
+	o := tools.NewOrchestrator(r, tools.ExecContext{Store: store, Integrations: pm})
+	h := New(Options{Registry: r, Orchestrator: o, Integrations: pm, Store: store})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/internal/plugins/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/internal/integrations/status", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -89,26 +89,26 @@ func TestPluginsStatusEndpoint(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 	var resp struct {
-		Plugins []map[string]any `json:"plugins"`
+		Plugins []map[string]any `json:"integrations"`
 		Count   int              `json:"count"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if resp.Count != 1 {
-		t.Fatalf("expected one plugin, got %d", resp.Count)
+		t.Fatalf("expected one integration, got %d", resp.Count)
 	}
 }
 
 func TestPluginConfigMasksSecrets(t *testing.T) {
 	ctx := context.Background()
 	assets := t.TempDir()
-	builtin := filepath.Join(assets, "plugins", "builtin")
+	builtin := filepath.Join(assets, "integrations", "builtin")
 	if err := os.MkdirAll(filepath.Join(builtin, "brave-search"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	manifest := "name: brave-search\ndisplay_name: Brave Search\ndescription: test\nauth:\n  type: api_key\n  config_fields:\n    - key: api_key\n      type: password\n      required: true\n"
-	if err := os.WriteFile(filepath.Join(builtin, "brave-search", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(builtin, "brave-search", "integration.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestPluginConfigMasksSecrets(t *testing.T) {
 	}
 	defer store.Close()
 
-	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	pm := integrations.NewManager(integrations.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
 	if _, err := pm.Discover(ctx); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -126,11 +126,11 @@ func TestPluginConfigMasksSecrets(t *testing.T) {
 		t.Fatalf("set config: %v", err)
 	}
 
-	h := New(Options{Registry: tools.NewRegistry(), Orchestrator: tools.NewOrchestrator(tools.NewRegistry(), tools.ExecContext{}), Plugins: pm, Store: store})
+	h := New(Options{Registry: tools.NewRegistry(), Orchestrator: tools.NewOrchestrator(tools.NewRegistry(), tools.ExecContext{}), Integrations: pm, Store: store})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/brave-search/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/integrations/brave-search/config", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -151,12 +151,12 @@ func TestPluginConfigMasksSecrets(t *testing.T) {
 func TestPluginOAuthStartRedirect(t *testing.T) {
 	ctx := context.Background()
 	assets := t.TempDir()
-	builtin := filepath.Join(assets, "plugins", "builtin")
+	builtin := filepath.Join(assets, "integrations", "builtin")
 	if err := os.MkdirAll(filepath.Join(builtin, "google-workspace"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	manifest := "name: google-workspace\ndisplay_name: Google Workspace\ndescription: test\nauth:\n  type: oauth2\n  provider: google\n  scopes:\n    - https://www.googleapis.com/auth/calendar.readonly\n  config_fields:\n    - key: client_id\n      type: text\n      required: true\n    - key: client_secret\n      type: password\n      required: true\n"
-	if err := os.WriteFile(filepath.Join(builtin, "google-workspace", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(builtin, "google-workspace", "integration.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	}
 	defer store.Close()
 
-	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	pm := integrations.NewManager(integrations.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
 	if _, err := pm.Discover(ctx); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -182,11 +182,11 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	}
 
 	r := tools.NewRegistry()
-	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Plugins: pm, Store: store})
+	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Integrations: pm, Store: store})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/google-workspace/oauth/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/integrations/google-workspace/oauth/start", nil)
 	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
@@ -199,7 +199,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	if !strings.HasPrefix(location, "https://accounts.google.com/o/oauth2/v2/auth?") {
 		t.Fatalf("unexpected oauth redirect: %s", location)
 	}
-	if !strings.Contains(location, "redirect_uri=https%3A%2F%2Fapp.example.com%2Fplugins%2Fgoogle-workspace%2Foauth%2Fcallback") {
+	if !strings.Contains(location, "redirect_uri=https%3A%2F%2Fapp.example.com%2Fintegrations%2Fgoogle-workspace%2Foauth%2Fcallback") {
 		t.Fatalf("redirect missing callback uri: %s", location)
 	}
 }
@@ -207,12 +207,12 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 func TestPluginOAuthStartUsesProviderEnvCredentials(t *testing.T) {
 	ctx := context.Background()
 	assets := t.TempDir()
-	builtin := filepath.Join(assets, "plugins", "builtin")
+	builtin := filepath.Join(assets, "integrations", "builtin")
 	if err := os.MkdirAll(filepath.Join(builtin, "spotify"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	manifest := "name: spotify\ndisplay_name: Spotify\ndescription: test\nauth:\n  type: oauth2\n  provider: spotify\n  scopes:\n    - user-read-email\n"
-	if err := os.WriteFile(filepath.Join(builtin, "spotify", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(builtin, "spotify", "integration.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
@@ -224,17 +224,17 @@ func TestPluginOAuthStartUsesProviderEnvCredentials(t *testing.T) {
 	}
 	defer store.Close()
 
-	pm := plugins.NewManager(plugins.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
+	pm := integrations.NewManager(integrations.ManagerOptions{BuiltinDirs: []string{builtin}, StateStore: store})
 	if _, err := pm.Discover(ctx); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 
 	r := tools.NewRegistry()
-	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Plugins: pm, Store: store})
+	h := New(Options{Registry: r, Orchestrator: tools.NewOrchestrator(r, tools.ExecContext{}), Integrations: pm, Store: store})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/spotify/oauth/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/integrations/spotify/oauth/start", nil)
 	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()

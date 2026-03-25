@@ -27,12 +27,12 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/dataapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/llm"
 	llmhttp "github.com/suryaumapathy2812/core-ai/agent/internal/llm/httpapi"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/media"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/memory"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/observability"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/proactive"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/providers"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/reminders"
@@ -74,10 +74,10 @@ func main() {
 	wsHub := ws.NewHub()
 	pushSender := ws.NewPushSender(cfg.VAPID)
 
-	pluginRegistry := plugins.NewCronRegistry()
-	plugins.RegisterDefaultTokenRotators(pluginRegistry)
-	plugins.RegisterDefaultWatchRenewers(pluginRegistry)
-	plugins.RegisterCronHandlers(scheduler, store, pluginRegistry)
+	integrationRegistry := integrations.NewCronRegistry()
+	integrations.RegisterDefaultTokenRotators(integrationRegistry)
+	integrations.RegisterDefaultWatchRenewers(integrationRegistry)
+	integrations.RegisterCronHandlers(scheduler, store, integrationRegistry)
 
 	reminderRegistry := reminders.NewRegistry()
 	reminderRegistry.Register(func(ctx context.Context, payload map[string]any) error {
@@ -119,14 +119,14 @@ func main() {
 		log.Printf("skills discover warning: %v", err)
 	}
 
-	pluginsManager := plugins.NewManager(plugins.ManagerOptions{
-		BuiltinDirs: []string{filepath.Join(cfg.AssetsDir, "plugins", "builtin")},
-		UserDir:     filepath.Join(cfg.AssetsDir, "plugins", "user"),
-		ExternalDir: filepath.Join(cfg.AssetsDir, "plugins", "external"),
+	integrationsManager := integrations.NewManager(integrations.ManagerOptions{
+		BuiltinDirs: []string{filepath.Join(cfg.AssetsDir, "integrations", "builtin")},
+		UserDir:     filepath.Join(cfg.AssetsDir, "integrations", "user"),
+		ExternalDir: filepath.Join(cfg.AssetsDir, "integrations", "external"),
 		StateStore:  store,
 	})
-	if _, err := pluginsManager.Discover(context.Background()); err != nil {
-		log.Printf("plugins discover warning: %v", err)
+	if _, err := integrationsManager.Discover(context.Background()); err != nil {
+		log.Printf("integrations discover warning: %v", err)
 	}
 
 	// ── Tools ───────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ func main() {
 		WorkingDir:    workspaceDir,
 		Store:         store,
 		Skills:        skillsManager,
-		Plugins:       pluginsManager,
+		Integrations:  integrationsManager,
 		PushDeliverer: pushDeliverer,
 		QuestionAsker: questionAskerHolder,
 	})
@@ -177,7 +177,7 @@ func main() {
 		WorkingDir:        workspaceDir,
 		Store:             store,
 		Skills:            skillsManager,
-		Plugins:           pluginsManager,
+		Integrations:      integrationsManager,
 		PushDeliverer:     pushDeliverer,
 		QuestionAsker:     questionAskerHolder,
 		EmbeddingProvider: embeddingProvider,
@@ -188,7 +188,7 @@ func main() {
 		log.Fatalf("failed to init media storage: %v", err)
 	}
 	memoryService := memory.NewService(store, llmCore, embeddingProvider)
-	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, pluginsManager, store, llm.ContextBuilderConfig{
+	llmBuilder := llm.NewContextBuilder(toolRegistry, skillsManager, integrationsManager, store, llm.ContextBuilderConfig{
 		SystemPrompt: cfg.SystemPrompt,
 		PromptFile:   cfg.PromptFile,
 		AssetsDir:    cfg.AssetsDir,
@@ -239,7 +239,7 @@ func main() {
 	preferencesHandler := ws.NewPreferencesHandler(store, directValidator)
 	preferencesHandler.RegisterRoutes(mux)
 
-	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Plugins: pluginsManager, Store: store, Validator: directValidator})
+	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Integrations: integrationsManager, Store: store, Validator: directValidator})
 	handler.RegisterRoutes(mux)
 	if err := handler.EnsurePluginCronJobs(context.Background()); err != nil {
 		log.Printf("plugin cron schedule warning: %v", err)
@@ -258,11 +258,11 @@ func main() {
 		AssetsDir:      cfg.AssetsDir,
 	})
 	adminHandler := adminhttp.New(adminhttp.Options{
-		Updater:    up,
-		Builder:    llmBuilder,
-		Skills:     skillsManager,
-		Plugins:    pluginsManager,
-		AdminToken: cfg.AdminToken,
+		Updater:      up,
+		Builder:      llmBuilder,
+		Skills:       skillsManager,
+		Integrations: integrationsManager,
+		AdminToken:   cfg.AdminToken,
 	})
 	adminHandler.RegisterRoutes(mux)
 
@@ -369,7 +369,7 @@ func main() {
 		}
 	}()
 	log.Printf("http server listening on %s", httpServer.Addr)
-	logStartupReport(context.Background(), store, skillsManager, pluginsManager, toolRegistry, pluginRegistry, reminderRegistry)
+	logStartupReport(context.Background(), store, skillsManager, integrationsManager, toolRegistry, integrationRegistry, reminderRegistry)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -498,7 +498,7 @@ func buildSharedConversationMessages(ctx context.Context, store *db.Store, userI
 	return messages
 }
 
-func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skills.Manager, pluginsManager *plugins.Manager, toolRegistry *tools.Registry, pluginRegistry *plugins.CronRegistry, reminderRegistry *reminders.Registry) {
+func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skills.Manager, integrationsManager *integrations.Manager, toolRegistry *tools.Registry, integrationRegistry *integrations.CronRegistry, reminderRegistry *reminders.Registry) {
 	skillCount := 0
 	if skillsManager != nil {
 		skillCount = len(skillsManager.List())
@@ -506,8 +506,8 @@ func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skill
 
 	pluginCount := 0
 	enabledPlugins := 0
-	if pluginsManager != nil {
-		pluginCount = len(pluginsManager.List())
+	if integrationsManager != nil {
+		pluginCount = len(integrationsManager.List())
 	}
 	if store != nil {
 		if records, err := store.ListPlugins(ctx); err == nil {
@@ -546,9 +546,9 @@ func logStartupReport(ctx context.Context, store *db.Store, skillsManager *skill
 
 	rotatorCount := 0
 	renewerCount := 0
-	if pluginRegistry != nil {
-		rotatorCount = pluginRegistry.TokenRotatorCount()
-		renewerCount = pluginRegistry.WatchRenewerCount()
+	if integrationRegistry != nil {
+		rotatorCount = integrationRegistry.TokenRotatorCount()
+		renewerCount = integrationRegistry.WatchRenewerCount()
 	}
 	reminderHandler := false
 	if reminderRegistry != nil {

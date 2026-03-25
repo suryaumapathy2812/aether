@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
-	"github.com/suryaumapathy2812/core-ai/agent/internal/plugins"
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/skills"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools/builtin"
@@ -86,13 +86,13 @@ func bootstrap(c cfg) (*tools.Orchestrator, *tools.Registry, *db.Store, func()) 
 	})
 	_, _ = skillsManager.Discover(context.Background())
 
-	pluginsManager := plugins.NewManager(plugins.ManagerOptions{
+	integrationsManager := integrations.NewManager(integrations.ManagerOptions{
 		BuiltinDirs: []string{filepath.Join(assets, "plugins", "builtin")},
 		UserDir:     filepath.Join(assets, "plugins", "user"),
 		ExternalDir: filepath.Join(assets, "plugins", "external"),
 		StateStore:  store,
 	})
-	_, _ = pluginsManager.Discover(context.Background())
+	_, _ = integrationsManager.Discover(context.Background())
 
 	workspace := filepath.Join(assets, "workspace")
 	_ = os.MkdirAll(workspace, 0o755)
@@ -103,7 +103,7 @@ func bootstrap(c cfg) (*tools.Orchestrator, *tools.Registry, *db.Store, func()) 
 		WorkingDir: workspace,
 		Store:      store,
 		Skills:     skillsManager,
-		Plugins:    pluginsManager,
+		Integrations:    integrationsManager,
 	})
 
 	cleanup := func() { _ = store.Close() }
