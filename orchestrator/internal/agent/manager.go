@@ -486,6 +486,7 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 	env := []string{
 		"PORT=" + strconv.Itoa(m.cfg.AgentPort),
 		"AETHER_AGENT_ID=" + agentID,
+		"AETHER_USER_ID=" + userID,
 	}
 	if strings.TrimSpace(m.cfg.PublicBaseURL) != "" {
 		env = append(env, "AETHER_PUBLIC_BASE_URL="+strings.TrimSpace(m.cfg.PublicBaseURL))
@@ -572,6 +573,13 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 		env = append(env, kv)
 	}
 
+	// Pass orchestrator URL so agent can register email mappings after OAuth
+	if strings.TrimSpace(m.cfg.PublicBaseURL) != "" {
+		env = append(env, "ORCHESTRATOR_URL="+strings.TrimSpace(m.cfg.PublicBaseURL))
+	} else {
+		env = append(env, "ORCHESTRATOR_URL=http://localhost:4000")
+	}
+
 	resp, err := m.docker.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -587,6 +595,14 @@ func (m *Manager) ensureContainer(ctx context.Context, userID, containerName, _ 
 				{Type: mount.TypeBind, Source: workspaceHostPath, Target: "/app/assets/workspace"},
 				{Type: mount.TypeBind, Source: skillsUserHostPath, Target: "/app/assets/skills/user"},
 				{Type: mount.TypeBind, Source: skillsExtHostPath, Target: "/app/assets/skills/external"},
+			},
+			// FUSE support for rclone Google Drive mount
+			CapAdd:      []string{"SYS_ADMIN"},
+			SecurityOpt: []string{"apparmor:unconfined"},
+			Resources: container.Resources{
+				Devices: []container.DeviceMapping{
+					{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"},
+				},
 			},
 		},
 		&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{m.cfg.Network: {}}},
