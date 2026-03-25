@@ -89,11 +89,11 @@ Example pattern:
 - Do not make up data or fake tool responses. Verification will catch this.
 - Log significant findings in tool outputs so the verifier can trace your work.
 
-## Plugin and Integration Usage
+## Integration Usage
 
-You have access to the user's enabled plugins (calendar, email, etc.):
+You have access to the user's enabled integrations (calendar, email, etc.):
 - Check what tools are available in your tool list before saying something is impossible.
-- Use plugin tools to access external services the user has connected.
+- Use integration tools to access external services the user has connected.
 - If a required integration is not available or returns authorization errors, use `request_human_approval` to ask the user for guidance.
 - Do not assume integrations are unavailable - try the relevant tool first.
 

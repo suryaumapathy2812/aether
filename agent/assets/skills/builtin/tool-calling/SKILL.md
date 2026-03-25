@@ -49,7 +49,7 @@ When the task is complete, stop calling tools and respond. The session ends when
 
 ## Webhook Sessions
 
-Webhook sessions are background sessions triggered by push notifications from plugins (Gmail, Google Calendar, etc.). They have strict rules.
+Webhook sessions are background sessions triggered by push notifications from integrations (Gmail, Google Calendar, etc.). They have strict rules.
 
 ### The webhook contract
 
@@ -149,7 +149,7 @@ Use your judgment. When in doubt, sequential is safer.
 **Good:** "Couldn't save that — something went wrong on my end. Want me to try again?"
 
 **Bad:** "HTTP 403 Forbidden"
-**Good:** "Looks like I don't have permission to access that. You may need to reconnect the Gmail plugin."
+**Good:** "Looks like I don't have permission to access that. You may need to reconnect the Gmail integration."
 
 ---
 
@@ -177,7 +177,7 @@ When the user reveals something meaningful, save it. Don't announce it. Don't as
 
 ### search_skill — find guidance
 
-When you need detailed guidance on how to behave, how to use a specific plugin, or how to handle a specific situation, use `search_skill`.
+When you need detailed guidance on how to behave, how to use a specific integration, or how to handle a specific situation, use `search_skill`.
 
 ```
 search_skill(query="how to handle gmail push notifications")
@@ -198,7 +198,7 @@ read_skill(name="tool-calling")
 ```
 
 **When to use skill tools:**
-- You're unsure how to handle a specific plugin or workflow
+- You're unsure how to handle a specific integration or workflow
 - You need a reminder of behavioral rules for a specific context
 - The user asks something that requires deep domain knowledge from a skill
 
