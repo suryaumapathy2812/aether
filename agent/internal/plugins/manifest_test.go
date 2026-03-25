@@ -6,12 +6,12 @@ import (
 )
 
 func TestParseManifest(t *testing.T) {
-	raw := []byte("name: gmail\ndisplay_name: Gmail\ndescription: Mail\nversion: 1.0.0\nplugin_type: sensor\nauth:\n  type: oauth2\n")
+	raw := []byte("name: google-workspace\ndisplay_name: Google Workspace\ndescription: Workspace\nversion: 1.0.0\nplugin_type: sensor\nauth:\n  type: oauth2\n")
 	m, err := parseManifest(raw)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if m.Name != "gmail" || m.DisplayName != "Gmail" {
+	if m.Name != "google-workspace" || m.DisplayName != "Google Workspace" {
 		t.Fatalf("unexpected manifest: %#v", m)
 	}
 	if m.Auth.Type != "oauth2" {

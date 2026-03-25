@@ -15,10 +15,7 @@ func RegisterDefaultTokenRotators(registry *CronRegistry) {
 	if registry == nil {
 		return
 	}
-	googlePlugins := []string{"gmail", "google-calendar", "google-contacts", "google-drive"}
-	for _, pluginName := range googlePlugins {
-		registry.RegisterTokenRotator(pluginName, oauthTokenRotator("https://oauth2.googleapis.com/token", false))
-	}
+	registry.RegisterTokenRotator("google-workspace", oauthTokenRotator("https://oauth2.googleapis.com/token", false))
 	registry.RegisterTokenRotator("spotify", oauthTokenRotator("https://accounts.spotify.com/api/token", true))
 }
 
@@ -26,7 +23,7 @@ func RegisterDefaultWatchRenewers(registry *CronRegistry) {
 	if registry == nil {
 		return
 	}
-	registry.RegisterWatchRenewer("gmail", gmailWatchRenewer())
+	registry.RegisterWatchRenewer("google-workspace", gmailWatchRenewer())
 }
 
 func gmailWatchRenewer() WatchRenewer {

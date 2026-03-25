@@ -64,7 +64,7 @@ func TestSchedulerRetriesAndFailsAfterMaxAttempts(t *testing.T) {
 	_, err := store.ScheduleCronJob(ctx, db.CronJobCreate{
 		Module:      "plugins",
 		JobType:     "rotate",
-		Payload:     map[string]any{"plugin": "gmail"},
+		Payload:     map[string]any{"plugin": "google-workspace"},
 		RunAt:       time.Now().UTC().Add(-time.Second),
 		MaxAttempts: 1,
 	})

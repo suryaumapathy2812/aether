@@ -1,0 +1,65 @@
+name: google-workspace
+display_name: Google Workspace
+description: Google Workspace services — Gmail, Calendar, Drive, Contacts, Sheets, Docs, Slides, Tasks, Forms, Keep, and Meet
+version: 1.0.0
+plugin_type: sensor
+auth:
+  type: oauth2
+  provider: google
+  token_url: https://oauth2.googleapis.com/token
+  use_basic_auth: false
+  auto_refresh: true
+  refresh_interval: 3000
+  scopes:
+    # Gmail
+    - https://www.googleapis.com/auth/gmail.readonly
+    - https://www.googleapis.com/auth/gmail.send
+    - https://www.googleapis.com/auth/gmail.modify
+    # Calendar
+    - https://www.googleapis.com/auth/calendar
+    - https://www.googleapis.com/auth/calendar.events
+    # Drive
+    - https://www.googleapis.com/auth/drive
+    # Contacts/People
+    - https://www.googleapis.com/auth/contacts.readonly
+    - https://www.googleapis.com/auth/contacts
+    # Sheets
+    - https://www.googleapis.com/auth/spreadsheets
+    # Docs
+    - https://www.googleapis.com/auth/documents
+    # Slides
+    - https://www.googleapis.com/auth/presentations
+    # Tasks
+    - https://www.googleapis.com/auth/tasks
+    # Forms
+    - https://www.googleapis.com/auth/forms.body
+    - https://www.googleapis.com/auth/forms.responses.readonly
+    # Keep
+    - https://www.googleapis.com/auth/keep
+    # Meet
+    - https://www.googleapis.com/auth/meetings.space.created
+    - https://www.googleapis.com/auth/meetings.space.readonly
+  config_fields:
+    - key: client_id
+      label: Client ID
+      type: text
+      required: true
+    - key: client_secret
+      label: Client Secret
+      type: password
+      required: true
+    - key: project_id
+      label: Project ID
+      type: text
+    - key: pubsub_topic
+      label: Gmail Pub/Sub Topic
+      type: text
+      description: Required for Gmail push notifications
+api:
+  base_url: https://www.googleapis.com
+webhook:
+  protocol: pubsub
+  event_field: eventType
+  supported_events:
+    - messageReceived
+    - sync

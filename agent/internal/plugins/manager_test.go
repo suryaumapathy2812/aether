@@ -18,10 +18,10 @@ func TestManagerDiscoverSearchRemove(t *testing.T) {
 	builtin := filepath.Join(root, "builtin")
 	user := filepath.Join(root, "user")
 
-	mustWritePlugin(t, filepath.Join(builtin, "gmail", "plugin.yaml"), map[string]any{
-		"name":         "gmail",
-		"display_name": "Gmail",
-		"description":  "mail workflows",
+	mustWritePlugin(t, filepath.Join(builtin, "google-workspace", "plugin.yaml"), map[string]any{
+		"name":         "google-workspace",
+		"display_name": "Google Workspace",
+		"description":  "Gmail, Calendar, Drive and more",
 		"tools":        []map[string]any{{"class": "SendEmailTool"}},
 	})
 	mustWritePlugin(t, filepath.Join(user, "weather", "plugin.yaml"), map[string]any{
@@ -35,14 +35,14 @@ func TestManagerDiscoverSearchRemove(t *testing.T) {
 		t.Fatalf("discover failed: %v", err)
 	}
 
-	if _, ok := m.Get("gmail"); !ok {
-		t.Fatalf("expected gmail plugin")
+	if _, ok := m.Get("google-workspace"); !ok {
+		t.Fatalf("expected google-workspace plugin")
 	}
 	if len(m.Search("weather")) != 1 {
 		t.Fatalf("expected one search match")
 	}
 
-	if err := m.Remove("gmail"); !errors.Is(err, ErrProtected) {
+	if err := m.Remove("google-workspace"); !errors.Is(err, ErrProtected) {
 		t.Fatalf("expected protected error, got %v", err)
 	}
 	if err := m.Remove("weather"); err != nil {

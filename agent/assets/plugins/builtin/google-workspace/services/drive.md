@@ -1,15 +1,15 @@
 # Google Drive API
 
 ## Authentication
-- **Env var**: `$GOOGLE_DRIVE_ACCESS_TOKEN` (auto-injected via execute tool)
-- **Credentials**: Pass `credentials=["google-drive"]` to the execute tool
+- **Env var**: `$GOOGLE_WORKSPACE_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-workspace"]` to the execute tool
 - **Base URL**: `https://www.googleapis.com/drive/v3`
 - Token auto-refreshes on 401 response
 
 ## Search Files
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files?q=name+contains+'Q4+report'&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=20"
 ```
 
@@ -27,18 +27,18 @@ curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
 
 ```bash
 # Root folder
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files?q='root'+in+parents+and+trashed=false&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=50"
 
 # Specific folder
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files?q='FOLDER_ID'+in+parents+and+trashed=false&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=50"
 ```
 
 ## Get File Metadata
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files/{FILE_ID}?fields=id,name,mimeType,size,createdTime,modifiedTime,owners,sharingUser,webViewLink,webContentLink,parents,permissions"
 ```
 
@@ -54,11 +54,11 @@ curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
 
 ```bash
 # For Google Docs (export as PDF or other format)
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files/{FILE_ID}/export?mimeType=application/pdf" -o document.pdf
 
 # For binary files (images, PDFs, etc.)
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files/{FILE_ID}?alt=media" -o downloaded_file
 ```
 
@@ -66,7 +66,7 @@ curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "New Folder",
@@ -84,7 +84,7 @@ UPLOAD_URL="https://www.googleapis.com/upload/drive/v3/files?uploadType=multipar
 
 # 2. Upload with metadata
 curl -s -X POST \
-  -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -F 'metadata={"name":"uploaded.txt","parents":["FOLDER_ID"]};type=application/json' \
   -F 'file=@./local-file.txt;type=text/plain' \
   "$UPLOAD_URL"
@@ -93,7 +93,7 @@ curl -s -X POST \
 ## List Shared Drives
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/drives?fields=drives(id,name)"
 ```
 
@@ -101,7 +101,7 @@ curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
 
 Responses include `nextPageToken` when more results exist:
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_DRIVE_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/drive/v3/files?q=...&pageSize=100&pageToken=NEXT_PAGE_TOKEN"
 ```
 

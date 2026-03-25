@@ -1,14 +1,14 @@
 # Gmail API
 
 ## Authentication
-- **Env var**: `$GMAIL_ACCESS_TOKEN` (auto-injected via execute tool)
-- **Credentials**: Pass `credentials=["gmail"]` to the execute tool
+- **Env var**: `$GOOGLE_WORKSPACE_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-workspace"]` to the execute tool
 - **Base URL**: `https://gmail.googleapis.com/gmail/v1`
 - Token auto-refreshes on 401 response
 
 ## List Messages
 ```bash
-curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=is:unread"
 ```
 Response contains `messages[].id` — use each ID with Read Message below.
@@ -22,7 +22,7 @@ Response contains `messages[].id` — use each ID with Read Message below.
 
 ## Read Message
 ```bash
-curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/{MESSAGE_ID}?format=full"
 ```
 - `format=full` returns headers + body (default)
@@ -51,7 +51,7 @@ print(base64.urlsafe_b64encode(msg.encode()).decode())
 
 # 2. Send
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"raw\": \"$RAW\"}" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
@@ -71,7 +71,7 @@ print(base64.urlsafe_b64encode(msg.encode()).decode())
 ")
 
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"raw\": \"$RAW\", \"threadId\": \"THREAD_ID\"}" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
@@ -81,14 +81,14 @@ curl -s -X POST \
 ```bash
 # Add labels (e.g., mark as read by removing UNREAD)
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"removeLabelIds": ["UNREAD"]}' \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/{MESSAGE_ID}/modify"
 
 # Archive (remove INBOX label)
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"removeLabelIds": ["INBOX"]}' \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/{MESSAGE_ID}/modify"
@@ -96,7 +96,7 @@ curl -s -X POST \
 
 ## List Labels
 ```bash
-curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/labels"
 ```
 
@@ -104,12 +104,12 @@ curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
 ```bash
 # Trash
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/{MESSAGE_ID}/trash"
 
 # Untrash
 curl -s -X POST \
-  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/messages/{MESSAGE_ID}/untrash"
 ```
 

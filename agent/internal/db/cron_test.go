@@ -54,7 +54,7 @@ func TestCronRecurringRescheduleAndScopeIsolation(t *testing.T) {
 	appScope := store.ScopeCronModule("plugins")
 	otherScope := store.ScopeCronModule("reminders")
 	runAt := time.Now().UTC().Add(-time.Second)
-	job, err := appScope.ScheduleRecurring(ctx, "rotate_token", map[string]any{"plugin": "gmail"}, runAt, 60, 5)
+	job, err := appScope.ScheduleRecurring(ctx, "rotate_token", map[string]any{"plugin": "google-workspace"}, runAt, 60, 5)
 	if err != nil {
 		t.Fatalf("schedule recurring: %v", err)
 	}

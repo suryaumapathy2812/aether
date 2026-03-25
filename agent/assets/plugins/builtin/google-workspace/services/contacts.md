@@ -1,15 +1,15 @@
 # Google Contacts API
 
 ## Authentication
-- **Env var**: `$GOOGLE_CONTACTS_ACCESS_TOKEN` (auto-injected via execute tool)
-- **Credentials**: Pass `credentials=["google-contacts"]` to the execute tool
+- **Env var**: `$GOOGLE_WORKSPACE_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-workspace"]` to the execute tool
 - **Base URL**: `https://people.googleapis.com/v1`
 - Token auto-refreshes on 401 response
 
 ## Search Contacts
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/people:searchContacts?query=Priya&readMask=names,emailAddresses,phoneNumbers,organizations&pageSize=10"
 ```
 
@@ -31,7 +31,7 @@ curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
 ## Get a Specific Contact
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/people/{RESOURCE_NAME}?personFields=names,emailAddresses,phoneNumbers,organizations,addresses,birthdays"
 ```
 
@@ -41,14 +41,14 @@ Contact resource names look like `people/c1234567890`. Get this from search resu
 ## List All Contacts
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/people/me/connections?readMask=names,emailAddresses,phoneNumbers&pageSize=100"
 ```
 
 ### Pagination
 Response includes `nextPageToken` when more contacts exist:
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/people/me/connections?readMask=names,emailAddresses,phoneNumbers&pageSize=100&pageToken=NEXT_PAGE_TOKEN"
 ```
 
@@ -77,14 +77,14 @@ When a search returns multiple contacts, iterate through `results[]` and present
 ## List Contact Groups
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/contactGroups?pageSize=50"
 ```
 
 ## Get Contacts in a Group
 
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CONTACTS_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://people.googleapis.com/v1/contactGroups/{GROUP_ID}?maxMembers=100"
 ```
 

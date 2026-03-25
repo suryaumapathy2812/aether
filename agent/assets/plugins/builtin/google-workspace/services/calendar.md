@@ -1,20 +1,20 @@
 # Google Calendar API
 
 ## Authentication
-- **Env var**: `$GOOGLE_CALENDAR_ACCESS_TOKEN` (auto-injected via execute tool)
-- **Credentials**: Pass `credentials=["google-calendar"]` to the execute tool
+- **Env var**: `$GOOGLE_WORKSPACE_ACCESS_TOKEN` (auto-injected via execute tool)
+- **Credentials**: Pass `credentials=["google-workspace"]` to the execute tool
 - **Base URL**: `https://www.googleapis.com/calendar/v3`
 - Token auto-refreshes on 401 response
 
 ## List Calendars
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 ```
 
 ## List Events
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=$(date -u +%Y-%m-%dT%H:%M:%SZ)&maxResults=10"
 ```
 
@@ -28,14 +28,14 @@ curl -s -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
 
 ## Get Event
 ```bash
-curl -s -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+curl -s -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/calendar/v3/calendars/primary/events/{EVENT_ID}"
 ```
 
 ## Create Event
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "summary": "Meeting with Team",
@@ -57,7 +57,7 @@ Use `date` instead of `dateTime`:
 ## Update Event
 ```bash
 curl -s -X PATCH \
-  -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"summary": "Updated Title"}' \
   "https://www.googleapis.com/calendar/v3/calendars/primary/events/{EVENT_ID}"
@@ -66,21 +66,21 @@ curl -s -X PATCH \
 ## Delete Event
 ```bash
 curl -s -X DELETE \
-  -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/calendar/v3/calendars/primary/events/{EVENT_ID}"
 ```
 
 ## Quick Add (Natural Language)
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   "https://www.googleapis.com/calendar/v3/calendars/primary/events/quick?text=Meeting+with+Alice+tomorrow+at+3pm"
 ```
 
 ## Free/Busy Query
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $GOOGLE_CALENDAR_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $GOOGLE_WORKSPACE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "timeMin": "2025-01-20T00:00:00Z",

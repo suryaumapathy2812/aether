@@ -152,11 +152,11 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	ctx := context.Background()
 	assets := t.TempDir()
 	builtin := filepath.Join(assets, "plugins", "builtin")
-	if err := os.MkdirAll(filepath.Join(builtin, "google-calendar"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(builtin, "google-workspace"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	manifest := "name: google-calendar\ndisplay_name: Google Calendar\ndescription: test\nauth:\n  type: oauth2\n  provider: google\n  scopes:\n    - https://www.googleapis.com/auth/calendar.readonly\n  config_fields:\n    - key: client_id\n      type: text\n      required: true\n    - key: client_secret\n      type: password\n      required: true\n"
-	if err := os.WriteFile(filepath.Join(builtin, "google-calendar", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+	manifest := "name: google-workspace\ndisplay_name: Google Workspace\ndescription: test\nauth:\n  type: oauth2\n  provider: google\n  scopes:\n    - https://www.googleapis.com/auth/calendar.readonly\n  config_fields:\n    - key: client_id\n      type: text\n      required: true\n    - key: client_secret\n      type: password\n      required: true\n"
+	if err := os.WriteFile(filepath.Join(builtin, "google-workspace", "plugin.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
@@ -170,14 +170,14 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	if _, err := pm.Discover(ctx); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "google-calendar", DisplayName: "Google Calendar"}); err != nil {
+	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "google-workspace", DisplayName: "Google Workspace"}); err != nil {
 		t.Fatalf("upsert plugin: %v", err)
 	}
 	secret, err := store.EncryptString("client-secret")
 	if err != nil {
 		t.Fatalf("encrypt secret: %v", err)
 	}
-	if err := store.SetPluginConfig(ctx, "google-calendar", map[string]string{"client_id": "client-id", "client_secret": secret}); err != nil {
+	if err := store.SetPluginConfig(ctx, "google-workspace", map[string]string{"client_id": "client-id", "client_secret": secret}); err != nil {
 		t.Fatalf("set config: %v", err)
 	}
 
@@ -186,7 +186,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/google-calendar/oauth/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agent/v1/plugins/google-workspace/oauth/start", nil)
 	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
@@ -199,7 +199,7 @@ func TestPluginOAuthStartRedirect(t *testing.T) {
 	if !strings.HasPrefix(location, "https://accounts.google.com/o/oauth2/v2/auth?") {
 		t.Fatalf("unexpected oauth redirect: %s", location)
 	}
-	if !strings.Contains(location, "redirect_uri=https%3A%2F%2Fapp.example.com%2Fplugins%2Fgoogle-calendar%2Foauth%2Fcallback") {
+	if !strings.Contains(location, "redirect_uri=https%3A%2F%2Fapp.example.com%2Fplugins%2Fgoogle-workspace%2Foauth%2Fcallback") {
 		t.Fatalf("redirect missing callback uri: %s", location)
 	}
 }

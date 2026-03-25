@@ -397,6 +397,20 @@ func (b *ContextBuilder) pluginsPromptSection() string {
 		line := fmt.Sprintf("- %s: %s. Env var: $%s", meta.DisplayName, meta.Description, envVar)
 		lines = append(lines, strings.TrimSpace(line))
 	}
+	if _, ok := b.plugins.Get("google-workspace"); ok {
+		lines = append(lines, "Google Workspace services (all use $GOOGLE_WORKSPACE_ACCESS_TOKEN):")
+		lines = append(lines, "- Gmail: https://gmail.googleapis.com/gmail/v1 — email send, read, search, labels")
+		lines = append(lines, "- Calendar: https://www.googleapis.com/calendar/v3 — events, calendars, free/busy")
+		lines = append(lines, "- Drive: https://www.googleapis.com/drive/v3 — files, folders, permissions")
+		lines = append(lines, "- Contacts: https://people.googleapis.com/v1 — contacts, directory")
+		lines = append(lines, "- Sheets: https://sheets.googleapis.com/v4/spreadsheets — read/write spreadsheets")
+		lines = append(lines, "- Docs: https://docs.googleapis.com/v1/documents — create/edit documents")
+		lines = append(lines, "- Slides: https://slides.googleapis.com/v1/presentations — create/edit presentations")
+		lines = append(lines, "- Tasks: https://tasks.googleapis.com/v1 — task lists and tasks")
+		lines = append(lines, "- Forms: https://forms.googleapis.com/v1 — create/manage forms")
+		lines = append(lines, "- Keep: https://keep.googleapis.com/v1 — notes management")
+		lines = append(lines, "- Meet: https://meet.googleapis.com/v2 — meeting spaces")
+	}
 	if len(lines) <= 1 {
 		return ""
 	}
@@ -407,14 +421,11 @@ func (b *ContextBuilder) pluginsPromptSection() string {
 // Keep in sync with internal/tools/builtin/execute_tool.go credentialEnvMapping.
 func envVarNameForPlugin(pluginName string) string {
 	mapping := map[string]string{
-		"gmail":           "GMAIL_ACCESS_TOKEN",
-		"google-calendar": "GOOGLE_CALENDAR_ACCESS_TOKEN",
-		"google-contacts": "GOOGLE_CONTACTS_ACCESS_TOKEN",
-		"google-drive":    "GOOGLE_DRIVE_ACCESS_TOKEN",
-		"spotify":         "SPOTIFY_ACCESS_TOKEN",
-		"weather":         "WEATHER_API_KEY",
-		"brave-search":    "BRAVE_SEARCH_API_KEY",
-		"wolfram":         "WOLFRAM_APP_ID",
+		"google-workspace": "GOOGLE_WORKSPACE_ACCESS_TOKEN",
+		"spotify":          "SPOTIFY_ACCESS_TOKEN",
+		"weather":          "WEATHER_API_KEY",
+		"brave-search":     "BRAVE_SEARCH_API_KEY",
+		"wolfram":          "WOLFRAM_APP_ID",
 	}
 	if env, ok := mapping[pluginName]; ok && env != "" {
 		return env

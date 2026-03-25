@@ -16,14 +16,11 @@ import (
 // credentialEnvMapping maps plugin names to the environment variable names
 // their access tokens will be injected as.
 var credentialEnvMapping = map[string]string{
-	"gmail":           "GMAIL_ACCESS_TOKEN",
-	"google-calendar": "GOOGLE_CALENDAR_ACCESS_TOKEN",
-	"google-contacts": "GOOGLE_CONTACTS_ACCESS_TOKEN",
-	"google-drive":    "GOOGLE_DRIVE_ACCESS_TOKEN",
-	"spotify":         "SPOTIFY_ACCESS_TOKEN",
-	"weather":         "WEATHER_API_KEY",
-	"brave-search":    "BRAVE_SEARCH_API_KEY",
-	"wolfram":         "WOLFRAM_APP_ID",
+	"google-workspace": "GOOGLE_WORKSPACE_ACCESS_TOKEN",
+	"spotify":          "SPOTIFY_ACCESS_TOKEN",
+	"weather":          "WEATHER_API_KEY",
+	"brave-search":     "BRAVE_SEARCH_API_KEY",
+	"wolfram":          "WOLFRAM_APP_ID",
 }
 
 // envVarForPlugin returns the environment variable name for a plugin's credential.

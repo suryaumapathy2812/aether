@@ -16,11 +16,11 @@ func TestOAuthTokenRotatorUpdatesConfig(t *testing.T) {
 	store := openTokenStore(t)
 	defer store.Close()
 	ctx := context.Background()
-	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "gmail", DisplayName: "Gmail", Enabled: true}); err != nil {
+	if err := store.UpsertPlugin(ctx, db.PluginRecord{Name: "google-workspace", DisplayName: "Google Workspace", Enabled: true}); err != nil {
 		t.Fatalf("upsert plugin: %v", err)
 	}
-	_ = store.SetPluginEnabled(ctx, "gmail", true)
-	ps := NewPluginState(store, "gmail")
+	_ = store.SetPluginEnabled(ctx, "google-workspace", true)
+	ps := NewPluginState(store, "google-workspace")
 
 	encRefresh, err := ps.EncryptString("refresh-abc")
 	if err != nil {
