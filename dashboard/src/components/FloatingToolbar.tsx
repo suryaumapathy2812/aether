@@ -26,7 +26,7 @@ import {
 const NAV_ITEMS = [
   { href: "/devices", label: "Devices" },
   { href: "/memory", label: "Memory" },
-  { href: "/plugins", label: "Plugins" },
+  { href: "/integrations", label: "Integrations" },
   { href: "/skills", label: "Skills" },
 ] as const;
 
@@ -38,7 +38,7 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
       return active ? <IconDeviceMobileFilled className="size-5" /> : <IconDeviceMobile className="size-5" strokeWidth={1.5} />;
     case "/memory":
       return <IconBrain className="size-5" strokeWidth={active ? 2 : 1.5} />;
-    case "/plugins":
+    case "/integrations":
       return <IconPlugConnected className="size-5" strokeWidth={active ? 2 : 1.5} />;
     case "/skills":
       return <IconSparkles className="size-5" strokeWidth={active ? 2 : 1.5} />;

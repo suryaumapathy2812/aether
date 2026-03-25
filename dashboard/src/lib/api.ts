@@ -87,6 +87,36 @@ export async function ensureDirectAgentConnection(
         _directAgentConnection = null;
         return null;
       }
+
+      // Skip direct agent when it resolves to localhost/private IPs
+      // and the browser is on a non-localhost host (e.g. mobile PWA).
+      // The orchestrator WS proxy handles routing correctly in this case.
+      const agentHost = (() => {
+        try {
+          return new URL(payload.base_url).hostname;
+        } catch {
+          return "";
+        }
+      })();
+      const isLocalAgent =
+        agentHost === "localhost" ||
+        agentHost === "127.0.0.1" ||
+        agentHost === "::1" ||
+        agentHost.startsWith("192.168.") ||
+        agentHost.startsWith("10.") ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(agentHost);
+      const browserHost =
+        typeof window !== "undefined" ? window.location.hostname : "";
+      const isBrowserLocal =
+        browserHost === "localhost" ||
+        browserHost === "127.0.0.1" ||
+        browserHost === "::1";
+
+      if (isLocalAgent && !isBrowserLocal) {
+        _directAgentConnection = null;
+        return null;
+      }
+
       _directAgentConnection = {
         prefix: payload.prefix || "",
         baseUrl: payload.base_url,
@@ -212,6 +242,16 @@ export async function directAgentFetch(path: string, options?: RequestInit): Pro
 }
 
 export function orchestratorWs(path: string, token?: string): WebSocket {
+  const params = token ? `?token=${encodeURIComponent(token)}` : "";
+
+  // Use explicit WS URL from env if set (respects Cloudflare/proxy routing)
+  const configuredWsUrl = process.env.NEXT_PUBLIC_ORCHESTRATOR_WS_URL?.trim();
+  if (configuredWsUrl) {
+    const base = configuredWsUrl.replace(/\/+$/, "");
+    return new WebSocket(`${base}${path}${params}`);
+  }
+
+  // Fall back to same-origin construction from page URL
   const baseUrl = getOrchestratorBaseUrl();
   const protocol =
     typeof window !== "undefined"
@@ -221,7 +261,6 @@ export function orchestratorWs(path: string, token?: string): WebSocket {
       : "ws:";
   const host = typeof window !== "undefined" ? window.location.host : "localhost:3000";
 
-  const params = token ? `?token=${encodeURIComponent(token)}` : "";
   return new WebSocket(`${protocol}//${host}${baseUrl}${path}${params}`);
 }
 
@@ -755,7 +794,7 @@ function toEpoch(value?: string): number {
 
 // ── Plugins ──
 
-export interface PluginInfo {
+export interface IntegrationInfo {
   name: string;
   display_name: string;
   description: string;
@@ -769,33 +808,33 @@ export interface PluginInfo {
     description?: string;
   }[];
   installed: boolean;
-  plugin_id: string | null;
+  integration_id: string | null;
   enabled: boolean;
   connected: boolean;
   needs_reconnect: boolean;
 }
 
-export async function listPlugins() {
-  return api<PluginInfo[]>(agentPath("/plugins"));
+export async function listIntegrations() {
+  return api<IntegrationInfo[]>(agentPath("/integrations"));
 }
 
-export async function installPlugin(name: string) {
-  return api<{ plugin_id: string; status: string }>(`${agentPath("/plugins")}/${name}/install`, {
+export async function installIntegration(name: string) {
+  return api<{ integration_id: string; status: string }>(`${agentPath("/integrations")}/${name}/install`, {
     method: "POST",
   });
 }
 
-export async function enablePlugin(name: string) {
-  return api<{ status: string }>(`${agentPath("/plugins")}/${name}/enable`, { method: "POST" });
+export async function enableIntegration(name: string) {
+  return api<{ status: string }>(`${agentPath("/integrations")}/${name}/enable`, { method: "POST" });
 }
 
-export async function disablePlugin(name: string) {
-  return api<{ status: string }>(`${agentPath("/plugins")}/${name}/disable`, { method: "POST" });
+export async function disableIntegration(name: string) {
+  return api<{ status: string }>(`${agentPath("/integrations")}/${name}/disable`, { method: "POST" });
 }
 
-export async function savePluginConfig(name: string, config: Record<string, string>) {
+export async function saveIntegrationConfig(name: string, config: Record<string, string>) {
   return api<{ status: string; auto_enabled?: boolean }>(
-    `${agentPath("/plugins")}/${name}/config`,
+    `${agentPath("/integrations")}/${name}/config`,
     {
       method: "POST",
       body: JSON.stringify({ config }),
@@ -803,12 +842,12 @@ export async function savePluginConfig(name: string, config: Record<string, stri
   );
 }
 
-export async function getPluginConfig(name: string) {
-  return api<Record<string, string>>(`${agentPath("/plugins")}/${name}/config`);
+export async function getIntegrationConfig(name: string) {
+  return api<Record<string, string>>(`${agentPath("/integrations")}/${name}/config`);
 }
 
-export async function uninstallPlugin(name: string) {
-  return api(`${agentPath("/plugins")}/${name}`, { method: "DELETE" });
+export async function uninstallIntegration(name: string) {
+  return api(`${agentPath("/integrations")}/${name}`, { method: "DELETE" });
 }
 
 // ── Skills ──
@@ -1067,7 +1106,7 @@ export async function chatCompletions(input: {
 export function getOAuthStartUrl(pluginName: string): string {
   const token = _sessionToken || "";
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `/plugins/${pluginName}/oauth/start${qs}`;
+  return `/integrations/${pluginName}/oauth/start${qs}`;
 }
 
 // ── Channels ──

@@ -107,7 +107,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
             router.push("/account");
             break;
           case "p":
-            router.push("/plugins");
+            router.push("/integrations");
             break;
           case "d":
             router.push("/devices");

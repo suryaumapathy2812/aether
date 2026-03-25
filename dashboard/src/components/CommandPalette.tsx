@@ -100,7 +100,7 @@ export default function CommandPalette({
             Chat
             <span className="ml-auto text-sm text-muted-foreground/60">G C</span>
           </CommandItem>
-          <CommandItem onSelect={() => runAction(() => router.push("/plugins"))}>
+          <CommandItem onSelect={() => runAction(() => router.push("/integrations"))}>
             <IconPlugConnected className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Connections
             <span className="ml-auto text-sm text-muted-foreground/60">G P</span>
