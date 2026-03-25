@@ -13,7 +13,7 @@ import (
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
-// credentialEnvMapping maps plugin names to the environment variable names
+// credentialEnvMapping maps integration names to the environment variable names
 // their access tokens will be injected as.
 var credentialEnvMapping = map[string]string{
 	"google-workspace": "GOOGLE_WORKSPACE_ACCESS_TOKEN",
@@ -23,9 +23,9 @@ var credentialEnvMapping = map[string]string{
 	"wolfram":          "WOLFRAM_APP_ID",
 }
 
-// envVarForPlugin returns the environment variable name for a plugin's credential.
+// envVarForIntegration returns the environment variable name for a integration's credential.
 // Falls back to PLUGINNAME_ACCESS_TOKEN for unknown plugins.
-func envVarForPlugin(pluginName string) string {
+func envVarForIntegration(pluginName string) string {
 	if env, ok := credentialEnvMapping[pluginName]; ok && env != "" {
 		return env
 	}
@@ -39,7 +39,7 @@ func (t *ExecuteTool) Definition() tools.Definition {
 	return tools.Definition{
 		Name: "execute",
 		Description: "Execute a shell command (curl, python3, bash, etc.) in the workspace. " +
-			"API credentials are injected as environment variables when you specify credential plugin names. " +
+			"API credentials are injected as environment variables when you specify credential integration names. " +
 			"Write commands to interact with APIs — check skills for API documentation.",
 		StatusText: "Executing...",
 		Parameters: []tools.Param{
@@ -71,13 +71,13 @@ func (t *ExecuteTool) Execute(ctx context.Context, call tools.Call) tools.Result
 		timeoutSec = 120
 	}
 
-	// Resolve credentials from plugin store and build env vars.
+	// Resolve credentials from integration store and build env vars.
 	envVars, credMeta, credErr := t.resolveCredentials(ctx, call, credNames)
 	if credErr != nil {
 		return tools.Fail(credErr.Error(), map[string]any{"credentials": credNames})
 	}
 
-	// Build the execution environment: inherit host env + inject plugin credentials.
+	// Build the execution environment: inherit host env + inject integration credentials.
 	cmdEnv := os.Environ()
 	cmdEnv = append(cmdEnv, envVars...)
 
@@ -121,7 +121,7 @@ func (t *ExecuteTool) Execute(ctx context.Context, call tools.Call) tools.Result
 	return tools.Success(out, map[string]any{"command": command, "stderr": errOut, "injected_credentials": credMeta})
 }
 
-// resolveCredentials looks up each plugin's access_token from the store,
+// resolveCredentials looks up each integration's access_token from the store,
 // decrypts it, and returns environment variable assignments.
 func (t *ExecuteTool) resolveCredentials(ctx context.Context, call tools.Call, pluginNames []string) ([]string, map[string]string, error) {
 	if len(pluginNames) == 0 || call.Ctx.Store == nil {
@@ -139,10 +139,10 @@ func (t *ExecuteTool) resolveCredentials(ctx context.Context, call tools.Call, p
 
 		rec, err := call.Ctx.Store.GetPlugin(ctx, name)
 		if err != nil {
-			return nil, nil, fmt.Errorf("plugin %q not found: %v", name, err)
+			return nil, nil, fmt.Errorf("integration %q not found: %v", name, err)
 		}
 		if !rec.Enabled {
-			return nil, nil, fmt.Errorf("plugin %q is not enabled", name)
+			return nil, nil, fmt.Errorf("integration %q is not enabled", name)
 		}
 		if rec.Config == nil {
 			rec.Config = map[string]string{}
@@ -157,7 +157,7 @@ func (t *ExecuteTool) resolveCredentials(ctx context.Context, call tools.Call, p
 			}
 		}
 		if token == "" {
-			return nil, nil, fmt.Errorf("plugin %q has no access_token or api_key configured", name)
+			return nil, nil, fmt.Errorf("integration %q has no access_token or api_key configured", name)
 		}
 
 		// Decrypt if encrypted.
@@ -165,12 +165,12 @@ func (t *ExecuteTool) resolveCredentials(ctx context.Context, call tools.Call, p
 			scope := call.Ctx.Store.ScopePlugin(name)
 			decrypted, err := scope.DecryptString(token)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to decrypt credential for plugin %q: %v", name, err)
+				return nil, nil, fmt.Errorf("failed to decrypt credential for integration %q: %v", name, err)
 			}
 			token = decrypted
 		}
 
-		envName := envVarForPlugin(name)
+		envName := envVarForIntegration(name)
 		envVars = append(envVars, envName+"="+token)
 		injected[name] = envName
 	}

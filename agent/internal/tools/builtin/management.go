@@ -155,7 +155,7 @@ func (t *ListIntegrationsTool) Execute(ctx context.Context, call tools.Call) too
 }
 
 func (t *ReadIntegrationManifestTool) Definition() tools.Definition {
-	return tools.Definition{Name: "read_integration_manifest", Description: "Read integration manifest as JSON.", StatusText: "Reading plugin manifest...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}}}
+	return tools.Definition{Name: "read_integration_manifest", Description: "Read integration manifest as JSON.", StatusText: "Reading integration manifest...", Parameters: []tools.Param{{Name: "name", Type: "string", Description: "Integration name", Required: true}}}
 }
 
 func (t *ReadIntegrationManifestTool) Execute(ctx context.Context, call tools.Call) tools.Result {

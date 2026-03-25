@@ -786,7 +786,7 @@ func classifyToolError(text string) toolErrorClass {
 	if hasAnyMarker(t, []string{"unauthorized", "forbidden", "invalid api key", "invalid credential", "token refresh failed", "oauth", "authentication"}) {
 		return toolErrorAuth
 	}
-	if hasAnyMarker(t, []string{"tool execution is not configured", "disabled plugin", "not connected", "missing config", "not configured"}) {
+	if hasAnyMarker(t, []string{"tool execution is not configured", "disabled integration", "not connected", "missing config", "not configured"}) {
 		return toolErrorConfig
 	}
 	if hasAnyMarker(t, []string{"fatal", "panic", "segmentation fault"}) {

@@ -97,7 +97,7 @@ func main() {
 	case "install":
 		cfg, args := parseGlobal(os.Args[2:])
 		if len(args) != 1 {
-			exitWith("usage: plugins install <owner/repo[@plugin-path]>")
+			exitWith("usage: integrations install <owner/repo[@integration-path]>")
 		}
 		mgr := mustManager(cfg)
 		discoverOrDie(ctx, mgr)
@@ -114,9 +114,9 @@ func main() {
 func parseGlobal(args []string) (config, []string) {
 	fs := flag.NewFlagSet("plugins", flag.ExitOnError)
 	assets := fs.String("assets-dir", defaultAssetsDir(), "assets root directory")
-	builtin := fs.String("builtin-dirs", "", "comma-separated builtin plugin dirs (defaults to <assets-dir>/plugins/builtin)")
-	user := fs.String("user-dir", "", "user plugin directory (defaults to <assets-dir>/plugins/user)")
-	external := fs.String("external-dir", "", "external installed plugin directory (defaults to <assets-dir>/plugins/external)")
+	builtin := fs.String("builtin-dirs", "", "comma-separated builtin integration dirs (defaults to <assets-dir>/integrations/builtin)")
+	user := fs.String("user-dir", "", "user integration directory (defaults to <assets-dir>/integrations/user)")
+	external := fs.String("external-dir", "", "external installed integration directory (defaults to <assets-dir>/integrations/external)")
 	rawBase := fs.String("raw-base-url", "https://raw.githubusercontent.com", "base URL for install source fetches")
 	_ = fs.Parse(args)
 
@@ -192,10 +192,10 @@ func exitIfErr(err error) {
 		exitWith("not found")
 	}
 	if errors.Is(err, integrations.ErrProtected) {
-		exitWith("plugin is protected and cannot be removed")
+		exitWith("integration is protected and cannot be removed")
 	}
 	if errors.Is(err, integrations.ErrDuplicateName) {
-		exitWith("duplicate plugin name")
+		exitWith("duplicate integration name")
 	}
 	exitWith(err.Error())
 }
@@ -215,7 +215,7 @@ func printUsage() {
 	fmt.Println("  search <query>")
 	fmt.Println("  read-skill <name>")
 	fmt.Println("  remove <name>")
-	fmt.Println("  install <owner/repo[@plugin-path]>")
+	fmt.Println("  install <owner/repo[@integration-path]>")
 	fmt.Println()
 	fmt.Println("Global flags (before command):")
 	fmt.Println("  --assets-dir <path>")

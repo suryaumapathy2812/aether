@@ -714,7 +714,7 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if tokenURL == "" || clientID == "" || strings.TrimSpace(clientSecret) == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "oauth plugin config missing token endpoint or client credentials")
+		httputil.WriteError(w, http.StatusBadRequest, "oauth integration config missing token endpoint or client credentials")
 		return
 	}
 

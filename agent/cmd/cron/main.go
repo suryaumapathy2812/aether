@@ -209,7 +209,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  go run ./cmd/cron list")
-	fmt.Println("  go run ./cmd/cron list --module plugins")
+	fmt.Println("  go run ./cmd/cron list --module integrations")
 	fmt.Println("  go run ./cmd/cron schedule --module reminders --type deliver --run-at 2026-03-01T10:00:00Z --payload '{\"message\":\"standup\"}'")
-	fmt.Println("  go run ./cmd/cron schedule --module plugins --type rotate_token --run-at 2026-03-01T10:00:00Z --interval-s 3600 --payload '{\"plugin\":\"gmail\"}'")
+	fmt.Println("  go run ./cmd/cron schedule --module integrations --type rotate_token --run-at 2026-03-01T10:00:00Z --interval-s 3600 --payload '{\"plugin\":\"gmail\"}'")
 }

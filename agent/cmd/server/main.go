@@ -242,7 +242,7 @@ func main() {
 	handler := toolhttp.New(toolhttp.Options{Registry: toolRegistry, Orchestrator: toolOrchestrator, Integrations: integrationsManager, Store: store, Validator: directValidator})
 	handler.RegisterRoutes(mux)
 	if err := handler.EnsurePluginCronJobs(context.Background()); err != nil {
-		log.Printf("plugin cron schedule warning: %v", err)
+		log.Printf("integration cron schedule warning: %v", err)
 	}
 	if err := proactiveEngine.EnsureCronJobs(context.Background()); err != nil {
 		log.Printf("proactive cron schedule warning: %v", err)
