@@ -58,7 +58,11 @@ var programPolicies = map[string]programPolicy{
 	// python3: block inline code execution; allow running .py files.
 	"python3": {
 		deniedFlags: []string{"-c", "--command"},
-		deniedArgs:  []string{"-m pip install"},
+	},
+
+	// pip3: allow installing, listing, inspecting packages.
+	"pip3": {
+		allowedSubcommands: []string{"install", "list", "show", "freeze"},
 	},
 
 	// node: block inline code execution; allow running .js files.

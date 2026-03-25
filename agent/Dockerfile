@@ -49,7 +49,7 @@ RUN curl -fsSL https://rclone.org/install.sh | bash
 RUN echo "user_allow_other" >> /etc/fuse.conf
 
 # Common Python packages
-RUN pip3 install requests beautifulsoup4 pandas --break-system-packages --no-warn-script-location
+RUN pip3 install requests beautifulsoup4 pandas python-docx openpyxl PyPDF2 --break-system-packages --no-warn-script-location
 
 # Common Node packages
 RUN npm install -g axios
