@@ -33,10 +33,12 @@ All services share the same OAuth token. Use the execute tool with:
 credentials=["google-workspace"]
 ```
 
+**Google Drive** is mounted at `/workspace/gdrive/` via rclone FUSE. Use standard file tools (read_file, write_file, list_directory) directly on Drive files — no API calls needed. See `services/drive.md` for full details.
+
 For detailed API docs, read the per-service skill files:
 - `services/gmail.md`
 - `services/calendar.md`
-- `services/drive.md`
+- `services/drive.md` — includes rclone mount usage
 - `services/contacts.md`
 - `services/sheets.md`
 - `services/docs.md`

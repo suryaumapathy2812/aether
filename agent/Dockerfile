@@ -39,7 +39,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
     bash \
     coreutils \
+    fuse3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Install rclone
+RUN curl -fsSL https://rclone.org/install.sh | bash
 
 # Common Python packages
 RUN pip3 install requests beautifulsoup4 pandas --break-system-packages --no-warn-script-location
@@ -47,8 +51,8 @@ RUN pip3 install requests beautifulsoup4 pandas --break-system-packages --no-war
 # Common Node packages
 RUN npm install -g axios
 
-# Create workspace directory
-RUN mkdir -p /workspace
+# Create workspace and mount directories
+RUN mkdir -p /workspace/gdrive /root/.config/rclone
 
 COPY --from=builder /agent-server /usr/local/bin/agent-server
 COPY --from=builder /app/assets /app/assets
