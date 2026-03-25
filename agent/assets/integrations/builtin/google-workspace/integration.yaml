@@ -48,13 +48,6 @@ auth:
       label: Client Secret
       type: password
       required: true
-    - key: project_id
-      label: Project ID
-      type: text
-    - key: pubsub_topic
-      label: Gmail Pub/Sub Topic
-      type: text
-      description: Required for Gmail push notifications
 api:
   base_url: https://www.googleapis.com
 webhook:
