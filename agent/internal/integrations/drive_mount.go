@@ -93,24 +93,34 @@ func (m *DriveMountManager) Mount(ctx context.Context) error {
 		"--allow-other",
 		"--daemon",
 		"--log-level", "NOTICE",
+		"--log-file", "/tmp/rclone-mount.log",
 	)
 
 	var stderr bytes.Buffer
 	mountCmd.Stderr = &stderr
 
 	if err := mountCmd.Run(); err != nil {
-		return fmt.Errorf("failed to mount: %s: %w", strings.TrimSpace(stderr.String()), err)
+		errOut := strings.TrimSpace(stderr.String())
+		if logBytes, readErr := os.ReadFile("/tmp/rclone-mount.log"); readErr == nil && len(logBytes) > 0 {
+			errOut = errOut + "\nrclone log: " + string(logBytes)
+		}
+		return fmt.Errorf("failed to mount: %s: %w", errOut, err)
 	}
 
-	// Wait a moment for mount to be ready.
-	time.Sleep(1 * time.Second)
-
-	if !m.isMounted() {
-		return fmt.Errorf("mount started but %s is not mounted", m.mountDir)
+	// Wait up to 10 seconds for mount to be ready.
+	for i := 0; i < 10; i++ {
+		time.Sleep(1 * time.Second)
+		if m.isMounted() {
+			log.Printf("drive mount: mounted successfully at %s", m.mountDir)
+			return nil
+		}
 	}
 
-	log.Printf("drive mount: mounted successfully at %s", m.mountDir)
-	return nil
+	// Read rclone log for diagnostics.
+	if logBytes, err := os.ReadFile("/tmp/rclone-mount.log"); err == nil && len(logBytes) > 0 {
+		log.Printf("drive mount: mount not ready after 10s. rclone log:\n%s", string(logBytes))
+	}
+	return fmt.Errorf("mount command succeeded but %s is not mounted after 10s", m.mountDir)
 }
 
 // Unmount stops the rclone FUSE mount.

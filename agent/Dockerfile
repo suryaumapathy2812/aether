@@ -45,6 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install rclone
 RUN curl -fsSL https://rclone.org/install.sh | bash
 
+# FUSE config — allow --allow-other flag
+RUN echo "user_allow_other" >> /etc/fuse.conf
+
 # Common Python packages
 RUN pip3 install requests beautifulsoup4 pandas --break-system-packages --no-warn-script-location
 
