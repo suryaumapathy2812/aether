@@ -34,11 +34,6 @@ auth:
     # Forms
     - https://www.googleapis.com/auth/forms.body
     - https://www.googleapis.com/auth/forms.responses.readonly
-    # Keep
-    - https://www.googleapis.com/auth/keep
-    # Meet
-    - https://www.googleapis.com/auth/meetings.space.created
-    - https://www.googleapis.com/auth/meetings.space.readonly
   config_fields:
     - key: client_id
       label: Client ID

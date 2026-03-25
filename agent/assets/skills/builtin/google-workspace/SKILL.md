@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-description: Google Workspace API — Gmail, Calendar, Drive, Contacts, Sheets, Docs, Slides, Tasks, Forms, Keep, Meet
+description: Google Workspace API — Gmail, Calendar, Drive, Contacts, Sheets, Docs, Slides, Tasks, Forms
 integration: google-workspace
 ---
 # Google Workspace API
@@ -23,8 +23,8 @@ integration: google-workspace
 | Slides | `https://slides.googleapis.com/v1/presentations` | Create/edit presentations |
 | Tasks | `https://tasks.googleapis.com/v1` | Task lists and tasks |
 | Forms | `https://forms.googleapis.com/v1` | Create/manage forms |
-| Keep | `https://keep.googleapis.com/v1` | Notes management |
-| Meet | `https://meet.googleapis.com/v2` | Meeting spaces |
+
+> **Note:** Google Keep and Meet APIs require a Google Workspace account and are not available with personal Gmail.
 
 ## Usage
 
@@ -45,8 +45,6 @@ For detailed API docs, read the per-service skill files:
 - `services/slides.md`
 - `services/tasks.md`
 - `services/forms.md`
-- `services/keep.md`
-- `services/meet.md`
 
 ## Rate Limits
 
