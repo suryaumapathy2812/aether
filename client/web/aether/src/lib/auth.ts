@@ -24,7 +24,7 @@ const authBaseURL =
   process.env.BETTER_AUTH_URL ||
   "http://localhost:3000";
 
-const auth = betterAuth({
+export const auth = betterAuth({
   secret: authSecret || "aether-dev-secret-local",
   baseURL: authBaseURL,
 
@@ -53,9 +53,5 @@ const auth = betterAuth({
     ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map((s) => s.trim()) || []),
   ].filter(Boolean),
 });
-
-export function getAuth() {
-  return auth;
-}
 
 export type Session = typeof auth.$Infer.Session;
