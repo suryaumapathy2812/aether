@@ -330,6 +330,9 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			iterationRecoverableToolError := false
 			iterationBlocked := false
 			for _, tr := range results {
+				// Wrap tool output with Arrow sandbox template if one exists.
+				tr.result = tools.WrapWithSandbox(tr.tc.Name, tr.result)
+
 				toolText := tr.result.Output
 				if len(toolText) > 12000 {
 					toolText = toolText[:12000] + "\n...truncated"

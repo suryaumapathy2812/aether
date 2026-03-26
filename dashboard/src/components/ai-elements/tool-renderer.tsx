@@ -13,10 +13,10 @@ import {
 } from "./tool";
 import { renderToolProjection, hasInteractiveProjection } from "./tool-projection";
 import { AskUserTool } from "./ask-user-tool";
-import { GmailTool } from "./gmail-tool";
-import { CalendarTool } from "./calendar-tool";
-import { DriveTool } from "./drive-tool";
-import { ContactsTool } from "./contacts-tool";
+import {
+  ToolSandbox,
+  type ToolSandboxSource,
+} from "./tool-sandbox";
 
 export type ToolPartRecord = {
   type: string;
@@ -35,13 +35,47 @@ export type ToolRendererProps = {
   onQuestionDismiss: () => void | Promise<void>;
 };
 
+// ── Helpers ──────────────────────────────────────────────────────────────
+
 function getSubtitle(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
+  if (!input || typeof input === "object") return "";
   const obj = input as Record<string, unknown>;
   return (
     (obj.query || obj.message_id || obj.name || obj.summary || "") as string
   );
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractSandboxSource(metadata: unknown): ToolSandboxSource | null {
+  if (!isRecord(metadata)) return null;
+  const sandbox = metadata.sandbox;
+  if (!isRecord(sandbox)) return null;
+  const source = sandbox.source;
+  if (!isRecord(source)) return null;
+
+  // Validate source has at least one entry file
+  const hasEntry = "main.ts" in source || "main.js" in source;
+  if (!hasEntry) return null;
+
+  // Convert to Record<string, string>
+  const sourceFiles: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "string") {
+      sourceFiles[key] = value;
+    }
+  }
+
+  return {
+    source: sourceFiles,
+    css: typeof sandbox.css === "string" ? sandbox.css : undefined,
+    shadowDOM: typeof sandbox.shadowDOM === "boolean" ? sandbox.shadowDOM : undefined,
+  };
+}
+
+// ── Default renderer — used when no sandbox is available ─────────────────
 
 export function DefaultToolRenderer({
   part,
@@ -94,55 +128,49 @@ export function DefaultToolRenderer({
   );
 }
 
-const toolRenderers: Record<string, ComponentType<ToolRendererProps>> = {
+// ── Sandbox renderer — renders tool output via Arrow sandbox ─────────────
+
+function SandboxToolRenderer({
+  part,
+  onQuestionSubmit,
+  onQuestionDismiss,
+}: ToolRendererProps) {
+  const sandbox = extractSandboxSource(part.metadata);
+
+  if (!sandbox) {
+    return <DefaultToolRenderer
+      part={part}
+      questionRequest={null}
+      onQuestionSubmit={onQuestionSubmit}
+      onQuestionDismiss={onQuestionDismiss}
+    />;
+  }
+
+  return (
+    <ToolSandbox
+      sandbox={sandbox}
+      state={part.state}
+      errorText={part.errorText}
+    />
+  );
+}
+
+// ── Special-case renderers ───────────────────────────────────────────────
+// These need custom interactivity that the sandbox can't provide.
+
+const specialRenderers: Record<string, ComponentType<ToolRendererProps>> = {
   ask_user: AskUserTool,
 };
 
-const prefixRenderers: Array<{
-  prefix: string;
-  renderer: ComponentType<ToolRendererProps>;
-}> = [
-  // Gmail
-  { prefix: "inbox_count", renderer: GmailTool },
-  { prefix: "list_unread", renderer: GmailTool },
-  { prefix: "read_gmail", renderer: GmailTool },
-  { prefix: "search_email", renderer: GmailTool },
-  { prefix: "get_thread", renderer: GmailTool },
-  { prefix: "send_email", renderer: GmailTool },
-  { prefix: "send_reply", renderer: GmailTool },
-  { prefix: "create_draft", renderer: GmailTool },
-  { prefix: "archive_email", renderer: GmailTool },
-  { prefix: "trash_email", renderer: GmailTool },
-  { prefix: "mark_read", renderer: GmailTool },
-  { prefix: "mark_unread", renderer: GmailTool },
-  { prefix: "list_labels", renderer: GmailTool },
-  { prefix: "add_label", renderer: GmailTool },
-  { prefix: "remove_label", renderer: GmailTool },
-  // Google Calendar
-  { prefix: "upcoming_events", renderer: CalendarTool },
-  { prefix: "search_events", renderer: CalendarTool },
-  { prefix: "get_event", renderer: CalendarTool },
-  { prefix: "create_event", renderer: CalendarTool },
-  { prefix: "update_event", renderer: CalendarTool },
-  { prefix: "delete_event", renderer: CalendarTool },
-  { prefix: "list_calendars", renderer: CalendarTool },
-  // Google Drive
-  { prefix: "search_drive", renderer: DriveTool },
-  { prefix: "list_drive_files", renderer: DriveTool },
-  { prefix: "get_file_info", renderer: DriveTool },
-  { prefix: "export_google_doc", renderer: DriveTool },
-  { prefix: "download_file", renderer: DriveTool },
-  { prefix: "create_folder", renderer: DriveTool },
-  { prefix: "list_shared_drives", renderer: DriveTool },
-  // Google Contacts
-  { prefix: "search_contacts", renderer: ContactsTool },
-  { prefix: "get_contact", renderer: ContactsTool },
-];
+// ── Public API ───────────────────────────────────────────────────────────
 
-export function getToolRenderer(toolName: string): ComponentType<ToolRendererProps> {
-  if (toolRenderers[toolName]) return toolRenderers[toolName];
-  for (const entry of prefixRenderers) {
-    if (toolName === entry.prefix) return entry.renderer;
-  }
+export function getToolRenderer(toolName: string, metadata?: unknown): ComponentType<ToolRendererProps> {
+  // 1. Special cases that need host-side interactivity
+  if (specialRenderers[toolName]) return specialRenderers[toolName];
+
+  // 2. If tool metadata includes sandbox source, use it
+  if (extractSandboxSource(metadata)) return SandboxToolRenderer;
+
+  // 3. Fall back to default (JSON input/output viewer)
   return DefaultToolRenderer;
 }

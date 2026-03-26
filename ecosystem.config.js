@@ -11,16 +11,19 @@ const ROOT = "/Users/suryaumapathy/Developers/Github/suryaumapathy/core-ai";
 module.exports = {
   apps: [
     // ─────────────────────────────────────────────
-    // Dashboard (Next.js) — port 3000
+    // Dashboard (TanStack Start / Vite+) — port 3000
     // ─────────────────────────────────────────────
     {
       name: "aether-dashboard",
-      script: "vp",
-      args: "run dev",
-      cwd: `${ROOT}/dashboard`,
+      script: "bash",
+      args: `-l -c 'source ~/.vite-plus/env && vp dev --port 3000'`,
+      cwd: `${ROOT}/client/web/aether`,
       interpreter: "none",
       autorestart: true,
-      watch: false, // Next.js handles its own HMR
+      watch: false,
+      env: {
+        NODE_ENV: "development",
+      },
     },
 
     // ─────────────────────────────────────────────

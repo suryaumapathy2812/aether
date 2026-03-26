@@ -588,7 +588,7 @@ function ChatView({
                           if (part.type.startsWith("tool-")) {
                             const toolPart = part as ToolPartRecord;
                             const toolName = toolPart.type.replace("tool-", "");
-                            const Renderer = getToolRenderer(toolName);
+                            const Renderer = getToolRenderer(toolName, toolPart.metadata);
                             return (
                               <Renderer
                                 key={key}

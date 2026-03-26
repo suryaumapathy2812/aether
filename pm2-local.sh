@@ -95,8 +95,15 @@ case "$1" in
         pm2 monit
         ;;
         
+    build)
+        echo -e "${GREEN}Building dashboard...${NC}"
+        cd client/web/aether
+        bash -l -c 'source ~/.vite-plus/env && vp build'
+        echo -e "${GREEN}Dashboard built!${NC}"
+        ;;
+        
     *)
-        echo "Usage: $0 {start|stop|restart|delete|logs|status|mon}"
+        echo "Usage: $0 {start|stop|restart|delete|logs|status|mon|build}"
         echo ""
         echo "Commands:"
         echo "  start   - Start all services"
@@ -106,6 +113,7 @@ case "$1" in
         echo "  logs    - View logs (live)"
         echo "  status  - Show service status"
         echo "  mon     - Show PM2 monitor"
+        echo "  build   - Build dashboard for production"
         exit 1
         ;;
 esac

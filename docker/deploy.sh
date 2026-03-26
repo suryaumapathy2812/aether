@@ -152,20 +152,23 @@ if [ "$DO_PULL" = true ]; then
 fi
 
 # ============================================
-# Build Dashboard
+# Build Dashboard (TanStack Start / Vite+)
 # ============================================
 if [ "$SKIP_DASHBOARD" = false ]; then
     echo -e "${GREEN}Building Dashboard...${NC}"
-    cd "$PROJECT_ROOT/dashboard"
+    cd "$PROJECT_ROOT/client/web/aether"
     
     # Limit memory for build
     export NODE_OPTIONS="--max-old-space-size=2048"
     
     echo "Installing dependencies..."
-    npm install --silent
+    pnpm install --frozen-lockfile --ignore-scripts
     
-    echo "Building Next.js app..."
-    npm run build
+    echo "Generating Prisma client..."
+    DATABASE_URL="$DATABASE_URL" npx prisma generate
+    
+    echo "Building TanStack Start app..."
+    vp build
     
     echo -e "${GREEN}Dashboard build complete!${NC}"
     echo ""

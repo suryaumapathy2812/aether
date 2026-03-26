@@ -1,4 +1,4 @@
-// Aether PM2 Ecosystem Configuration
+// Aether PM2 Ecosystem Configuration (Production)
 //
 // Usage:
 //   pm2 start ecosystem.config.js
@@ -11,12 +11,12 @@
 
 module.exports = {
   apps: [
-    // Dashboard (Next.js)
+    // Dashboard (TanStack Start / Vite+ with Nitro)
     {
       name: 'aether-dashboard',
-      script: 'npm',
-      args: 'start',
-      cwd: '/opt/aether/dashboard',
+      script: 'bun',
+      args: '.output/server/index.mjs',
+      cwd: '/opt/aether/client/web/aether',
       instances: 1,
       exec_mode: 'fork',
       env: {
@@ -26,9 +26,7 @@ module.exports = {
         BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
         BETTER_AUTH_URL: process.env.BETTER_AUTH_URL || 'https://aether.suryaumapathy.in',
         BETTER_AUTH_TRUSTED_ORIGINS: process.env.BETTER_AUTH_TRUSTED_ORIGINS || 'https://aether.suryaumapathy.in',
-        AGENT_BASE_URL: process.env.AGENT_BASE_URL || 'http://localhost:4000',
-        NEXT_PUBLIC_ORCHESTRATOR_URL: '',
-        NEXT_PUBLIC_ORCHESTRATOR_WS_URL: '',
+        ORCHESTRATOR_BASE_URL: process.env.ORCHESTRATOR_BASE_URL || 'http://localhost:4000',
       },
       error_file: '/var/log/aether/dashboard-error.log',
       out_file: '/var/log/aether/dashboard-out.log',
