@@ -162,13 +162,13 @@ if [ "$SKIP_DASHBOARD" = false ]; then
     export NODE_OPTIONS="--max-old-space-size=2048"
     
     echo "Installing dependencies..."
-    pnpm install --frozen-lockfile --ignore-scripts
+    bun install --frozen-lockfile --ignore-scripts
     
     echo "Generating Prisma client..."
-    DATABASE_URL="$DATABASE_URL" npx prisma generate
+    DATABASE_URL="$DATABASE_URL" bunx prisma generate
     
     echo "Building TanStack Start app..."
-    vp build
+    bun run build
     
     echo -e "${GREEN}Dashboard build complete!${NC}"
     echo ""
