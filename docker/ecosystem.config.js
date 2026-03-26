@@ -6,8 +6,28 @@
 //   pm2 startup
 //
 // Environment:
-//   Load variables from .env file
+//   Loads .env from project root or /opt/aether automatically.
 //
+
+const fs = require('fs');
+const path = require('path');
+
+// Load .env so process.env has all values even when PM2 restarts independently.
+const envPaths = [
+  path.resolve(__dirname, '..', '.env'),
+  '/opt/aether/.env',
+];
+for (const p of envPaths) {
+  if (fs.existsSync(p)) {
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const match = line.match(/^\s*([^#=]+?)\s*=\s*(.*?)\s*$/);
+      if (match && !process.env[match[1]]) {
+        process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+      }
+    }
+    break;
+  }
+}
 
 module.exports = {
   apps: [

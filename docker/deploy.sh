@@ -269,16 +269,16 @@ if [ "$SKIP_RESTART" = false ]; then
     # Check if PM2 is running these apps
     if pm2 describe aether-dashboard > /dev/null 2>&1; then
         echo "Restarting aether-dashboard..."
-        pm2 restart aether-dashboard
+        pm2 restart aether-dashboard --update-env
     else
         echo -e "${YELLOW}aether-dashboard not found in PM2, starting fresh...${NC}"
         cd "$PROJECT_ROOT/docker"
         pm2 start ecosystem.config.js --only aether-dashboard
     fi
-    
+
     if pm2 describe aether-orchestrator > /dev/null 2>&1; then
         echo "Restarting aether-orchestrator..."
-        pm2 restart aether-orchestrator
+        pm2 restart aether-orchestrator --update-env
     else
         echo -e "${YELLOW}aether-orchestrator not found in PM2, starting fresh...${NC}"
         cd "$PROJECT_ROOT/docker"
