@@ -1,3 +1,7 @@
+if (typeof window !== "undefined") {
+  throw new Error("lib/auth.ts is server-only — do not import from client code");
+}
+
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { PrismaPg } from "@prisma/adapter-pg";
