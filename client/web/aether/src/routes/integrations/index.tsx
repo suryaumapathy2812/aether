@@ -34,7 +34,7 @@ function IntegrationsContent() {
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"installed" | "browse">("browse");
+  const [tab, setTab] = useState<"connected" | "browse">("browse");
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -79,7 +79,7 @@ function IntegrationsContent() {
   );
 
   const filtered = useMemo(() => {
-    const list = tab === "installed" ? active : inactive;
+    const list = tab === "connected" ? active : inactive;
     if (!search.trim()) return list;
     const q = search.toLowerCase();
     return list.filter(
@@ -107,20 +107,20 @@ function IntegrationsContent() {
           Browse
         </button>
         <button
-          onClick={() => setTab("installed")}
+          onClick={() => setTab("connected")}
           className={`
             flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-            ${tab === "installed"
+            ${tab === "connected"
               ? "bg-accent/80 text-foreground"
               : "text-muted-foreground hover:text-foreground/80 hover:bg-accent/40"
             }
           `}
         >
-          Installed
+          Connected
           <span
             className={`
               text-xs tabular-nums min-w-[18px] text-center rounded-full px-1.5 py-0.5
-              ${tab === "installed" ? "bg-accent/80 text-foreground/70" : "bg-accent/40 text-muted-foreground/60"}
+              ${tab === "connected" ? "bg-accent/80 text-foreground/70" : "bg-accent/40 text-muted-foreground/60"}
             `}
           >
             {active.length}
@@ -134,7 +134,7 @@ function IntegrationsContent() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder={tab === "installed" ? "Search installed..." : "Search integrations..."}
+          placeholder={tab === "connected" ? "Search connected..." : "Search integrations..."}
           className="w-full h-9 pl-9 pr-3 text-sm bg-accent/30 border border-border rounded-lg focus:outline-none focus:border-input text-foreground placeholder:text-muted-foreground/40 transition-colors"
         />
       </div>
@@ -157,11 +157,11 @@ function IntegrationsContent() {
           <p className="text-muted-foreground/60 text-xs">
             {search.trim()
               ? "No integrations match your search."
-              : tab === "installed"
-                ? "No active integrations yet."
-                : "All integrations are active."}
+              : tab === "connected"
+                ? "No connected integrations yet."
+                : "All integrations are connected."}
           </p>
-          {tab === "installed" && !search.trim() && inactive.length > 0 && (
+          {tab === "connected" && !search.trim() && inactive.length > 0 && (
             <button
               onClick={() => setTab("browse")}
               className="mt-3 text-sm text-muted-foreground hover:text-foreground transition-colors"

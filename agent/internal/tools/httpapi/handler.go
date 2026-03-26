@@ -462,6 +462,13 @@ func (h *Handler) handlePluginsAPI(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+	case "disconnect":
+		if r.Method != http.MethodPost {
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handlePluginDisconnect(w, r, name)
+		return
 	case "oauth":
 		if len(parts) == 3 && parts[2] == "start" && r.Method == http.MethodGet {
 			h.handlePluginOAuthStart(w, r, name)
@@ -770,6 +777,65 @@ func (h *Handler) handlePluginOAuthCallback(w http.ResponseWriter, r *http.Reque
 	_ = h.ensureIntegrationCronJobs(ctx, manifest, cfg)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "connected", "integration": name})
+}
+
+// oauthAndTokenConfigKeys lists all config keys that store OAuth / token state.
+// These are cleared on disconnect to fully revoke the connection.
+var oauthAndTokenConfigKeys = []string{
+	"access_token", "refresh_token", "oauth_refresh_token",
+	"token_type", "scope", "expires_at",
+	"oauth_state", "oauth_state_expires_at", "oauth_redirect_uri", "oauth_provider", "oauth_token_url",
+	"last_refresh_at", "last_refresh_status", "last_refresh_error",
+	"refresh_fail_count", "next_refresh_at",
+	"needs_reconnect", "account_email",
+	"watch_last_renew_at", "watch_last_renew_status", "watch_last_renew_error",
+	"watch_history_id", "watch_expires_at",
+}
+
+func (h *Handler) handlePluginDisconnect(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+
+	rec, err := h.store.GetPlugin(ctx, name)
+	if err != nil {
+		if err == db.ErrNotFound {
+			httputil.WriteError(w, http.StatusNotFound, "integration not found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Remove all OAuth/token keys from config, keep user-provided config like client_id.
+	cleaned := cloneConfig(rec.Config)
+	for _, key := range oauthAndTokenConfigKeys {
+		delete(cleaned, key)
+	}
+	if err := h.store.SetPluginConfig(ctx, name, cleaned); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Disable the integration.
+	if err := h.store.SetPluginEnabled(ctx, name, false); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Cancel any active cron jobs for this integration.
+	scope := h.store.ScopeCronModule(integrations.CronModulePlugins)
+	jobs, listErr := scope.List(ctx)
+	if listErr == nil {
+		for _, job := range jobs {
+			if !job.Enabled {
+				continue
+			}
+			if jobPayloadHasIntegration(job.PayloadJSON, name) {
+				_ = scope.Cancel(ctx, job.ID)
+			}
+		}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "disconnected"})
 }
 
 type oauthProvider struct {

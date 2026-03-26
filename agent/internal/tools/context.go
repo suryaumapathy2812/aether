@@ -62,6 +62,7 @@ type ExecContext struct {
 	Integrations     *integrations.Manager
 	IntegrationName  string
 	IntegrationState integrations.PluginState
+	CronRegistry     *integrations.CronRegistry
 	RuntimeHints     map[string]any
 	PushDeliverer    PushDeliverer
 	// QuestionAsker enables the ask_user tool to pose blocking questions (optional).

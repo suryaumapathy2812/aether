@@ -825,12 +825,8 @@ export async function installIntegration(name: string) {
   });
 }
 
-export async function enableIntegration(name: string) {
-  return api<{ status: string }>(`${agentPath("/integrations")}/${name}/enable`, { method: "POST" });
-}
-
-export async function disableIntegration(name: string) {
-  return api<{ status: string }>(`${agentPath("/integrations")}/${name}/disable`, { method: "POST" });
+export async function disconnectIntegration(name: string) {
+  return api<{ status: string }>(`${agentPath("/integrations")}/${name}/disconnect`, { method: "POST" });
 }
 
 export async function saveIntegrationConfig(name: string, config: Record<string, string>) {
@@ -1107,7 +1103,7 @@ export async function chatCompletions(input: {
 export function getOAuthStartUrl(pluginName: string): string {
   const token = _sessionToken || "";
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `/integrations/${pluginName}/oauth/start${qs}`;
+  return `/agent/v1/integrations/${pluginName}/oauth/start${qs}`;
 }
 
 // ── Channels ──

@@ -167,6 +167,7 @@ func main() {
 		Store:         store,
 		Skills:        skillsManager,
 		Integrations:  integrationsManager,
+		CronRegistry:  integrationRegistry,
 		PushDeliverer: pushDeliverer,
 		QuestionAsker: questionAskerHolder,
 	})
@@ -188,6 +189,7 @@ func main() {
 		Store:             store,
 		Skills:            skillsManager,
 		Integrations:      integrationsManager,
+		CronRegistry:      integrationRegistry,
 		PushDeliverer:     pushDeliverer,
 		QuestionAsker:     questionAskerHolder,
 		EmbeddingProvider: embeddingProvider,

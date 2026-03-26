@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -68,6 +69,39 @@ func (r *CronRegistry) WatchRenewerCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.watchRenewers)
+}
+
+// RefreshTokenIfExpired checks whether an integration's access token has expired
+// (or will expire within 2 minutes) and, if so, runs the registered token rotator.
+// This ensures credentials are fresh before injection into tool execution.
+// Returns nil if no rotation was needed, the token has no expiry, or no rotator
+// is registered for this integration.
+func (r *CronRegistry) RefreshTokenIfExpired(ctx context.Context, state PluginState, pluginName string) error {
+	if r == nil {
+		return nil
+	}
+	fn, ok := r.tokenRotator(pluginName)
+	if !ok {
+		return nil // no rotator registered; nothing to do (e.g. api_key integrations)
+	}
+	cfg, err := state.Config(ctx)
+	if err != nil {
+		return err
+	}
+	expiresAtRaw := cfg["expires_at"]
+	if expiresAtRaw == "" {
+		return nil // no expiry tracked — skip
+	}
+	var expiresAt int64
+	if _, err := fmt.Sscanf(expiresAtRaw, "%d", &expiresAt); err != nil {
+		return nil // unparseable — skip
+	}
+	// Refresh if expired or will expire within 2 minutes.
+	if time.Now().UTC().Unix() < expiresAt-120 {
+		return nil // still fresh
+	}
+	log.Printf("integrations: access token for %q expired or expiring soon, refreshing", pluginName)
+	return fn(ctx, state, nil)
 }
 
 func RegisterCronHandlers(scheduler *cron.Scheduler, store *db.Store, registry *CronRegistry) {

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/suryaumapathy2812/core-ai/agent/internal/integrations"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/tools"
 )
 
@@ -146,6 +148,19 @@ func (t *ExecuteTool) resolveCredentials(ctx context.Context, call tools.Call, p
 		}
 		if rec.Config == nil {
 			rec.Config = map[string]string{}
+		}
+
+		// Refresh the access token if it has expired or is about to expire.
+		if call.Ctx.CronRegistry != nil && call.Ctx.Store != nil {
+			state := integrations.NewPluginState(call.Ctx.Store, name)
+			if err := call.Ctx.CronRegistry.RefreshTokenIfExpired(ctx, state, name); err != nil {
+				log.Printf("execute: token refresh for %q failed: %v (will use existing token)", name, err)
+			} else {
+				// Re-read the plugin record — refresh may have updated the stored token.
+				if refreshed, rerr := call.Ctx.Store.GetPlugin(ctx, name); rerr == nil {
+					rec = refreshed
+				}
+			}
 		}
 
 		// Try access_token first, then api_key, then token.

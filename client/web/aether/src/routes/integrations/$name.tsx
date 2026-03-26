@@ -3,19 +3,17 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import ContentShell from "#/components/ContentShell";
 import { Button } from "#/components/ui/button";
-import { Switch } from "#/components/ui/switch";
 import { useSession } from "#/lib/auth-client";
 import {
   listIntegrations,
   installIntegration,
   getIntegrationConfig,
   saveIntegrationConfig,
-  enableIntegration,
-  disableIntegration,
+  disconnectIntegration,
   getOAuthStartUrl,
 } from "#/lib/api";
 import type { IntegrationInfo } from "#/lib/api";
-import { IconExternalLink, IconAlertCircle } from "@tabler/icons-react";
+import { IconAlertCircle, IconPlugConnected, IconPlugConnectedX } from "@tabler/icons-react";
 import { z } from "zod";
 
 const integrationDetailSearchSchema = z.object({
@@ -41,7 +39,7 @@ function IntegrationDetailPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   const justConnected = connected === "true";
@@ -121,20 +119,21 @@ function IntegrationDetailPage() {
     }
   }
 
-  async function handleToggle(checked: boolean) {
+  async function handleDisconnect() {
     try {
-      setToggling(true);
+      setDisconnecting(true);
       setError("");
-      if (checked) {
-        await enableIntegration(integrationName);
-      } else {
-        await disableIntegration(integrationName);
-      }
-      setIntegration((prev) => (prev ? { ...prev, enabled: checked, connected: checked } : prev));
+      await disconnectIntegration(integrationName);
+      setIntegration((prev) =>
+        prev ? { ...prev, enabled: false, connected: false, needs_reconnect: false } : prev,
+      );
+      setConfig({});
+      setFormValues({});
+      setSuccess("Disconnected.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Toggle failed");
+      setError(e instanceof Error ? e.message : "Disconnect failed");
     } finally {
-      setToggling(false);
+      setDisconnecting(false);
     }
   }
 
@@ -199,20 +198,7 @@ function IntegrationDetailPage() {
           </Button>
         )}
 
-        {integration.installed && (
-          <div className="flex items-center gap-3">
-            <Switch
-              checked={integration.enabled}
-              onCheckedChange={handleToggle}
-              disabled={toggling || missingRequired}
-            />
-            <span className="text-sm text-neutral-600 dark:text-neutral-300">
-              {integration.enabled ? "Enabled" : "Disabled"}
-            </span>
-          </div>
-        )}
-
-        {integration.installed && fields.length > 0 && (
+        {integration.installed && !integration.connected && fields.length > 0 && (
           <div className="space-y-4">
             <h3 className="text-sm font-medium">Configuration</h3>
             {fields.map((field) => (
@@ -243,36 +229,60 @@ function IntegrationDetailPage() {
           </div>
         )}
 
-        {integration.installed && (hasConfig || hasOAuthEnv) && isOAuth && !integration.connected && (
+        {integration.installed && !integration.connected && (
           <div className="space-y-2">
-            <h3 className="text-sm font-medium">Connect</h3>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Authorize access to your account.
-            </p>
-            <Button
-              size="sm"
-              onClick={() => navigate({ to: getOAuthStartUrl(integrationName) })}
-            >
-              <IconExternalLink className="mr-1 size-4" />
-              Connect Account
-            </Button>
+            {isOAuth && (hasConfig || hasOAuthEnv) ? (
+              <>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Authorize access to your account.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => { window.location.href = getOAuthStartUrl(integrationName); }}
+                >
+                  <IconPlugConnected className="mr-1.5 size-4" />
+                  Connect
+                </Button>
+              </>
+            ) : !isOAuth && !missingRequired ? (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Save your configuration above to connect.
+              </p>
+            ) : null}
           </div>
         )}
 
         {integration.installed && integration.connected && (
-          <div className="rounded-md border p-3 text-sm dark:border-neutral-700">
-            <span className="font-medium text-green-600 dark:text-green-400">Connected</span>
-            {config.account_email && (
-              <span className="ml-2 text-neutral-500 dark:text-neutral-400">
-                ({config.account_email})
-              </span>
-            )}
+          <div className="rounded-md border p-3 dark:border-neutral-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-medium text-green-600 dark:text-green-400">Connected</span>
+                {config.account_email && (
+                  <span className="text-neutral-500 dark:text-neutral-400">
+                    ({config.account_email})
+                  </span>
+                )}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={disconnecting}
+                className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-950"
+              >
+                <IconPlugConnectedX className="mr-1.5 size-4" />
+                {disconnecting ? "Disconnecting..." : "Disconnect"}
+              </Button>
+            </div>
             {integration.needs_reconnect && (
-              <div className="mt-2">
+              <div className="mt-2 flex items-center gap-2">
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Connection expired.
+                </p>
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => navigate({ to: getOAuthStartUrl(integrationName) })}
+                  onClick={() => { window.location.href = getOAuthStartUrl(integrationName); }}
                 >
                   Reconnect
                 </Button>
