@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useTheme } from "#/components/ThemeProvider";
+import { useSession } from "#/lib/auth-client";
+import {
+  listChatSessions,
+  type ChatSession,
+} from "#/lib/api";
+import { getRecentChatSessionId } from "#/lib/recent-chat";
 import {
   CommandDialog,
   CommandEmpty,
@@ -21,6 +27,7 @@ import {
   IconKeyboard,
   IconSun,
   IconMoon,
+  IconSearch,
 } from "@tabler/icons-react";
 
 interface CommandPaletteProps {
@@ -39,7 +46,46 @@ export default function CommandPalette({
   onOpenShortcutsHelp,
 }: CommandPaletteProps) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { resolvedTheme, setTheme } = useTheme();
+  const { data: session } = useSession();
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+
+  const isChatRoute = pathname === "/chat";
+  const recentChatSessionId = session?.user?.id
+    ? getRecentChatSessionId(session.user.id)
+    : null;
+
+  const openRecentChat = useCallback(() => {
+    const fallbackSessionId = chatSessions[0]?.id || null;
+    const targetSessionId =
+      recentChatSessionId &&
+      chatSessions.some((chatSession) => chatSession.id === recentChatSessionId)
+        ? recentChatSessionId
+        : fallbackSessionId;
+
+    if (targetSessionId) {
+      navigate({ to: "/chat", search: { s: targetSessionId } });
+      return;
+    }
+    navigate({ to: "/chat" });
+  }, [chatSessions, navigate, recentChatSessionId]);
+
+  useEffect(() => {
+    if (!open || !session?.user?.id) return;
+    let cancelled = false;
+    listChatSessions(session.user.id, 20)
+      .then((res) => {
+        if (cancelled) return;
+        setChatSessions(res.sessions || []);
+      })
+      .catch(() => {
+        if (!cancelled) setChatSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, session?.user?.id]);
 
   const runAction = useCallback(
     (action: () => void) => {
@@ -58,11 +104,26 @@ export default function CommandPalette({
 
         <CommandGroup heading="Actions">
           <CommandItem
-            onSelect={() => runAction(() => onNewChat?.())}
+            onSelect={() =>
+              runAction(() => {
+                if (isChatRoute) {
+                  onNewChat?.();
+                  return;
+                }
+                openRecentChat();
+              })
+            }
+            value={isChatRoute ? "new chat create conversation" : "return to chat recent last conversation"}
           >
-            <IconPlus className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
-            New Chat
-            <span className="ml-auto text-sm text-muted-foreground/60">⌘N</span>
+            {isChatRoute ? (
+              <IconPlus className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            ) : (
+              <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            )}
+            {isChatRoute ? "New Chat" : "Return to Chat"}
+            <span className="ml-auto text-sm text-muted-foreground/60">
+              {isChatRoute ? "⌘N" : "G C"}
+            </span>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onToggleSessions?.())}
@@ -97,7 +158,7 @@ export default function CommandPalette({
         <CommandSeparator />
 
         <CommandGroup heading="Navigate">
-          <CommandItem onSelect={() => runAction(() => navigate({ to: "/chat" }))}>
+          <CommandItem onSelect={() => runAction(openRecentChat)}>
             <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Chat
             <span className="ml-auto text-sm text-muted-foreground/60">G C</span>
@@ -123,6 +184,33 @@ export default function CommandPalette({
             <span className="ml-auto text-sm text-muted-foreground/60">G S</span>
           </CommandItem>
         </CommandGroup>
+
+        {chatSessions.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Chat Sessions">
+              {chatSessions.map((chatSession) => (
+                <CommandItem
+                  key={chatSession.id}
+                  value={`${chatSession.title} ${chatSession.updated_at} chat session conversation`}
+                  onSelect={() =>
+                    runAction(() =>
+                      navigate({ to: "/chat", search: { s: chatSession.id } })
+                    )
+                  }
+                >
+                  <IconSearch className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate">{chatSession.title || "Untitled chat"}</div>
+                    <div className="text-xs text-muted-foreground/60">
+                      {new Date(chatSession.updated_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
       </CommandList>
     </CommandDialog>
   );

@@ -50,6 +50,7 @@ import {
 import { IconSparkles, IconX, IconPlayerPause } from "@tabler/icons-react";
 import { AudioLines } from "lucide-react";
 import { z } from "zod";
+import { setRecentChatSessionId } from "#/lib/recent-chat";
 
 const chatSearchSchema = z.object({
   s: z.string().optional().catch(undefined),
@@ -78,6 +79,12 @@ function ChatPageInner() {
   useEffect(() => {
     if (!isPending && !session) navigate({ to: "/" });
   }, [isPending, navigate, session]);
+
+  useEffect(() => {
+    const userId = session?.user?.id?.trim();
+    if (!userId || !sessionId) return;
+    setRecentChatSessionId(userId, sessionId);
+  }, [session?.user?.id, sessionId]);
 
   if (isPending || !session) return null;
 
