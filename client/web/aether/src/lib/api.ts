@@ -829,6 +829,19 @@ export async function disconnectIntegration(name: string) {
   return api<{ status: string }>(`${agentPath("/integrations")}/${name}/disconnect`, { method: "POST" });
 }
 
+export async function completeIntegrationOAuth(
+  name: string,
+  input: { code: string; state?: string },
+) {
+  return api<{ status: string; integration: string }>(
+    `${agentPath("/integrations")}/${name}/oauth/callback`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export async function saveIntegrationConfig(name: string, config: Record<string, string>) {
   return api<{ status: string; auto_enabled?: boolean }>(
     `${agentPath("/integrations")}/${name}/config`,
