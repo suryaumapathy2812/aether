@@ -1,7 +1,6 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -218,53 +217,6 @@ func (s *Service) PresignUpload(ctx context.Context, bucket, objectKey, contentT
 		Headers:   headers,
 		ExpiresAt: time.Now().UTC().Add(s.putTTL),
 	}, nil
-}
-
-func (s *Service) PutObject(ctx context.Context, bucket, objectKey, contentType string, body io.Reader, size int64) error {
-	if !s.Enabled() {
-		return errors.New("media storage is not configured")
-	}
-	bucket = strings.TrimSpace(bucket)
-	objectKey = strings.TrimSpace(objectKey)
-	if bucket == "" {
-		return errors.New("bucket is required")
-	}
-	if objectKey == "" {
-		return errors.New("object key is required")
-	}
-	if body == nil {
-		return errors.New("body is required")
-	}
-
-	uploadBody := body
-	contentLength := size
-	if seeker, ok := body.(interface {
-		io.Reader
-		io.Seeker
-	}); ok {
-		uploadBody = seeker
-	} else {
-		buffered, err := io.ReadAll(body)
-		if err != nil {
-			return err
-		}
-		uploadBody = bytes.NewReader(buffered)
-		contentLength = int64(len(buffered))
-	}
-
-	in := &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(objectKey),
-		Body:   uploadBody,
-	}
-	if strings.TrimSpace(contentType) != "" {
-		in.ContentType = aws.String(contentType)
-	}
-	if contentLength >= 0 {
-		in.ContentLength = aws.Int64(contentLength)
-	}
-	_, err := s.client.PutObject(ctx, in)
-	return err
 }
 
 func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
