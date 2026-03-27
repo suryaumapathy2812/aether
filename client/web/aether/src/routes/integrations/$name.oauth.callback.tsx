@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useSession } from "#/lib/auth-client";
-import { completeIntegrationOAuth } from "#/lib/api";
+import { fetchWithAuth } from "#/lib/api";
 import { z } from "zod";
 
 const oauthCallbackSearchSchema = z.object({
@@ -51,7 +51,24 @@ function PluginOAuthCallbackPage() {
 
     const run = async () => {
       try {
-        await completeIntegrationOAuth(integrationName, { code, state });
+        const res = await fetchWithAuth(`/agent/v1/integrations/${integrationName}/oauth/callback`, {
+          method: "POST",
+          body: JSON.stringify({ code, state }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const msg =
+            (typeof body?.error === "string" && body.error) ||
+            (typeof body?.detail === "string" && body.detail) ||
+            "oauth_callback_failed";
+          navigate({
+            to: "/integrations/$name",
+            params: { name: integrationName },
+            search: { error: msg },
+            replace: true,
+          });
+          return;
+        }
         navigate({
           to: "/integrations/$name",
           params: { name: integrationName },
