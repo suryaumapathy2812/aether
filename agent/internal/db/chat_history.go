@@ -18,6 +18,11 @@ type ChatMessageRecord struct {
 }
 
 func (s *Store) AppendChatMessage(ctx context.Context, userID, sessionID string, message map[string]any) error {
+	_, err := s.AppendChatMessageReturningID(ctx, userID, sessionID, message)
+	return err
+}
+
+func (s *Store) AppendChatMessageReturningID(ctx context.Context, userID, sessionID string, message map[string]any) (int64, error) {
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -25,21 +30,36 @@ func (s *Store) AppendChatMessage(ctx context.Context, userID, sessionID string,
 		sessionID = "chat"
 	}
 	if message == nil {
-		return fmt.Errorf("message is required")
+		return 0, fmt.Errorf("message is required")
 	}
 	role, _ := message["role"].(string)
 	role = strings.TrimSpace(strings.ToLower(role))
 	if role == "" {
-		return fmt.Errorf("message.role is required")
+		return 0, fmt.Errorf("message.role is required")
 	}
 	b, err := json.Marshal(message)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO chat_messages(user_id, session_id, role, content_json, created_at)
 		VALUES(?, ?, ?, ?, ?)
 	`, userID, sessionID, role, string(b), formatTS(time.Now().UTC()))
+	if err != nil {
+		return 0, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (s *Store) DeleteChatMessageByID(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM chat_messages WHERE id = ?`, id)
 	return err
 }
 

@@ -113,16 +113,6 @@ function AccountPage() {
             <ModelPreference />
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Voice &amp; Media Model</CardTitle>
-            <CardDescription>Model for voice and media turns (must support audio input)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ModelPreference prefKey="voice_model" placeholder="google/gemini-2.5-flash" />
-          </CardContent>
-        </Card>
       </div>
     </ContentShell>
   );

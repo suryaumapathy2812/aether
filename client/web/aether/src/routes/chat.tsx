@@ -610,6 +610,20 @@ function ChatView({
                               </div>
                             );
                           }
+                          if (
+                            filePart.mediaType?.startsWith("audio/") &&
+                            filePart.url
+                          ) {
+                            return (
+                              <div key={key} className="mt-2 w-full max-w-md">
+                                <audio
+                                  controls
+                                  src={filePart.url}
+                                  className="w-full"
+                                />
+                              </div>
+                            );
+                          }
                           return null;
                         }
                         default:

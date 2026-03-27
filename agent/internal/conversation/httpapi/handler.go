@@ -218,8 +218,11 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 
 	history := h.loadConversationHistory(r.Context(), userID, sessionID)
 	messages := append(history, latestUser)
+	persistedUserMessageID := int64(0)
 	if h.store != nil {
-		_ = h.store.AppendChatMessage(r.Context(), userID, sessionID, latestUser)
+		if id, err := h.store.AppendChatMessageReturningID(r.Context(), userID, sessionID, latestUser); err == nil {
+			persistedUserMessageID = id
+		}
 		h.emit(userID, "message.updated", map[string]any{"sessionID": sessionID, "role": "user", "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 	}
 
@@ -267,6 +270,8 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
 	assistantFlushedForToolBatch := false
+	assistantProducedOutput := false
+	turnErr := ""
 
 	for ev := range h.runtime.Run(r.Context(), env, conversation.RunOptions{}) {
 		// Write every event as a typed SSE chunk.
@@ -286,9 +291,13 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 		case conversation.EventTextDelta:
 			delta, _ := ev.Payload["delta"].(string)
 			answerParts = append(answerParts, delta)
+			if strings.TrimSpace(delta) != "" {
+				assistantProducedOutput = true
+			}
 			h.emit(userID, "message.part.delta", map[string]any{"sessionID": sessionID, "messageID": "assistant-current", "partID": "text", "delta": delta, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
 
 		case conversation.EventToolInputAvailable:
+			assistantProducedOutput = true
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			input := ev.Payload["input"]
@@ -342,7 +351,17 @@ func (h *Handler) handleTurn(w http.ResponseWriter, r *http.Request) {
 					assistantFlushedForToolBatch = false
 				}
 			}
+		case conversation.EventError:
+			errText, _ := ev.Payload["errorText"].(string)
+			if strings.TrimSpace(errText) == "" {
+				errText = "conversation error"
+			}
+			turnErr = errText
 		}
+	}
+
+	if turnErr != "" && persistedUserMessageID > 0 && !assistantProducedOutput && h.store != nil {
+		_ = h.store.DeleteChatMessageByID(r.Context(), persistedUserMessageID)
 	}
 
 	if h.memory != nil {

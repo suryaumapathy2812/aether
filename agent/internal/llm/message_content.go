@@ -74,7 +74,7 @@ func LatestUserTurnSummary(messages []map[string]any) string {
 		if text := ExtractTextFromMessageContent(content); text != "" {
 			return text
 		}
-		hasImage, hasAudio := contentHasMediaKinds(content)
+		hasImage, hasAudio := ContentHasMediaKinds(content)
 		switch {
 		case hasImage && hasAudio:
 			return "[image+audio]"
@@ -89,7 +89,7 @@ func LatestUserTurnSummary(messages []map[string]any) string {
 	return ""
 }
 
-func contentHasMediaKinds(content any) (hasImage bool, hasAudio bool) {
+func ContentHasMediaKinds(content any) (hasImage bool, hasAudio bool) {
 	parts, ok := content.([]any)
 	if !ok {
 		return false, false

@@ -203,6 +203,72 @@ function textFromStoredMessageContent(content: unknown): string {
     .join("");
 }
 
+function mimeTypeFromStoredAudioFormat(format: string): string {
+  switch (format.trim().toLowerCase()) {
+    case "wav":
+      return "audio/wav";
+    case "mp3":
+      return "audio/mpeg";
+    case "ogg":
+      return "audio/ogg";
+    case "flac":
+      return "audio/flac";
+    case "aac":
+      return "audio/aac";
+    case "aiff":
+      return "audio/aiff";
+    case "m4a":
+      return "audio/mp4";
+    case "webm":
+      return "audio/webm";
+    default:
+      return "audio/wav";
+  }
+}
+
+function filePartsFromStoredMessageContent(content: unknown): FileUIPart[] {
+  if (!isRecord(content)) return [];
+
+  const inner = content.content;
+  if (!Array.isArray(inner)) return [];
+
+  const files: FileUIPart[] = [];
+  for (const part of inner) {
+    if (!isRecord(part) || typeof part.type !== "string") continue;
+
+    if (part.type === "image_url") {
+      const imageURL = isRecord(part.image_url) ? part.image_url : null;
+      const url = typeof imageURL?.url === "string" ? imageURL.url : "";
+      if (!url) continue;
+      const mimeMatch = url.match(/^data:([^;]+);/i);
+      files.push({
+        type: "file",
+        url,
+        mediaType: mimeMatch?.[1] || "image/png",
+        filename: "Image",
+      });
+      continue;
+    }
+
+    if (part.type === "input_audio") {
+      const inputAudio = isRecord(part.input_audio) ? part.input_audio : null;
+      const data = typeof inputAudio?.data === "string" ? inputAudio.data : "";
+      if (!data) continue;
+      const format =
+        typeof inputAudio?.format === "string" ? inputAudio.format : "wav";
+      const mediaType = mimeTypeFromStoredAudioFormat(format);
+      files.push({
+        type: "file",
+        url: `data:${mediaType};base64,${data}`,
+        mediaType,
+        filename: `Audio.${format}`,
+      });
+    }
+  }
+
+  return files;
+}
+
 function normalizeQuestionRequestPayload(
   payload: Record<string, unknown>,
   sessionID: string,
@@ -325,12 +391,19 @@ function buildHistoryMessages(
     }
 
     const text = textFromStoredMessageContent(row.content);
+    const fileParts = filePartsFromStoredMessageContent(row.content);
     if (role === "user") {
-      if (!text.trim()) continue;
+      if (!text.trim() && fileParts.length === 0) continue;
+      const parts: UIMessage["parts"] = [
+        ...fileParts.map((file) => file as UIMessage["parts"][number]),
+      ];
+      if (text.trim()) {
+        parts.push({ type: "text", text });
+      }
       restored.push({
         id: `msg-${row.id}-user`,
         role: "user",
-        parts: [{ type: "text", text }],
+        parts,
       });
       continue;
     }

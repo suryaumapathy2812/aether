@@ -522,10 +522,12 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 	}
 
 	messages := []map[string]any{}
+	persistedUserMessageID := int64(0)
 	if h.store != nil {
 		history := h.loadConversationHistory(ctx, state.userID, sessionID)
 		messages = append(messages, history...)
-		if err := h.store.AppendChatMessage(ctx, state.userID, sessionID, latestUserStore); err == nil {
+		if id, err := h.store.AppendChatMessageReturningID(ctx, state.userID, sessionID, latestUserStore); err == nil {
+			persistedUserMessageID = id
 			h.emitNotify(state.userID, "message.updated", map[string]any{"sessionID": sessionID, "role": "user", "updatedAt": nowRFC3339Nano()})
 		}
 		_ = h.store.TouchChatSession(ctx, sessionID)
@@ -539,12 +541,6 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 		if modelPref, err := h.store.GetUserPreference(ctx, state.userID, "model"); err == nil && strings.TrimSpace(modelPref) != "" {
 			policy["model"] = strings.TrimSpace(modelPref)
 		}
-		// Override model for voice/audio turns with a dedicated voice_model preference
-		if turn.mode == turnModeVoice || len(turn.mediaParts) > 0 {
-			if voiceModel, err := h.store.GetUserPreference(ctx, state.userID, "voice_model"); err == nil && strings.TrimSpace(voiceModel) != "" {
-				policy["model"] = strings.TrimSpace(voiceModel)
-			}
-		}
 	}
 	env := h.builder.Build(messages, policy, state.userID, sessionID)
 	rCtx := tools.WithTaskRuntimeContext(ctx, tools.TaskRuntimeContext{UserID: state.userID, SessionID: sessionID})
@@ -552,6 +548,7 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 	pendingToolCalls := []map[string]any{}
 	pendingToolCallIDs := map[string]struct{}{}
 	assistantFlushedForToolBatch := false
+	assistantProducedOutput := false
 
 	for ev := range h.runtime.Run(rCtx, env, conversation.RunOptions{}) {
 		if turn.cancelled.Load() {
@@ -569,11 +566,13 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 			if strings.TrimSpace(delta) == "" {
 				continue
 			}
+			assistantProducedOutput = true
 			answerParts = append(answerParts, delta)
 			h.emit(conn, writeMu, state, sessionID, turnID, "assistant.text.delta", map[string]any{"delta": delta})
 			h.emitNotify(state.userID, "message.part.delta", map[string]any{"sessionID": sessionID, "messageID": "assistant-current", "partID": "text", "delta": delta, "updatedAt": nowRFC3339Nano()})
 
 		case conversation.EventToolInputAvailable:
+			assistantProducedOutput = true
 			name, _ := ev.Payload["toolName"].(string)
 			callID, _ := ev.Payload["toolCallId"].(string)
 			input := ev.Payload["input"]
@@ -653,6 +652,9 @@ func (h *Handler) runTurn(ctx context.Context, conn *websocket.Conn, writeMu *sy
 			errText, _ := ev.Payload["errorText"].(string)
 			if strings.TrimSpace(errText) == "" {
 				errText = "conversation error"
+			}
+			if persistedUserMessageID > 0 && !assistantProducedOutput && h.store != nil {
+				_ = h.store.DeleteChatMessageByID(ctx, persistedUserMessageID)
 			}
 			h.writeError(conn, writeMu, state, sessionID, turnID, "internal", errText)
 			return
