@@ -10,7 +10,43 @@ import {
   orchestratorWs,
   initMediaUpload,
   completeMediaUpload,
+  proxyMediaUpload,
 } from "#/lib/api";
+
+function isPrivateUploadUrl(uploadUrl: string): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(uploadUrl, window.location.origin);
+  } catch {
+    return false;
+  }
+
+  const hostname = parsed.hostname.trim().toLowerCase();
+  const browserHost = window.location.hostname.trim().toLowerCase();
+  if (!hostname || hostname === browserHost) {
+    return false;
+  }
+  if (window.location.protocol === "https:" && parsed.protocol === "http:") {
+    return true;
+  }
+  if (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".docker") ||
+    hostname.startsWith("10.") ||
+    hostname.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+  ) {
+    return true;
+  }
+  return !hostname.includes(".");
+}
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
@@ -1039,14 +1075,25 @@ class ChatRuntimeStore {
             kind,
           });
 
-          const uploadResponse = await fetch(initResult.upload_url, {
-            method: "PUT",
-            body: blob,
-            headers: initResult.headers,
-          });
+          if (isPrivateUploadUrl(initResult.upload_url)) {
+            await proxyMediaUpload({
+              bucket: initResult.bucket,
+              object_key: initResult.object_key,
+              content_type: contentType,
+              size: blob.size,
+              kind,
+              body: blob,
+            });
+          } else {
+            const uploadResponse = await fetch(initResult.upload_url, {
+              method: "PUT",
+              body: blob,
+              headers: initResult.headers,
+            });
 
-          if (!uploadResponse.ok) {
-            throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
+            if (!uploadResponse.ok) {
+              throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
+            }
           }
 
           const completeResult = await completeMediaUpload({

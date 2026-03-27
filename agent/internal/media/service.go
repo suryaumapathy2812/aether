@@ -219,6 +219,33 @@ func (s *Service) PresignUpload(ctx context.Context, bucket, objectKey, contentT
 	}, nil
 }
 
+func (s *Service) PutObject(ctx context.Context, bucket, objectKey, contentType string, body io.Reader, size int64) error {
+	if !s.Enabled() {
+		return errors.New("media storage is not configured")
+	}
+	bucket = strings.TrimSpace(bucket)
+	objectKey = strings.TrimSpace(objectKey)
+	if bucket == "" {
+		return errors.New("bucket is required")
+	}
+	if objectKey == "" {
+		return errors.New("object key is required")
+	}
+	in := &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+		Body:   body,
+	}
+	if strings.TrimSpace(contentType) != "" {
+		in.ContentType = aws.String(contentType)
+	}
+	if size >= 0 {
+		in.ContentLength = aws.Int64(size)
+	}
+	_, err := s.client.PutObject(ctx, in)
+	return err
+}
+
 func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
 	bucket = strings.TrimSpace(bucket)
 	if bucket == "" {

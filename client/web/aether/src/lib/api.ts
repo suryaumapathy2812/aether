@@ -1063,6 +1063,32 @@ export async function completeMediaUpload(input: {
   });
 }
 
+export async function proxyMediaUpload(input: {
+  bucket: string;
+  object_key: string;
+  content_type: string;
+  size: number;
+  kind: "image" | "audio";
+  body: Blob;
+}) {
+  const res = await agentFetch(agentPath("/media/upload/proxy"), {
+    method: "PUT",
+    headers: {
+      "Content-Type": input.content_type,
+      "X-Aether-Bucket": input.bucket,
+      "X-Aether-Object-Key": input.object_key,
+      "X-Aether-Upload-Kind": input.kind,
+      "X-Aether-Content-Type": input.content_type,
+      "X-Aether-File-Size": String(input.size),
+    },
+    body: input.body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(extractErrorMessage(err, res.statusText));
+  }
+}
+
 export interface ChatCompletionResponse {
   id: string;
   object: string;

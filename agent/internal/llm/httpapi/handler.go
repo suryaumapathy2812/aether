@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path"
@@ -90,6 +91,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	}
 	for _, path := range []string{"/agent/v1/media/upload/complete", "/v1/media/upload/complete"} {
 		mux.HandleFunc(path, h.handleMediaUploadComplete)
+	}
+	for _, path := range []string{"/agent/v1/media/upload/proxy", "/v1/media/upload/proxy"} {
+		mux.HandleFunc(path, h.handleMediaUploadProxy)
 	}
 }
 
@@ -840,6 +844,50 @@ func (h *Handler) handleMediaUploadComplete(w http.ResponseWriter, r *http.Reque
 			"format":    audioFormatFromMimeOrPath(ct, req.ObjectKey),
 		},
 	})
+}
+
+func (h *Handler) handleMediaUploadProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.media == nil || !h.media.Enabled() {
+		httputil.WriteError(w, http.StatusBadRequest, "media storage is not configured (set S3_BUCKET or S3_BUCKET_TEMPLATE)")
+		return
+	}
+
+	bucket := strings.TrimSpace(r.Header.Get("X-Aether-Bucket"))
+	objectKey := strings.TrimSpace(r.Header.Get("X-Aether-Object-Key"))
+	kind := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Aether-Upload-Kind")))
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Aether-Content-Type")))
+	if contentType == "" {
+		contentType = strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	}
+	sizeText := strings.TrimSpace(r.Header.Get("X-Aether-File-Size"))
+	size, err := strconv.ParseInt(sizeText, 10, 64)
+	if err != nil || size <= 0 {
+		httputil.WriteError(w, http.StatusBadRequest, "valid X-Aether-File-Size is required")
+		return
+	}
+	if err := h.validateUploadIntent(kind, contentType, size); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if bucket == "" || objectKey == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "bucket and object key are required")
+		return
+	}
+	if err := h.media.EnsureBucket(r.Context(), bucket); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to prepare media bucket")
+		return
+	}
+
+	reader := io.LimitReader(r.Body, size)
+	if err := h.media.PutObject(r.Context(), bucket, objectKey, contentType, reader, size); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) resolveMediaRefs(ctx context.Context, userID string, messages []map[string]any) ([]map[string]any, error) {
