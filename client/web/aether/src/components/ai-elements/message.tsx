@@ -32,6 +32,11 @@ import {
   CodeBlockFilename,
   CodeBlockActions,
 } from "./code-block";
+import {
+  JSXPreview,
+  JSXPreviewContent,
+  JSXPreviewError,
+} from "./jsx-preview";
 import type { BundledLanguage } from "shiki";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -370,18 +375,45 @@ const streamdownComponents = {
   code: MarkdownCode,
 };
 
+const JSX_LIKE_START = /^\s*<([A-Za-z][\w-]*)(\s|>|\/>)/;
+
+function looksLikeRenderableJsx(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("```") || trimmed.startsWith("export default")) {
+    return false;
+  }
+  return JSX_LIKE_START.test(trimmed);
+}
+
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className,
-      )}
-      components={streamdownComponents}
-      plugins={streamdownPlugins}
-      {...props}
-    />
-  ),
+  ({ className, ...props }: MessageResponseProps) => {
+    const content = typeof props.children === "string" ? props.children : "";
+
+    if (looksLikeRenderableJsx(content)) {
+      return (
+        <div className={cn("size-full", className)}>
+          <JSXPreview className="rounded-2xl border bg-card p-4" jsx={content}>
+            <JSXPreviewContent />
+            <JSXPreviewError className="mt-3" />
+          </JSXPreview>
+        </div>
+      );
+    }
+
+    return (
+      <Streamdown
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className,
+        )}
+        components={streamdownComponents}
+        plugins={streamdownPlugins}
+        {...props}
+      />
+    );
+  },
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children &&
     nextProps.isAnimating === prevProps.isAnimating,
