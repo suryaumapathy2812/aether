@@ -131,13 +131,17 @@ func main() {
 
 	// ── Google Drive mount (rclone FUSE) ────────────────────────────
 	driveMount := integrations.NewDriveMountManager(store, filepath.Join(cfg.AssetsDir, "workspace", "gdrive"))
-	if err := driveMount.Mount(context.Background()); err != nil {
-		log.Printf("drive mount warning: %v", err)
-	} else {
+	go func() {
+		mountCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := driveMount.Mount(mountCtx); err != nil {
+			log.Printf("drive mount warning: %v", err)
+			return
+		}
 		if status := driveMount.Status(); status.Mounted {
 			log.Printf("drive mount: active at %s", status.MountDir)
 		}
-	}
+	}()
 
 	// ── Tools ───────────────────────────────────────────────────────
 	toolRegistry := tools.NewRegistry()

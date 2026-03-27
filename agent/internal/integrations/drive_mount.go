@@ -3,6 +3,7 @@ package integrations
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,11 @@ type DriveMountManager struct {
 	mountDir string
 	remote   string
 }
+
+const (
+	driveVerifyTimeout = 15 * time.Second
+	driveMountTimeout  = 20 * time.Second
+)
 
 // NewDriveMountManager creates a new mount manager.
 // mountDir is the local path where Google Drive will be mounted.
@@ -59,7 +65,9 @@ func (m *DriveMountManager) Mount(ctx context.Context) error {
 	}
 
 	// Verify config works.
-	if err := m.verifyConfig(ctx); err != nil {
+	verifyCtx, verifyCancel := context.WithTimeout(ctx, driveVerifyTimeout)
+	defer verifyCancel()
+	if err := m.verifyConfig(verifyCtx); err != nil {
 		return fmt.Errorf("rclone config verification failed: %w", err)
 	}
 
@@ -79,7 +87,9 @@ func (m *DriveMountManager) Mount(ctx context.Context) error {
 
 	log.Printf("drive mount: mounting %s at %s", m.remote, m.mountDir)
 
-	mountCmd := exec.CommandContext(ctx, "rclone", "mount",
+	mountCtx, mountCancel := context.WithTimeout(ctx, driveMountTimeout)
+	defer mountCancel()
+	mountCmd := exec.CommandContext(mountCtx, "rclone", "mount",
 		m.remote, m.mountDir,
 		"--vfs-cache-mode", "writes",
 		"--vfs-cache-max-age", "1h",
@@ -101,6 +111,9 @@ func (m *DriveMountManager) Mount(ctx context.Context) error {
 
 	if err := mountCmd.Run(); err != nil {
 		errOut := strings.TrimSpace(stderr.String())
+		if errors.Is(mountCtx.Err(), context.DeadlineExceeded) {
+			errOut = strings.TrimSpace(errOut + " mount timed out")
+		}
 		if logBytes, readErr := os.ReadFile("/tmp/rclone-mount.log"); readErr == nil && len(logBytes) > 0 {
 			errOut = errOut + "\nrclone log: " + string(logBytes)
 		}
@@ -109,6 +122,9 @@ func (m *DriveMountManager) Mount(ctx context.Context) error {
 
 	// Wait up to 10 seconds for mount to be ready.
 	for i := 0; i < 10; i++ {
+		if mountCtx.Err() != nil {
+			break
+		}
 		time.Sleep(1 * time.Second)
 		if m.isMounted() {
 			log.Printf("drive mount: mounted successfully at %s", m.mountDir)
