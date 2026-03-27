@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -231,16 +232,36 @@ func (s *Service) PutObject(ctx context.Context, bucket, objectKey, contentType 
 	if objectKey == "" {
 		return errors.New("object key is required")
 	}
+	if body == nil {
+		return errors.New("body is required")
+	}
+
+	uploadBody := body
+	contentLength := size
+	if seeker, ok := body.(interface {
+		io.Reader
+		io.Seeker
+	}); ok {
+		uploadBody = seeker
+	} else {
+		buffered, err := io.ReadAll(body)
+		if err != nil {
+			return err
+		}
+		uploadBody = bytes.NewReader(buffered)
+		contentLength = int64(len(buffered))
+	}
+
 	in := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(objectKey),
-		Body:   body,
+		Body:   uploadBody,
 	}
 	if strings.TrimSpace(contentType) != "" {
 		in.ContentType = aws.String(contentType)
 	}
-	if size >= 0 {
-		in.ContentLength = aws.Int64(size)
+	if contentLength >= 0 {
+		in.ContentLength = aws.Int64(contentLength)
 	}
 	_, err := s.client.PutObject(ctx, in)
 	return err
