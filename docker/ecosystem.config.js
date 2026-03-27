@@ -12,6 +12,13 @@
 const fs = require('fs');
 const path = require('path');
 
+function defaultS3PublicBaseUrl() {
+  if (process.env.S3_PUBLIC_BASE_URL) return process.env.S3_PUBLIC_BASE_URL;
+  const domain = (process.env.DOMAIN || '').trim();
+  if (domain) return `https://s3.${domain}`;
+  return undefined;
+}
+
 // Load .env so process.env has all values even when PM2 restarts independently.
 const envPaths = [
   path.resolve(__dirname, '..', '.env'),
@@ -89,7 +96,7 @@ module.exports = {
         S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID,
         S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY,
         S3_ENDPOINT: process.env.S3_ENDPOINT || 'http://aether-minio:9000',
-        S3_PUBLIC_BASE_URL: process.env.S3_PUBLIC_BASE_URL,
+        S3_PUBLIC_BASE_URL: defaultS3PublicBaseUrl(),
         S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE || 'true',
         S3_PUT_URL_TTL_SECONDS: parseInt(process.env.S3_PUT_URL_TTL_SECONDS) || 300,
         S3_GET_URL_TTL_SECONDS: parseInt(process.env.S3_GET_URL_TTL_SECONDS) || 900,

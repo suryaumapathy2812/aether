@@ -205,6 +205,7 @@ Orchestrator (`:4000`) on localhost. It handles TLS automatically via Let's Encr
 | `S3_BUCKET` | Agent | — | Fixed bucket name (leave empty to use template) |
 | `S3_BUCKET_TEMPLATE` | Agent | `core-ai-media-{user}` | Per-user bucket naming pattern |
 | `S3_REGION` | Agent | `us-east-1` | S3 region |
+| `S3_PUBLIC_BASE_URL` | Agent | `https://s3.<your-domain>` | Public HTTPS S3 endpoint used for browser presigned upload/download URLs |
 | `S3_FORCE_PATH_STYLE` | Agent | `true` | Required for MinIO |
 
 ### Optional

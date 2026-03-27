@@ -274,8 +274,9 @@ func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
 	}
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
 	if err == nil {
-		// Bucket exists — ensure the public-read policy is applied (idempotent).
+		// Bucket exists — ensure the browser-facing policy/CORS are applied (idempotent).
 		_ = s.ensurePublicReadPolicy(ctx, bucket)
+		_ = s.ensureBrowserCORS(ctx, bucket)
 		return nil
 	}
 	// Some production IAM policies do not allow HeadBucket/ListBucket but still
@@ -296,9 +297,10 @@ func (s *Service) EnsureBucket(ctx context.Context, bucket string) error {
 			return err
 		}
 	}
-	// Apply public-read policy so browsers can fetch objects directly via
-	// the public base URL without presigned query parameters.
+	// Apply public-read policy/CORS so browsers can upload with presigned URLs
+	// and fetch objects directly via the public base URL.
 	_ = s.ensurePublicReadPolicy(ctx, bucket)
+	_ = s.ensureBrowserCORS(ctx, bucket)
 	return nil
 }
 
@@ -321,6 +323,27 @@ func (s *Service) ensurePublicReadPolicy(ctx context.Context, bucket string) err
 	_, err := s.client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
 		Bucket: aws.String(bucket),
 		Policy: aws.String(policy),
+	})
+	return err
+}
+
+// ensureBrowserCORS allows browser-based presigned uploads plus public GETs.
+// Wildcard origins are acceptable here because PUT access still requires a
+// valid presigned URL, and objects are intended to be publicly readable.
+func (s *Service) ensureBrowserCORS(ctx context.Context, bucket string) error {
+	_, err := s.client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
+		Bucket: aws.String(bucket),
+		CORSConfiguration: &types.CORSConfiguration{
+			CORSRules: []types.CORSRule{
+				{
+					AllowedHeaders: []string{"*"},
+					AllowedMethods: []string{"GET", "HEAD", "PUT"},
+					AllowedOrigins: []string{"*"},
+					ExposeHeaders:  []string{"ETag"},
+					MaxAgeSeconds:  3600,
+				},
+			},
+		},
 	})
 	return err
 }
