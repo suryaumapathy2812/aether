@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import type { ArrowTemplate } from "@arrow-js/core";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "#/lib/utils";
 import {
   IconAlertCircle,
@@ -38,6 +37,28 @@ export type ToolSandboxProps = {
 type ArrowAny = any;
 
 let arrowModules: { html: ArrowAny; sandbox: ArrowAny } | null = null;
+
+function normalizeEventName(name: string) {
+  return name.toLowerCase();
+}
+
+function normalizeSandboxFileSource(source: string) {
+  return source
+    .replace(/\bclassName\s*=/g, "class=")
+    .replace(/\bhtmlFor\s*=/g, "for=")
+    .replace(/\bon([A-Z][A-Za-z]+)\s*=/g, (_, eventName: string) => {
+      return `@${normalizeEventName(eventName)}=`;
+    });
+}
+
+function normalizeSandboxSource(source: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(source).map(([name, content]) => [
+      name,
+      normalizeSandboxFileSource(content),
+    ]),
+  );
+}
 
 async function loadArrow() {
   if (arrowModules) return arrowModules;
@@ -85,7 +106,7 @@ export function ToolSandbox({
         const template = html`<div>
           ${arrowSandbox(
             {
-              source: sandbox.source,
+              source: normalizeSandboxSource(sandbox.source),
               shadowDOM: sandbox.shadowDOM ?? true,
               debug: false,
               onError: (err: Error | string) => {
