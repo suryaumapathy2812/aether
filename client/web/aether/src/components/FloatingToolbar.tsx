@@ -29,16 +29,14 @@ const NAV_ITEMS = [
 ] as const;
 
 const HIDE_TOOLBAR = ["/"];
-const COMMAND_HINTS = [
-  { keys: ["Cmd", "K"], label: "Command" },
-  { keys: ["Cmd", "B"], label: "Sessions" },
-  { keys: ["Cmd", "N"], label: "New chat" },
-  { keys: ["G", "C"], label: "Chat" },
-  { keys: ["G", "D"], label: "Devices" },
-  { keys: ["G", "M"], label: "Memory" },
-  { keys: ["G", "P"], label: "Integrations" },
-  { keys: ["G", "S"], label: "Settings" },
-] as const;
+const HEADER_SHORTCUTS = {
+  chat: ["G", "C"],
+  sessions: ["Cmd", "B"],
+  devices: ["G", "D"],
+  memory: ["G", "M"],
+  integrations: ["G", "P"],
+  account: ["G", "S"],
+} as const;
 
 function NavIcon({ href, active }: { href: string; active: boolean }) {
   switch (href) {
@@ -53,6 +51,33 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
     default:
       return null;
   }
+}
+
+function ShortcutBadge({
+  keys,
+  visible,
+}: {
+  keys: readonly string[];
+  visible: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute -bottom-2 left-1/2 z-20 flex -translate-x-1/2 translate-y-full items-center gap-1 rounded-full border border-border/70 bg-background/95 px-1.5 py-1 shadow-lg backdrop-blur-sm transition-all duration-150",
+        visible ? "opacity-100" : "opacity-0 translate-y-[calc(100%_-_4px)]",
+      )}
+      aria-hidden={!visible}
+    >
+      {keys.map((key) => (
+        <kbd
+          key={key}
+          className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[9px] font-medium text-foreground/80 shadow-sm"
+        >
+          {key}
+        </kbd>
+      ))}
+    </div>
+  );
 }
 
 export default function FloatingToolbar() {
@@ -75,7 +100,7 @@ function FloatingToolbarInner() {
     if (!isMac) return;
 
     const syncHints = (event: KeyboardEvent) => {
-      if (event.metaKey || event.key === "Meta") {
+      if (event.metaKey || event.getModifierState("Meta")) {
         setShowCommandHints(true);
         return;
       }
@@ -86,16 +111,30 @@ function FloatingToolbarInner() {
       setShowCommandHints(false);
     };
 
-    window.addEventListener("keydown", syncHints);
-    window.addEventListener("keyup", syncHints);
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Meta" || !event.getModifierState("Meta")) {
+        setShowCommandHints(false);
+        return;
+      }
+      syncHints(event);
+    };
+
+    window.addEventListener("keydown", syncHints, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    document.addEventListener("keydown", syncHints, true);
+    document.addEventListener("keyup", handleKeyUp, true);
     window.addEventListener("blur", hideHints);
     document.addEventListener("visibilitychange", hideHints);
+    window.addEventListener("pointerup", hideHints, true);
 
     return () => {
-      window.removeEventListener("keydown", syncHints);
-      window.removeEventListener("keyup", syncHints);
+      window.removeEventListener("keydown", syncHints, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      document.removeEventListener("keydown", syncHints, true);
+      document.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", hideHints);
       document.removeEventListener("visibilitychange", hideHints);
+      window.removeEventListener("pointerup", hideHints, true);
     };
   }, []);
 
@@ -111,41 +150,9 @@ function FloatingToolbarInner() {
       {/* Gradient fade from background to transparent */}
       <div className="fixed top-0 left-0 right-0 z-30 h-20 bg-gradient-to-b from-background to-transparent pointer-events-none" />
 
-      <div
-        className={cn(
-          "fixed top-3 left-1/2 z-35 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-background/85 px-3 py-2 shadow-lg backdrop-blur-md md:flex",
-          showCommandHints
-            ? "pointer-events-none opacity-100 translate-y-0"
-            : "pointer-events-none opacity-0 -translate-y-2",
-          "transition-all duration-150",
-        )}
-        aria-hidden={!showCommandHints}
-      >
-        {COMMAND_HINTS.map((hint) => (
-          <div
-            key={`${hint.label}-${hint.keys.join("-")}`}
-            className="flex items-center gap-2 rounded-full bg-muted/60 px-2 py-1"
-          >
-            <div className="flex items-center gap-1">
-              {hint.keys.map((key) => (
-                <kbd
-                  key={key}
-                  className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-background px-1.5 text-[10px] font-medium text-muted-foreground shadow-sm"
-                >
-                  {key}
-                </kbd>
-              ))}
-            </div>
-            <span className="text-[11px] font-medium text-foreground/80">
-              {hint.label}
-            </span>
-          </div>
-        ))}
-      </div>
-
       <div className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3 pointer-events-none">
       {/* Left — logo (new chat) */}
-      <div className="flex items-center pointer-events-auto">
+      <div className="relative flex items-center pointer-events-auto">
         <button
           onClick={() => navigate({ to: "/chat" })}
           className="flex items-center justify-center rounded-lg transition-colors cursor-pointer"
@@ -161,52 +168,78 @@ function FloatingToolbarInner() {
             className="w-8 h-8"
           />
         </button>
+        <ShortcutBadge
+          keys={HEADER_SHORTCUTS.chat}
+          visible={showCommandHints}
+        />
       </div>
 
       {/* Right — nav icons + account */}
       <div className="flex items-center gap-1 pointer-events-auto">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => navigate({ to: "/sessions" })}
-              className={cn(
-                "w-9 h-9 flex items-center justify-center rounded-lg text-foreground transition-colors",
-                pathname.startsWith("/sessions")
-                  ? "bg-foreground text-background"
-                  : "hover:bg-accent/60"
-              )}
-              aria-label="Sessions"
-            >
-              {pathname.startsWith("/sessions") ? (
-                <IconMessage2Filled className="size-5" />
-              ) : (
-                <IconMessage className="size-5" strokeWidth={1.5} />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Sessions</TooltipContent>
-        </Tooltip>
+        <div className="relative">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => navigate({ to: "/sessions" })}
+                className={cn(
+                  "w-9 h-9 flex items-center justify-center rounded-lg text-foreground transition-colors",
+                  pathname.startsWith("/sessions")
+                    ? "bg-foreground text-background"
+                    : "hover:bg-accent/60"
+                )}
+                aria-label="Sessions"
+              >
+                {pathname.startsWith("/sessions") ? (
+                  <IconMessage2Filled className="size-5" />
+                ) : (
+                  <IconMessage className="size-5" strokeWidth={1.5} />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Sessions</TooltipContent>
+          </Tooltip>
+          <ShortcutBadge
+            keys={HEADER_SHORTCUTS.sessions}
+            visible={showCommandHints}
+          />
+        </div>
 
         {NAV_ITEMS.map((item) => {
           const isActive = pathname.startsWith(item.href);
+          const shortcutKey =
+            item.href === "/devices"
+              ? HEADER_SHORTCUTS.devices
+              : item.href === "/memory"
+                ? HEADER_SHORTCUTS.memory
+                : item.href === "/integrations"
+                  ? HEADER_SHORTCUTS.integrations
+                  : null;
           return (
-            <Tooltip key={item.href}>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => navigate({ to: item.href })}
-                  className={cn(
-                    "w-9 h-9 flex items-center justify-center rounded-lg text-foreground transition-colors",
-                    isActive
-                      ? "bg-foreground text-background"
-                      : "hover:bg-accent/60"
-                  )}
-                  aria-label={item.label}
-                >
-                  <NavIcon href={item.href} active={isActive} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{item.label}</TooltipContent>
-            </Tooltip>
+            <div key={item.href} className="relative">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => navigate({ to: item.href })}
+                    className={cn(
+                      "w-9 h-9 flex items-center justify-center rounded-lg text-foreground transition-colors",
+                      isActive
+                        ? "bg-foreground text-background"
+                        : "hover:bg-accent/60"
+                    )}
+                    aria-label={item.label}
+                  >
+                    <NavIcon href={item.href} active={isActive} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{item.label}</TooltipContent>
+              </Tooltip>
+              {shortcutKey && (
+                <ShortcutBadge
+                  keys={shortcutKey}
+                  visible={showCommandHints}
+                />
+              )}
+            </div>
           );
         })}
 
@@ -228,35 +261,41 @@ function FloatingToolbarInner() {
           <TooltipContent side="bottom">Toggle theme</TooltipContent>
         </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => navigate({ to: "/account" })}
-              className={cn(
-                "w-9 h-9 flex items-center justify-center rounded-lg transition-colors",
-                pathname.startsWith("/account")
-                  ? "bg-foreground text-background"
-                  : "text-foreground hover:bg-accent/60"
-              )}
-              aria-label="Account"
-            >
-              <Avatar size="sm">
-                {session?.user?.image && (
-                  <AvatarImage
-                    src={session.user.image}
-                    alt={session?.user?.name || ""}
-                  />
+        <div className="relative">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => navigate({ to: "/account" })}
+                className={cn(
+                  "w-9 h-9 flex items-center justify-center rounded-lg transition-colors",
+                  pathname.startsWith("/account")
+                    ? "bg-foreground text-background"
+                    : "text-foreground hover:bg-accent/60"
                 )}
-                <AvatarFallback className="text-sm">
-                  {(session?.user?.name || session?.user?.email || "U")
-                    .charAt(0)
-                    .toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Account</TooltipContent>
-        </Tooltip>
+                aria-label="Account"
+              >
+                <Avatar size="sm">
+                  {session?.user?.image && (
+                    <AvatarImage
+                      src={session.user.image}
+                      alt={session?.user?.name || ""}
+                    />
+                  )}
+                  <AvatarFallback className="text-sm">
+                    {(session?.user?.name || session?.user?.email || "U")
+                      .charAt(0)
+                      .toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Account</TooltipContent>
+          </Tooltip>
+          <ShortcutBadge
+            keys={HEADER_SHORTCUTS.account}
+            visible={showCommandHints}
+          />
+        </div>
       </div>
     </div>
     </>
