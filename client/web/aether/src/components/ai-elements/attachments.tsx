@@ -163,6 +163,7 @@ export const Attachments = ({
           "flex items-start",
           variant === "list" ? "flex-col gap-2" : "flex-wrap gap-2",
           variant === "grid" && "ml-auto w-fit",
+          variant === "inline" && "w-full",
           className
         )}
         {...props}
@@ -204,10 +205,10 @@ export const Attachment = ({
           "group relative",
           variant === "grid" && "size-24 overflow-hidden rounded-lg",
           variant === "inline" && [
-            "flex h-8 cursor-pointer select-none items-center gap-1.5",
-            "rounded-md border border-border px-1.5",
+            "flex h-10 max-w-full cursor-pointer select-none items-center gap-2",
+            "rounded-xl border border-border/70 bg-background/90 px-2.5 shadow-sm",
             "font-medium text-sm transition-all",
-            "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+            "hover:border-border hover:bg-accent/40 hover:text-accent-foreground dark:hover:bg-accent/50",
           ],
           variant === "list" && [
             "flex w-full items-center gap-3 rounded-lg border p-3",
@@ -262,7 +263,7 @@ export const AttachmentPreview = ({
       className={cn(
         "flex shrink-0 items-center justify-center overflow-hidden",
         variant === "grid" && "size-full bg-muted",
-        variant === "inline" && "size-5 rounded bg-background",
+        variant === "inline" && "size-7 rounded-lg bg-muted/80",
         variant === "list" && "size-12 rounded bg-muted",
         className
       )}
@@ -345,9 +346,9 @@ export const AttachmentRemove = ({
           "[&>svg]:size-3",
         ],
         variant === "inline" && [
-          "size-5 rounded p-0",
-          "opacity-0 transition-opacity group-hover:opacity-100",
-          "[&>svg]:size-2.5",
+          "size-6 rounded-md p-0 text-muted-foreground/80",
+          "opacity-100 hover:text-foreground",
+          "[&>svg]:size-3",
         ],
         variant === "list" && ["size-8 shrink-0 rounded p-0", "[&>svg]:size-4"],
         className

@@ -43,7 +43,7 @@ import {
   IconArrowUp,
   IconPhoto,
   IconDeviceDesktop,
-  IconPlus,
+  IconPaperclip,
   IconPlayerPause,
   IconX,
 } from "@tabler/icons-react";
@@ -171,6 +171,9 @@ const captureScreenshot = async (): Promise<File | null> => {
     video.srcObject = null;
   }
 };
+
+const hasFileTransfer = (dataTransfer?: DataTransfer | null): boolean =>
+  Boolean(dataTransfer?.types?.includes("Files"));
 
 // ============================================================================
 // Provider Context & Types
@@ -529,6 +532,8 @@ export const PromptInput = ({
   // Refs
   const inputRef = useRef<HTMLInputElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const dragDepthRef = useRef(0);
+  const [isDragActive, setIsDragActive] = useState(false);
 
   // ----- Local attachments (only used when no provider)
   const [items, setItems] = useState<(FileUIPart & { id: string })[]>([]);
@@ -562,6 +567,9 @@ export const PromptInput = ({
         .filter(Boolean);
 
       return patterns.some((pattern) => {
+        if (pattern.startsWith(".")) {
+          return f.name.toLowerCase().endsWith(pattern.toLowerCase());
+        }
         if (pattern.endsWith("/*")) {
           // e.g: image/* -> image/
           const prefix = pattern.slice(0, -1);
@@ -738,24 +746,50 @@ export const PromptInput = ({
       return;
     }
 
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      dragDepthRef.current += 1;
+      setIsDragActive(true);
+      e.preventDefault();
+    };
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types?.includes("Files")) {
-        e.preventDefault();
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      setIsDragActive(true);
+      e.preventDefault();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      const nextTarget = e.relatedTarget;
+      if (
+        dragDepthRef.current === 0 &&
+        (!nextTarget ||
+          !(nextTarget instanceof Node) ||
+          !form.contains(nextTarget))
+      ) {
+        setIsDragActive(false);
       }
     };
     const onDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.types?.includes("Files")) {
-        e.preventDefault();
-      }
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         add(e.dataTransfer.files);
       }
     };
+    form.addEventListener("dragenter", onDragEnter);
     form.addEventListener("dragover", onDragOver);
+    form.addEventListener("dragleave", onDragLeave);
     form.addEventListener("drop", onDrop);
     return () => {
+      form.removeEventListener("dragenter", onDragEnter);
       form.removeEventListener("dragover", onDragOver);
+      form.removeEventListener("dragleave", onDragLeave);
       form.removeEventListener("drop", onDrop);
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
     };
   }, [add, globalDrop]);
 
@@ -764,24 +798,50 @@ export const PromptInput = ({
       return;
     }
 
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      dragDepthRef.current += 1;
+      setIsDragActive(true);
+      e.preventDefault();
+    };
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types?.includes("Files")) {
-        e.preventDefault();
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      setIsDragActive(true);
+      e.preventDefault();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) {
+        setIsDragActive(false);
       }
     };
     const onDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.types?.includes("Files")) {
-        e.preventDefault();
-      }
+      if (!hasFileTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         add(e.dataTransfer.files);
       }
     };
+    const onWindowBlur = () => {
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
+    };
+    document.addEventListener("dragenter", onDragEnter);
     document.addEventListener("dragover", onDragOver);
+    document.addEventListener("dragleave", onDragLeave);
     document.addEventListener("drop", onDrop);
+    window.addEventListener("blur", onWindowBlur);
     return () => {
+      document.removeEventListener("dragenter", onDragEnter);
       document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("dragleave", onDragLeave);
       document.removeEventListener("drop", onDrop);
+      window.removeEventListener("blur", onWindowBlur);
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
     };
   }, [add, globalDrop]);
 
@@ -915,7 +975,27 @@ export const PromptInput = ({
         ref={formRef}
         {...props}
       >
-        <InputGroup className="overflow-hidden">{children}</InputGroup>
+        <InputGroup
+          className={cn(
+            "overflow-hidden transition-all duration-200",
+            isDragActive &&
+              "min-h-36 border-primary/60 bg-accent/20 shadow-lg ring-4 ring-primary/10",
+          )}
+        >
+          {children}
+          {isDragActive && (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/40 bg-background/85 px-6 text-center backdrop-blur-sm">
+              <div className="space-y-1">
+                <p className="text-base font-medium text-foreground">
+                  Drop image or audio files here
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  PNG, JPG, WEBP, GIF, WAV, MP3, OGG, FLAC, AAC, AIFF, M4A, or WEBM
+                </p>
+              </div>
+            </div>
+          )}
+        </InputGroup>
       </form>
     </>
   );
@@ -1174,7 +1254,7 @@ export const PromptInputActionMenuTrigger = ({
 }: PromptInputActionMenuTriggerProps) => (
   <DropdownMenuTrigger asChild>
     <PromptInputButton className={className} {...props}>
-      {children ?? <IconPlus className="size-4" />}
+      {children ?? <IconPaperclip className="size-4" />}
     </PromptInputButton>
   </DropdownMenuTrigger>
 );

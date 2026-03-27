@@ -34,10 +34,6 @@ import {
   PromptInputBody,
   PromptInputFooter,
   PromptInputTools,
-  PromptInputActionMenu,
-  PromptInputActionMenuTrigger,
-  PromptInputActionMenuContent,
-  PromptInputActionAddAttachments,
   type PromptInputMessage,
   usePromptInputAttachments,
 } from "#/components/ai-elements/prompt-input";
@@ -45,12 +41,38 @@ import {
   Attachments,
   Attachment,
   AttachmentPreview,
+  AttachmentInfo,
   AttachmentRemove,
 } from "#/components/ai-elements/attachments";
-import { IconSparkles, IconX, IconPlayerPause } from "@tabler/icons-react";
+import {
+  IconSparkles,
+  IconX,
+  IconPlayerPause,
+  IconPaperclip,
+} from "@tabler/icons-react";
 import { AudioLines } from "lucide-react";
 import { z } from "zod";
 import { setRecentChatSessionId } from "#/lib/recent-chat";
+
+const SUPPORTED_UPLOAD_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/ogg",
+  "audio/flac",
+  "audio/aac",
+  "audio/x-aiff",
+  "audio/aiff",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/webm",
+].join(",");
 
 const chatSearchSchema = z.object({
   s: z.string().optional().catch(undefined),
@@ -115,11 +137,16 @@ function ChatPromptInput({
   const attachments = usePromptInputAttachments();
 
   return (
-    <PromptInput onSubmit={onSubmit}>
+    <PromptInput
+      accept={SUPPORTED_UPLOAD_TYPES}
+      globalDrop
+      multiple
+      onSubmit={onSubmit}
+    >
       <PromptInputBody>
         {attachments.files.length > 0 && (
-          <div className="flex justify-end gap-2 mb-2">
-            <Attachments variant="inline">
+          <div className="mb-3 w-full">
+            <Attachments variant="inline" className="justify-start">
               {attachments.files.map((file) => (
                 <Attachment
                   key={file.id}
@@ -127,6 +154,7 @@ function ChatPromptInput({
                   onRemove={() => attachments.remove(file.id)}
                 >
                   <AttachmentPreview />
+                  <AttachmentInfo className="max-w-40" />
                   <AttachmentRemove />
                 </Attachment>
               ))}
@@ -142,12 +170,15 @@ function ChatPromptInput({
       </PromptInputBody>
       <PromptInputFooter>
         <PromptInputTools>
-          <PromptInputActionMenu>
-            <PromptInputActionMenuTrigger tooltip="Add attachments" />
-            <PromptInputActionMenuContent>
-              <PromptInputActionAddAttachments />
-            </PromptInputActionMenuContent>
-          </PromptInputActionMenu>
+          <PromptInputButton
+            onClick={() => attachments.openFileDialog()}
+            tooltip="Add photos or files"
+            size="icon-sm"
+            variant="ghost"
+            className="rounded-full"
+          >
+            <IconPaperclip className="size-4" />
+          </PromptInputButton>
         </PromptInputTools>
         {!input.trim() && !isStreaming && attachments.files.length === 0 ? (
           <PromptInputButton
