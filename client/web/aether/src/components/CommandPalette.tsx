@@ -39,7 +39,7 @@ export default function CommandPalette({
   onOpenShortcutsHelp,
 }: CommandPaletteProps) {
   const navigate = useNavigate();
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
 
   const runAction = useCallback(
     (action: () => void) => {
@@ -79,9 +79,13 @@ export default function CommandPalette({
             <span className="ml-auto text-sm text-muted-foreground/60">?</span>
           </CommandItem>
           <CommandItem
-            onSelect={() => runAction(() => setTheme(theme === "dark" ? "light" : "dark"))}
+            onSelect={() =>
+              runAction(() =>
+                setTheme(resolvedTheme === "dark" ? "light" : "dark")
+              )
+            }
           >
-            {theme === "dark" ? (
+            {resolvedTheme === "dark" ? (
               <IconSun className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             ) : (
               <IconMoon className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />

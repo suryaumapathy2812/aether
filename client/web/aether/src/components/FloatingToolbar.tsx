@@ -56,12 +56,15 @@ export default function FloatingToolbar() {
 function FloatingToolbarInner() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { data: session } = useSession();
-  const { theme, setTheme } = useTheme();
+  const { data: session, isPending } = useSession();
+  const { resolvedTheme, setTheme } = useTheme();
 
-  if (HIDE_TOOLBAR.includes(pathname)) return null;
+  if (isPending || !session || pathname === "/login" || HIDE_TOOLBAR.includes(pathname)) {
+    return null;
+  }
 
-  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
+  const toggleTheme = () =>
+    setTheme(resolvedTheme === "dark" ? "light" : "dark");
 
   return (
     <>
@@ -77,7 +80,11 @@ function FloatingToolbarInner() {
           aria-label="Home"
         >
           <img
-            src={theme === "dark" ? "/icon-animated-white.svg" : "/icon-animated-black.svg"}
+            src={
+              resolvedTheme === "dark"
+                ? "/icon-animated-white.svg"
+                : "/icon-animated-black.svg"
+            }
             alt="Aether"
             className="w-8 h-8"
           />
@@ -139,7 +146,7 @@ function FloatingToolbarInner() {
               className="w-9 h-9 flex items-center justify-center rounded-lg text-foreground transition-colors hover:bg-accent/60"
               aria-label="Toggle theme"
             >
-              {theme === "dark" ? (
+              {resolvedTheme === "dark" ? (
                 <IconSun className="size-5" strokeWidth={1.5} />
               ) : (
                 <IconMoon className="size-5" strokeWidth={1.5} />

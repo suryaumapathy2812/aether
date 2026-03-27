@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import MinimalInput from "#/components/MinimalInput";
+import { useTheme } from "#/components/ThemeProvider";
 import { Button } from "#/components/ui/button";
 import { signIn, signUp, useSession } from "#/lib/auth-client";
 
@@ -11,6 +12,7 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const { data: session, isPending } = useSession();
+  const { resolvedTheme } = useTheme();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -55,9 +57,15 @@ function LoginPage() {
 
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 sm:px-8">
-      <h1 className="logo-wordmark text-xs text-muted-foreground font-medium mb-12">
-        aether
-      </h1>
+      <img
+        src={
+          resolvedTheme === "dark"
+            ? "/app-icon-dark.svg"
+            : "/app-icon-light.svg"
+        }
+        alt="aether"
+        className="mb-12 h-14 w-14"
+      />
 
       <form onSubmit={handleSubmit} className="w-full max-w-[340px] px-2 py-2">
         {mode === "signup" && (
