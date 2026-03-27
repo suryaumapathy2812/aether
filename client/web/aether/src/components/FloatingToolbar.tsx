@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useLocation } from "@tanstack/react-router";
 import { useTheme } from "#/components/ThemeProvider";
 import { cn } from "#/lib/utils";
@@ -29,6 +29,16 @@ const NAV_ITEMS = [
 ] as const;
 
 const HIDE_TOOLBAR = ["/"];
+const COMMAND_HINTS = [
+  { keys: ["Cmd", "K"], label: "Command" },
+  { keys: ["Cmd", "B"], label: "Sessions" },
+  { keys: ["Cmd", "N"], label: "New chat" },
+  { keys: ["G", "C"], label: "Chat" },
+  { keys: ["G", "D"], label: "Devices" },
+  { keys: ["G", "M"], label: "Memory" },
+  { keys: ["G", "P"], label: "Integrations" },
+  { keys: ["G", "S"], label: "Settings" },
+] as const;
 
 function NavIcon({ href, active }: { href: string; active: boolean }) {
   switch (href) {
@@ -58,6 +68,36 @@ function FloatingToolbarInner() {
   const { pathname } = useLocation();
   const { data: session, isPending } = useSession();
   const { resolvedTheme, setTheme } = useTheme();
+  const [showCommandHints, setShowCommandHints] = useState(false);
+
+  useEffect(() => {
+    const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+    if (!isMac) return;
+
+    const syncHints = (event: KeyboardEvent) => {
+      if (event.metaKey || event.key === "Meta") {
+        setShowCommandHints(true);
+        return;
+      }
+      setShowCommandHints(false);
+    };
+
+    const hideHints = () => {
+      setShowCommandHints(false);
+    };
+
+    window.addEventListener("keydown", syncHints);
+    window.addEventListener("keyup", syncHints);
+    window.addEventListener("blur", hideHints);
+    document.addEventListener("visibilitychange", hideHints);
+
+    return () => {
+      window.removeEventListener("keydown", syncHints);
+      window.removeEventListener("keyup", syncHints);
+      window.removeEventListener("blur", hideHints);
+      document.removeEventListener("visibilitychange", hideHints);
+    };
+  }, []);
 
   if (isPending || !session || pathname === "/login" || HIDE_TOOLBAR.includes(pathname)) {
     return null;
@@ -70,6 +110,38 @@ function FloatingToolbarInner() {
     <>
       {/* Gradient fade from background to transparent */}
       <div className="fixed top-0 left-0 right-0 z-30 h-20 bg-gradient-to-b from-background to-transparent pointer-events-none" />
+
+      <div
+        className={cn(
+          "fixed top-3 left-1/2 z-35 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-background/85 px-3 py-2 shadow-lg backdrop-blur-md md:flex",
+          showCommandHints
+            ? "pointer-events-none opacity-100 translate-y-0"
+            : "pointer-events-none opacity-0 -translate-y-2",
+          "transition-all duration-150",
+        )}
+        aria-hidden={!showCommandHints}
+      >
+        {COMMAND_HINTS.map((hint) => (
+          <div
+            key={`${hint.label}-${hint.keys.join("-")}`}
+            className="flex items-center gap-2 rounded-full bg-muted/60 px-2 py-1"
+          >
+            <div className="flex items-center gap-1">
+              {hint.keys.map((key) => (
+                <kbd
+                  key={key}
+                  className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-background px-1.5 text-[10px] font-medium text-muted-foreground shadow-sm"
+                >
+                  {key}
+                </kbd>
+              ))}
+            </div>
+            <span className="text-[11px] font-medium text-foreground/80">
+              {hint.label}
+            </span>
+          </div>
+        ))}
+      </div>
 
       <div className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3 pointer-events-none">
       {/* Left — logo (new chat) */}
