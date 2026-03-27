@@ -340,7 +340,7 @@ func (s *Service) ensureBrowserCORS(ctx context.Context, bucket string) error {
 					AllowedMethods: []string{"GET", "HEAD", "PUT"},
 					AllowedOrigins: []string{"*"},
 					ExposeHeaders:  []string{"ETag"},
-					MaxAgeSeconds:  3600,
+					MaxAgeSeconds:  aws.Int32(3600),
 				},
 			},
 		},
