@@ -39,6 +39,7 @@ type ArrowAny = any;
 let arrowModules: { html: ArrowAny; sandbox: ArrowAny } | null = null;
 
 function normalizeEventName(name: string) {
+  if (name === "DoubleClick") return "dblclick";
   return name.toLowerCase();
 }
 
@@ -46,6 +47,11 @@ function normalizeSandboxFileSource(source: string) {
   return source
     .replace(/\bclassName\s*=/g, "class=")
     .replace(/\bhtmlFor\s*=/g, "for=")
+    .replace(/\breadOnly\s*=/g, "readonly=")
+    .replace(/\bautoFocus\s*=/g, "autofocus=")
+    .replace(/\btabIndex\s*=/g, "tabindex=")
+    .replace(/\bdefaultValue\s*=/g, "value=")
+    .replace(/\bdefaultChecked\s*=/g, "checked=")
     .replace(/\bon([A-Z][A-Za-z]+)\s*=/g, (_, eventName: string) => {
       return `@${normalizeEventName(eventName)}=`;
     });

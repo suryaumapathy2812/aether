@@ -47,6 +47,102 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isQuestionRequestForPart(
+  questionRequest: SessionState["questionRequest"],
+  part: ToolPartRecord,
+) {
+  return questionRequest && questionRequest.toolCallId === part.toolCallId;
+}
+
+function normalizeQuestionReplyPayload(payload: unknown): QuestionReplyPayload | null {
+  if (typeof payload === "string") {
+    return { answers: [payload] };
+  }
+
+  if (Array.isArray(payload) && payload.every((value) => typeof value === "string")) {
+    return { answers: payload as string[] };
+  }
+
+  if (!isRecord(payload)) return null;
+
+  if (Array.isArray(payload.answers)) {
+    return {
+      answers: payload.answers.filter((value): value is string => typeof value === "string"),
+      data: isRecord(payload.data) ? payload.data : undefined,
+    };
+  }
+
+  if (typeof payload.answer === "string") {
+    return {
+      answers: [payload.answer],
+      data: isRecord(payload.data) ? payload.data : undefined,
+    };
+  }
+
+  if (isRecord(payload.data)) {
+    return { data: payload.data };
+  }
+
+  return null;
+}
+
+function handleSandboxHostAction(
+  payload: unknown,
+  part: ToolPartRecord,
+  questionRequest: SessionState["questionRequest"],
+  onQuestionSubmit: (payload: QuestionReplyPayload) => void | Promise<void>,
+  onQuestionDismiss: () => void | Promise<void>,
+) {
+  if (!isRecord(payload)) {
+    if (isQuestionRequestForPart(questionRequest, part)) {
+      const reply = normalizeQuestionReplyPayload(payload);
+      if (reply) return onQuestionSubmit(reply);
+    }
+    return;
+  }
+
+  const action = typeof payload.type === "string"
+    ? payload.type
+    : typeof payload.action === "string"
+      ? payload.action
+      : "";
+
+  if (action === "dismiss" || action === "question.dismiss" || action === "question.reject") {
+    if (isQuestionRequestForPart(questionRequest, part)) {
+      return onQuestionDismiss();
+    }
+    return;
+  }
+
+  if (
+    action === "submit" ||
+    action === "question.submit" ||
+    action === "question.reply" ||
+    action === "reply"
+  ) {
+    if (isQuestionRequestForPart(questionRequest, part)) {
+      const reply = normalizeQuestionReplyPayload(payload.payload ?? payload);
+      if (reply) return onQuestionSubmit(reply);
+    }
+    return;
+  }
+
+  if (action === "open-url" && typeof payload.url === "string" && typeof window !== "undefined") {
+    window.open(payload.url, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  if (action === "copy" && typeof payload.text === "string" && typeof navigator !== "undefined") {
+    void navigator.clipboard?.writeText(payload.text);
+    return;
+  }
+
+  if (isQuestionRequestForPart(questionRequest, part)) {
+    const reply = normalizeQuestionReplyPayload(payload);
+    if (reply) return onQuestionSubmit(reply);
+  }
+}
+
 function extractSandboxSource(metadata: unknown): ToolSandboxSource | null {
   if (!isRecord(metadata)) return null;
   const sandbox = metadata.sandbox;
@@ -130,6 +226,7 @@ export function DefaultToolRenderer({
 
 function SandboxToolRenderer({
   part,
+  questionRequest,
   onQuestionSubmit,
   onQuestionDismiss,
 }: ToolRendererProps) {
@@ -149,6 +246,15 @@ function SandboxToolRenderer({
       sandbox={sandbox}
       state={part.state}
       errorText={part.errorText}
+      onOutput={(payload) =>
+        handleSandboxHostAction(
+          payload,
+          part,
+          questionRequest,
+          onQuestionSubmit,
+          onQuestionDismiss,
+        )
+      }
     />
   );
 }
