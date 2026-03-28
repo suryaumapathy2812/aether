@@ -546,13 +546,6 @@
       "name": "Gemma 2 9B",
       "input_modalities": ["text"],
       "output_modalities": ["text"]
-    },
-    {
-      "provider": "google",
-      "id": "google/veo-3.1",
-      "name": "Veo 3.1",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["video", "audio"]
     }
   ]
 }

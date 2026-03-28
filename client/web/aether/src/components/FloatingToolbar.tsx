@@ -1,9 +1,10 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense } from "react";
 import { useNavigate, useLocation } from "@tanstack/react-router";
 import { useTheme } from "#/components/ThemeProvider";
 import { cn } from "#/lib/utils";
 import { useSession } from "#/lib/auth-client";
 import { useShortcutsContext } from "#/components/KeyboardShortcutsProvider";
+import { getCommandPaletteShortcutKeys } from "#/lib/shortcuts";
 import {
   Tooltip,
   TooltipContent,
@@ -20,6 +21,7 @@ import {
   IconSparkles,
   IconSun,
   IconMoon,
+  IconSearch,
 } from "@tabler/icons-react";
 
 const NAV_ITEMS = [
@@ -30,16 +32,6 @@ const NAV_ITEMS = [
 ] as const;
 
 const HIDE_TOOLBAR = ["/"];
-const HEADER_SHORTCUTS = {
-  chat: ["C"],
-  command: ["K"],
-  sessions: ["B"],
-  devices: ["D"],
-  memory: ["M"],
-  integrations: ["P"],
-  skills: ["I"],
-  account: ["S"],
-} as const;
 
 function NavIcon({ href, active }: { href: string; active: boolean }) {
   switch (href) {
@@ -56,33 +48,6 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
   }
 }
 
-function ShortcutBadge({
-  keys,
-  visible,
-}: {
-  keys: readonly string[];
-  visible: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "pointer-events-none absolute -bottom-2 left-1/2 z-20 flex -translate-x-1/2 translate-y-full items-center gap-1 rounded-full border border-border/70 bg-background/95 px-1.5 py-1 shadow-lg backdrop-blur-sm transition-all duration-150",
-        visible ? "opacity-100" : "opacity-0 translate-y-[calc(100%_-_4px)]",
-      )}
-      aria-hidden={!visible}
-    >
-      {keys.map((key) => (
-        <kbd
-          key={key}
-          className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[9px] font-medium text-foreground/80 shadow-sm"
-        >
-          {key}
-        </kbd>
-      ))}
-    </div>
-  );
-}
-
 export default function FloatingToolbar() {
   return (
     <Suspense>
@@ -97,50 +62,6 @@ function FloatingToolbarInner() {
   const { data: session, isPending } = useSession();
   const { openCommandPalette } = useShortcutsContext();
   const { resolvedTheme, setTheme } = useTheme();
-  const [showCommandHints, setShowCommandHints] = useState(false);
-
-  useEffect(() => {
-    const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
-    if (!isMac) return;
-
-    const syncHints = (event: KeyboardEvent) => {
-      if (event.metaKey || event.getModifierState("Meta")) {
-        setShowCommandHints(true);
-        return;
-      }
-      setShowCommandHints(false);
-    };
-
-    const hideHints = () => {
-      setShowCommandHints(false);
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === "Meta" || !event.getModifierState("Meta")) {
-        setShowCommandHints(false);
-        return;
-      }
-      syncHints(event);
-    };
-
-    window.addEventListener("keydown", syncHints, true);
-    window.addEventListener("keyup", handleKeyUp, true);
-    document.addEventListener("keydown", syncHints, true);
-    document.addEventListener("keyup", handleKeyUp, true);
-    window.addEventListener("blur", hideHints);
-    document.addEventListener("visibilitychange", hideHints);
-    window.addEventListener("pointerup", hideHints, true);
-
-    return () => {
-      window.removeEventListener("keydown", syncHints, true);
-      window.removeEventListener("keyup", handleKeyUp, true);
-      document.removeEventListener("keydown", syncHints, true);
-      document.removeEventListener("keyup", handleKeyUp, true);
-      window.removeEventListener("blur", hideHints);
-      document.removeEventListener("visibilitychange", hideHints);
-      window.removeEventListener("pointerup", hideHints, true);
-    };
-  }, []);
 
   if (isPending || !session || pathname === "/login" || HIDE_TOOLBAR.includes(pathname)) {
     return null;
@@ -172,10 +93,6 @@ function FloatingToolbarInner() {
             className="w-8 h-8"
           />
         </button>
-        <ShortcutBadge
-          keys={HEADER_SHORTCUTS.chat}
-          visible={showCommandHints}
-        />
       </div>
 
       {/* Right — nav icons + account */}
@@ -186,20 +103,18 @@ function FloatingToolbarInner() {
             className="flex h-9 min-w-28 items-center justify-between rounded-lg border border-border/70 bg-background/80 px-3 text-sm text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-accent/60"
             aria-label="Open command menu"
           >
-            <span>Command</span>
+            <IconSearch className="size-5"/>
             <span className="ml-3 inline-flex items-center gap-1">
-              <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[10px] font-medium text-foreground/80">
-                ⌘
-              </kbd>
-              <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[10px] font-medium text-foreground/80">
-                K
-              </kbd>
+              {getCommandPaletteShortcutKeys().map((key) => (
+                <kbd
+                  key={key}
+                  className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[10px] font-medium text-foreground/80"
+                >
+                  {key}
+                </kbd>
+              ))}
             </span>
           </button>
-          <ShortcutBadge
-            keys={HEADER_SHORTCUTS.command}
-            visible={showCommandHints}
-          />
         </div>
 
         <div className="relative">
@@ -224,24 +139,10 @@ function FloatingToolbarInner() {
             </TooltipTrigger>
             <TooltipContent side="bottom">Sessions</TooltipContent>
           </Tooltip>
-          <ShortcutBadge
-            keys={HEADER_SHORTCUTS.sessions}
-            visible={showCommandHints}
-          />
         </div>
 
         {NAV_ITEMS.map((item) => {
           const isActive = pathname.startsWith(item.href);
-          const shortcutKey =
-            item.href === "/devices"
-              ? HEADER_SHORTCUTS.devices
-              : item.href === "/memory"
-                ? HEADER_SHORTCUTS.memory
-                : item.href === "/integrations"
-                  ? HEADER_SHORTCUTS.integrations
-                  : item.href === "/skills"
-                    ? HEADER_SHORTCUTS.skills
-                    : null;
           return (
             <div key={item.href} className="relative">
               <Tooltip>
@@ -261,12 +162,6 @@ function FloatingToolbarInner() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{item.label}</TooltipContent>
               </Tooltip>
-              {shortcutKey && (
-                <ShortcutBadge
-                  keys={shortcutKey}
-                  visible={showCommandHints}
-                />
-              )}
             </div>
           );
         })}
@@ -319,10 +214,6 @@ function FloatingToolbarInner() {
             </TooltipTrigger>
             <TooltipContent side="bottom">Account</TooltipContent>
           </Tooltip>
-          <ShortcutBadge
-            keys={HEADER_SHORTCUTS.account}
-            visible={showCommandHints}
-          />
         </div>
       </div>
     </div>

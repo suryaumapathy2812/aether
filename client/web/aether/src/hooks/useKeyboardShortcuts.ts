@@ -1,17 +1,9 @@
 import { useEffect, useCallback } from "react";
 import { useRouterState } from "@tanstack/react-router";
+import { matchesCommandPaletteShortcut } from "#/lib/shortcuts";
 
 interface ShortcutHandlers {
-  onToggleSessions?: () => void;
-  onNewChat?: () => void;
   onOpenCommandPalette?: () => void;
-  onOpenShortcutsHelp?: () => void;
-  onOpenChat?: () => void;
-  onOpenDevices?: () => void;
-  onOpenMemory?: () => void;
-  onOpenIntegrations?: () => void;
-  onOpenSkills?: () => void;
-  onOpenAccount?: () => void;
 }
 
 function isInputFocused(): boolean {
@@ -26,61 +18,11 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
       const typing = isInputFocused();
-      const key = e.key.toLowerCase();
 
-      if (meta && key === "k") {
+      if (matchesCommandPaletteShortcut(e)) {
         e.preventDefault();
         handlers.onOpenCommandPalette?.();
-        return;
-      }
-
-      if (meta && key === "b") {
-        e.preventDefault();
-        handlers.onToggleSessions?.();
-        return;
-      }
-
-      if (meta && key === "n") {
-        e.preventDefault();
-        handlers.onNewChat?.();
-        return;
-      }
-
-      if (meta && key === "c") {
-        e.preventDefault();
-        handlers.onOpenChat?.();
-        return;
-      }
-
-      if (meta && key === "d") {
-        e.preventDefault();
-        handlers.onOpenDevices?.();
-        return;
-      }
-
-      if (meta && key === "m") {
-        e.preventDefault();
-        handlers.onOpenMemory?.();
-        return;
-      }
-
-      if (meta && key === "p") {
-        e.preventDefault();
-        handlers.onOpenIntegrations?.();
-        return;
-      }
-
-      if (meta && key === "i") {
-        e.preventDefault();
-        handlers.onOpenSkills?.();
-        return;
-      }
-
-      if (meta && key === "s") {
-        e.preventDefault();
-        handlers.onOpenAccount?.();
         return;
       }
 
@@ -88,12 +30,6 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
 
       if (e.key === "Escape") {
         (document.activeElement as HTMLElement)?.blur();
-        return;
-      }
-
-      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
-        e.preventDefault();
-        handlers.onOpenShortcutsHelp?.();
         return;
       }
 

@@ -19,6 +19,7 @@ import {
 } from "#/lib/preferences";
 import {
   fetchLLMCatalog,
+  findCatalogModel,
   isChatCapableModel,
   modelOutputs,
   modelSupports,
@@ -75,10 +76,7 @@ export default function ModelPreference({
   }, []);
 
   const selectedModel = useMemo(() => {
-    if (!catalog) return null;
-    const value = model.trim();
-    if (!value) return null;
-    return catalog.models.find((entry) => entry.id === value) || null;
+    return findCatalogModel(catalog, model);
   }, [catalog, model]);
 
   const groupedModels = useMemo(() => {
@@ -122,34 +120,8 @@ export default function ModelPreference({
 
   return (
     <div className="space-y-4">
-      {catalog && (
-        <div className="grid gap-3 md:grid-cols-3">
-          {PROVIDER_ORDER.map((provider) => {
-            const summary = catalog.provider_summary[provider];
-            return (
-              <div key={provider} className="rounded-lg border border-border/60 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium">{PROVIDER_LABELS[provider]}</p>
-                  <Badge variant="outline">{summary.total_models} models</Badge>
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">{summary.notes}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge variant="secondary">
-                    Image {summary.image_upload_models}/{summary.total_models}
-                  </Badge>
-                  <Badge variant="secondary">
-                    Audio {summary.audio_upload_models}/{summary.total_models}
-                  </Badge>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {catalog && groupedModels && (
         <div className="space-y-2">
-          <p className="text-sm font-medium">Catalog models</p>
           <Select
             value={selectedModel?.id}
             onValueChange={(value) => setModel(value)}
@@ -170,80 +142,7 @@ export default function ModelPreference({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            Catalog snapshot: {catalog.generated_at}. Source: OpenRouter.
-          </p>
         </div>
-      )}
-
-      <div className="space-y-2">
-        <p className="text-sm font-medium">Selected model ID</p>
-        <div className="flex gap-2">
-          <Input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder={placeholder}
-            className="flex-1"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving ? "..." : "Save"}
-          </Button>
-          {model && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              disabled={saving}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              Reset
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {selectedModel && (
-        <div className="rounded-lg border border-border/60 p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-medium">{selectedModel.name}</p>
-            <Badge variant="outline">{selectedModel.id}</Badge>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Badge variant={modelSupports(selectedModel, "image") ? "default" : "outline"}>
-              Image input
-            </Badge>
-            <Badge variant={modelSupports(selectedModel, "audio") ? "default" : "outline"}>
-              Audio input
-            </Badge>
-            <Badge variant={modelSupports(selectedModel, "file") ? "default" : "outline"}>
-              File input
-            </Badge>
-            <Badge variant={modelSupports(selectedModel, "video") ? "default" : "outline"}>
-              Video input
-            </Badge>
-            <Badge variant={modelOutputs(selectedModel, "image") ? "secondary" : "outline"}>
-              Image output
-            </Badge>
-            <Badge variant={modelOutputs(selectedModel, "audio") ? "secondary" : "outline"}>
-              Audio output
-            </Badge>
-          </div>
-        </div>
-      )}
-
-      {!selectedModel && model.trim() && (
-        <p className="text-xs text-muted-foreground">
-          The current value is not in the bundled catalog. You can still save a custom model ID.
-        </p>
-      )}
-
-      {catalogError && (
-        <p className="text-xs text-muted-foreground">{catalogError}</p>
       )}
     </div>
   );

@@ -4,34 +4,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "#/components/ui/dialog";
+import { getCommandPaletteShortcutKeys } from "#/lib/shortcuts";
 
 interface ShortcutsHelpProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
-const mod = isMac ? "⌘" : "Ctrl";
-
 const sections = [
   {
     title: "Global",
     shortcuts: [
-      { keys: `${mod} K`, label: "Command palette" },
-      { keys: `${mod} B`, label: "Sessions" },
-      { keys: `${mod} N`, label: "New chat" },
-      { keys: "?", label: "Show shortcuts" },
+      { keys: getCommandPaletteShortcutKeys().join(" "), label: "Open command panel" },
     ],
   },
   {
     title: "Navigation",
     shortcuts: [
-      { keys: `${mod} C`, label: "Go to Chat" },
-      { keys: `${mod} D`, label: "Go to Devices" },
-      { keys: `${mod} M`, label: "Go to Memory" },
-      { keys: `${mod} P`, label: "Go to Connections" },
-      { keys: `${mod} I`, label: "Go to Skills" },
-      { keys: `${mod} S`, label: "Go to Settings" },
+      { keys: "Use Command Panel", label: "Open chat, sessions, devices, memory, skills, and settings" },
     ],
   },
   {

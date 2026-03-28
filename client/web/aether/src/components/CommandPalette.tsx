@@ -14,7 +14,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandShortcut,
   CommandSeparator,
 } from "#/components/ui/command";
 import {
@@ -24,8 +23,6 @@ import {
   IconBrain,
   IconDeviceMobile,
   IconPlus,
-  IconMessage,
-  IconKeyboard,
   IconSun,
   IconMoon,
   IconSearch,
@@ -35,17 +32,11 @@ import {
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onToggleSessions?: () => void;
-  onNewChat?: () => void;
-  onOpenShortcutsHelp?: () => void;
 }
 
 export default function CommandPalette({
   open,
   onOpenChange,
-  onToggleSessions,
-  onNewChat,
-  onOpenShortcutsHelp,
 }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -105,39 +96,13 @@ export default function CommandPalette({
         <CommandEmpty>No results found.</CommandEmpty>
 
         <CommandGroup heading="Actions">
-          <CommandItem
-            onSelect={() =>
-              runAction(() => {
-                if (isChatRoute) {
-                  onNewChat?.();
-                  return;
-                }
-                openRecentChat();
-              })
-            }
-            value={isChatRoute ? "new chat create conversation" : "return to chat recent last conversation"}
-          >
+          <CommandItem onSelect={() => runAction(openRecentChat)}>
             {isChatRoute ? (
               <IconPlus className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             ) : (
               <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             )}
             {isChatRoute ? "New Chat" : "Return to Chat"}
-            <CommandShortcut>{isChatRoute ? "⌘N" : "⌘C"}</CommandShortcut>
-          </CommandItem>
-          <CommandItem
-            onSelect={() => runAction(() => onToggleSessions?.())}
-          >
-            <IconMessage className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
-            Sessions
-            <CommandShortcut>⌘B</CommandShortcut>
-          </CommandItem>
-          <CommandItem
-            onSelect={() => runAction(() => onOpenShortcutsHelp?.())}
-          >
-            <IconKeyboard className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
-            Keyboard Shortcuts
-            <span className="ml-auto text-sm text-muted-foreground/60">?</span>
           </CommandItem>
           <CommandItem
             onSelect={() =>
@@ -161,32 +126,26 @@ export default function CommandPalette({
           <CommandItem onSelect={() => runAction(openRecentChat)}>
             <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Chat
-            <CommandShortcut>⌘C</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/integrations" }))}>
             <IconPlugConnected className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Connections
-            <CommandShortcut>⌘P</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/devices" }))}>
             <IconDeviceMobile className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Devices
-            <CommandShortcut>⌘D</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/memory" }))}>
             <IconBrain className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Memory
-            <CommandShortcut>⌘M</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/skills" }))}>
             <IconSparkles className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Skills
-            <CommandShortcut>⌘I</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/account" }))}>
             <IconSettings className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Settings
-            <CommandShortcut>⌘S</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
