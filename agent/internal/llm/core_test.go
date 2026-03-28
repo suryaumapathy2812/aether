@@ -385,7 +385,7 @@ func TestGenerateWithTools_ShapesToolResultsForModel(t *testing.T) {
 		if role == "tool" && msg["tool_call_id"] == "c-json" {
 			toolMessage = msg
 		}
-		if role == "system" {
+		if role == "user" {
 			if content, _ := msg["content"].(string); strings.Contains(content, "Latest tool results include structured data") {
 				followup = content
 			}

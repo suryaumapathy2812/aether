@@ -280,7 +280,7 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 					remainingRecovery--
 					pendingRecovery = false
 					env.Messages = append(env.Messages, map[string]any{
-						"role":    "system",
+						"role":    "user",
 						"content": "A previous tool call failed. If the request is not complete, attempt one corrected tool call (adjust tool choice or arguments) before stopping.",
 					})
 					seq++
@@ -352,23 +352,24 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "errorText": toolText, "class": string(classification), "metadata": metadata, "error": true})
 				} else {
 					sawSuccessfulToolResult = true
-					if toolOutputIsStructured(tr.result.Output) {
-						sawStructuredToolResult = true
-					}
 					seq++
 					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "output": toolText, "metadata": metadata, "error": false})
 				}
 
+				formatted, isStructured := formatToolResultForModel(tr.tc.Name, tr.result)
+				if isStructured {
+					sawStructuredToolResult = true
+				}
 				env.Messages = append(env.Messages, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.tc.ID,
-					"content":      formatToolResultForModel(tr.tc.Name, tr.result),
+					"content":      formatted,
 				})
 			}
 			if sawSuccessfulToolResult {
 				env.Messages = append(env.Messages, map[string]any{
-					"role":    "system",
-					"content": toolResultsFollowupInstruction(sawStructuredToolResult),
+					"role":    "user",
+					"content": "[INSTRUCTION] " + toolResultsFollowupInstruction(sawStructuredToolResult),
 				})
 			}
 			pendingRecovery = iterationRecoverableToolError
@@ -455,16 +456,18 @@ func assistantMessage(content string, toolCalls []providers.LLMToolCall) map[str
 	return out
 }
 
-func formatToolResultForModel(toolName string, result tools.Result) string {
+func formatToolResultForModel(toolName string, result tools.Result) (string, bool) {
 	payload := map[string]any{
 		"tool_name": strings.TrimSpace(toolName),
 		"status":    map[bool]string{true: "error", false: "success"}[result.Error],
 	}
 
 	output := strings.TrimSpace(result.Output)
+	isStructured := false
 	if parsed, ok := parseStructuredToolOutput(output); ok {
 		payload["output"] = parsed
 		payload["output_kind"] = "structured"
+		isStructured = true
 	} else if output != "" {
 		payload["output_text"] = output
 		payload["output_kind"] = "text"
@@ -480,9 +483,9 @@ func formatToolResultForModel(toolName string, result tools.Result) string {
 
 	b, err := json.Marshal(payload)
 	if err != nil {
-		return output
+		return output, isStructured
 	}
-	return string(b)
+	return string(b), isStructured
 }
 
 func parseStructuredToolOutput(raw string) (any, bool) {
@@ -499,11 +502,6 @@ func parseStructuredToolOutput(raw string) (any, bool) {
 	default:
 		return nil, false
 	}
-}
-
-func toolOutputIsStructured(raw string) bool {
-	_, ok := parseStructuredToolOutput(raw)
-	return ok
 }
 
 func inferToolPresentationHint(payload map[string]any) string {
@@ -531,6 +529,7 @@ func inferToolPresentationHint(payload map[string]any) string {
 		case text == "":
 			return "empty"
 		case strings.Count(text, "\n") >= 6:
+			// Threshold: 6+ newlines suggests multi-paragraph content worth rendering as a document.
 			return "document"
 		default:
 			return "summary"
@@ -823,7 +822,7 @@ func (c *Core) compactIfNeeded(ctx context.Context, env LLMRequestEnvelope, out 
 	}
 
 	compactedMsg := map[string]any{
-		"role":    "system",
+		"role":    "user",
 		"content": "[Compacted conversation summary]\n" + summaryText,
 	}
 

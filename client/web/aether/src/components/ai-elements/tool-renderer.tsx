@@ -223,8 +223,7 @@ const specialRenderers: Record<string, ComponentType<ToolRendererProps>> = {
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-export function getToolRenderer(toolName: string, _metadata?: unknown): ComponentType<ToolRendererProps> {
-  // 1. Special cases that need host-side interactivity
+export function getToolRenderer(toolName: string): ComponentType<ToolRendererProps> {
   if (specialRenderers[toolName]) return specialRenderers[toolName];
   return DefaultToolRenderer;
 }

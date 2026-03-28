@@ -27,24 +27,6 @@ const executionPolicyAppendix = "\n\nExecution policy:" +
 	"\n- Never ask the user to confirm the current date when world_time is available." +
 	"\n- Never end your turn without having completed the requested task or genuinely exhausting all tool-based approaches."
 
-const arrowUIAppendix = "\n\nArrow UI contract:" +
-	"\n- When a rich interactive UI would help, emit Arrow UI instead of React/JSX." +
-	"\n- Arrow UI must be valid Arrow source for @arrow-js/core running in a sandbox. Never emit React, TSX, JSXPreview code, shadcn imports, browser framework code, or markdown explanations around the module." +
-	"\n- Prefer a single self-contained module using only imports from '@arrow-js/core'." +
-	"\n- The safest shapes are: import { html, reactive, component } from '@arrow-js/core'; export default html`...` or export default component(() => { const state = reactive({ ... }); return html`...` })" +
-	"\n- If local state is needed, use reactive(). If setup/cleanup or stable local state is needed, use component(). Do not use React hooks." +
-	"\n- For dynamic updates inside templates, use Arrow functions like ${() => state.value}. For events, use Arrow syntax like @click=${() => { ... }} and @input=${event => { ... }}." +
-	"\n- Keep styling self-contained with inline style attributes. Do not rely on app CSS classes, utility classes, external stylesheets, CSS modules, or third-party packages." +
-	"\n- Do not import anything except '@arrow-js/core' unless explicitly told a sandbox host bridge exists." +
-	"\n- To request host actions from the UI, call output({...}) from event handlers. Supported payloads are exactly { type: 'open-url', url: 'https://...' } and { type: 'copy', text: '...' }." +
-	"\n- Do not invent custom host action types or assume routing, storage, fetch, or tool-calling APIs exist inside the sandbox." +
-	"\n- For blocking approvals or questions, do not build custom confirmation UI. Use the ask_user tool instead." +
-	"\n- Return only the Arrow module source when emitting UI. No prose before or after it. Avoid markdown fences unless explicitly requested." +
-	"\n- Good minimal example: import { html } from '@arrow-js/core'; export default html`<div style=\"padding:16px\">Hello</div>`" +
-	"\n- Good interactive example: import { html, reactive, component } from '@arrow-js/core'; export default component(() => { const state = reactive({ count: 0 }); return html`<button @click=${() => { state.count += 1 }}>${() => state.count}</button>` })" +
-	"\n- Bad examples: React function components, JSX syntax like <Button />, Tailwind class names, imports from react, and prose like 'Here is the UI:' before the module." +
-	"\n- If plain text is better than UI, respond normally. Use Arrow UI only when it materially improves comprehension or interaction."
-
 type ContextBuilder struct {
 	registry     *tools.Registry
 	skills       *skills.Manager
@@ -90,7 +72,7 @@ func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, 
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
 	basePrompt += executionPolicyAppendix
-	basePrompt += arrowUIAppendix
+
 	b.systemPrompt = basePrompt
 	return b
 }
@@ -195,7 +177,7 @@ func (b *ContextBuilder) ReloadSystemPrompt() string {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
 	basePrompt += executionPolicyAppendix
-	basePrompt += arrowUIAppendix
+
 
 	b.mu.Lock()
 	b.systemPrompt = basePrompt
