@@ -15,6 +15,9 @@ function looksLikeArrowModule(source: string): boolean {
   const normalized = source.trim();
   if (!normalized) return false;
 
+  // Reject markdown-fenced content — let it fall through to fencedBlocks() extraction
+  if (normalized.startsWith("```")) return false;
+
   // Must import from @arrow-js/core
   if (!normalized.includes("@arrow-js/core")) return false;
 
