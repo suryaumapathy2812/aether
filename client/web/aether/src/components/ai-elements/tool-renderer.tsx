@@ -9,12 +9,9 @@ import {
   ToolInput,
   ToolOutput,
 } from "./tool";
-import { renderToolProjection, hasInteractiveProjection } from "./tool-projection";
 import { AskUserTool } from "./ask-user-tool";
-import {
-  ToolSandbox,
-  type ToolSandboxSource,
-} from "./tool-sandbox";
+import { extractArrowSandboxSource } from "./arrow-generated";
+import { ToolSandbox } from "./tool-sandbox";
 
 export type ToolPartRecord = {
   type: string;
@@ -143,30 +140,22 @@ function handleSandboxHostAction(
   }
 }
 
-function extractSandboxSource(metadata: unknown): ToolSandboxSource | null {
-  if (!isRecord(metadata)) return null;
-  const sandbox = metadata.sandbox;
-  if (!isRecord(sandbox)) return null;
-  const source = sandbox.source;
-  if (!isRecord(source)) return null;
+function extractToolSandbox(part: ToolPartRecord) {
+  const metadata = isRecord(part.metadata) ? part.metadata : null;
+  const ui = metadata && isRecord(metadata.ui) ? metadata.ui : null;
 
-  // Validate source has at least one entry file
-  const hasEntry = "main.ts" in source || "main.js" in source;
-  if (!hasEntry) return null;
+  const candidates = [
+    ui,
+    metadata,
+    part.output,
+  ];
 
-  // Convert to Record<string, string>
-  const sourceFiles: Record<string, string> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (typeof value === "string") {
-      sourceFiles[key] = value;
-    }
+  for (const candidate of candidates) {
+    const sandbox = extractArrowSandboxSource(candidate);
+    if (sandbox) return sandbox;
   }
 
-  return {
-    source: sourceFiles,
-    css: typeof sandbox.css === "string" ? sandbox.css : undefined,
-    shadowDOM: typeof sandbox.shadowDOM === "boolean" ? sandbox.shadowDOM : undefined,
-  };
+  return null;
 }
 
 // ── Default renderer — used when no sandbox is available ─────────────────
@@ -179,10 +168,11 @@ export function DefaultToolRenderer({
 }: ToolRendererProps) {
   const toolName = part.type.replace("tool-", "");
   const subtitle = getSubtitle(part.input);
+  const toolSandbox = extractToolSandbox(part);
 
   const isRunning =
     part.state === "input-streaming" || part.state === "input-available";
-  const isInteractive = hasInteractiveProjection(part);
+  const isInteractive = Boolean(toolSandbox);
 
   return (
     <Tool defaultOpen={isRunning || isInteractive}>
@@ -192,70 +182,35 @@ export function DefaultToolRenderer({
         title={subtitle ? `${toolName} ${subtitle}` : toolName}
       />
       <ToolContent>
-        {(() => {
-          const projection = renderToolProjection({
-            part,
-            questionRequest,
-            onQuestionSubmit,
-            onQuestionDismiss,
-          });
-
-          if (projection) {
-            return projection;
-          }
-
-          return (
-            <>
-              <ToolInput input={part.input} />
-              {(part.state === "output-available" ||
-                part.state === "output-error") && (
-                <ToolOutput
-                  output={part.output}
-                  errorText={part.errorText}
-                />
-              )}
-            </>
-          );
-        })()}
+        {toolSandbox ? (
+          <ToolSandbox
+            sandbox={toolSandbox}
+            state={part.state}
+            errorText={part.errorText}
+            onOutput={(payload) =>
+              handleSandboxHostAction(
+                payload,
+                part,
+                questionRequest,
+                onQuestionSubmit,
+                onQuestionDismiss,
+              )
+            }
+          />
+        ) : (
+          <>
+            <ToolInput input={part.input} />
+            {(part.state === "output-available" ||
+              part.state === "output-error") && (
+              <ToolOutput
+                output={part.output}
+                errorText={part.errorText}
+              />
+            )}
+          </>
+        )}
       </ToolContent>
     </Tool>
-  );
-}
-
-// ── Sandbox renderer — renders tool output via Arrow sandbox ─────────────
-
-function SandboxToolRenderer({
-  part,
-  questionRequest,
-  onQuestionSubmit,
-  onQuestionDismiss,
-}: ToolRendererProps) {
-  const sandbox = extractSandboxSource(part.metadata);
-
-  if (!sandbox) {
-    return <DefaultToolRenderer
-      part={part}
-      questionRequest={null}
-      onQuestionSubmit={onQuestionSubmit}
-      onQuestionDismiss={onQuestionDismiss}
-    />;
-  }
-
-  return (
-    <ToolSandbox
-      sandbox={sandbox}
-      state={part.state}
-      errorText={part.errorText}
-      onOutput={(payload) =>
-        handleSandboxHostAction(
-          payload,
-          part,
-          questionRequest,
-          onQuestionSubmit,
-          onQuestionDismiss,
-        )
-      }
-    />
   );
 }
 
@@ -268,13 +223,7 @@ const specialRenderers: Record<string, ComponentType<ToolRendererProps>> = {
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-export function getToolRenderer(toolName: string, metadata?: unknown): ComponentType<ToolRendererProps> {
-  // 1. Special cases that need host-side interactivity
+export function getToolRenderer(toolName: string): ComponentType<ToolRendererProps> {
   if (specialRenderers[toolName]) return specialRenderers[toolName];
-
-  // 2. If tool metadata includes sandbox source, use it
-  if (extractSandboxSource(metadata)) return SandboxToolRenderer;
-
-  // 3. Fall back to default (JSON input/output viewer)
   return DefaultToolRenderer;
 }

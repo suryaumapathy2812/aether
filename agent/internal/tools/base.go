@@ -30,19 +30,6 @@ type Result struct {
 	Error    bool
 }
 
-// WithSandbox wraps the result's metadata with Arrow sandbox source code
-// so the dashboard can render a rich UI for this tool output.
-func (r Result) WithSandbox(source map[string]string) Result {
-	if r.Metadata == nil {
-		r.Metadata = map[string]any{}
-	}
-	r.Metadata["sandbox"] = map[string]any{
-		"source":    source,
-		"shadowDOM": true,
-	}
-	return r
-}
-
 func Success(output string, metadata map[string]any) Result {
 	if metadata == nil {
 		metadata = map[string]any{}

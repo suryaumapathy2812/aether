@@ -72,6 +72,7 @@ func NewContextBuilder(registry *tools.Registry, skillsManager *skills.Manager, 
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
 	basePrompt += executionPolicyAppendix
+
 	b.systemPrompt = basePrompt
 	return b
 }
@@ -176,6 +177,7 @@ func (b *ContextBuilder) ReloadSystemPrompt() string {
 		basePrompt = "You are Aether, a helpful assistant. Use tools when needed."
 	}
 	basePrompt += executionPolicyAppendix
+
 
 	b.mu.Lock()
 	b.systemPrompt = basePrompt
