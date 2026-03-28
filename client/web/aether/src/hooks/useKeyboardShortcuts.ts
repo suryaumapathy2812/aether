@@ -1,11 +1,17 @@
-import { useEffect, useRef, useCallback } from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect, useCallback } from "react";
+import { useRouterState } from "@tanstack/react-router";
 
 interface ShortcutHandlers {
   onToggleSessions?: () => void;
   onNewChat?: () => void;
   onOpenCommandPalette?: () => void;
   onOpenShortcutsHelp?: () => void;
+  onOpenChat?: () => void;
+  onOpenDevices?: () => void;
+  onOpenMemory?: () => void;
+  onOpenIntegrations?: () => void;
+  onOpenSkills?: () => void;
+  onOpenAccount?: () => void;
 }
 
 function isInputFocused(): boolean {
@@ -16,31 +22,65 @@ function isInputFocused(): boolean {
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
-  const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const pendingG = useRef(false);
-  const gTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
       const typing = isInputFocused();
+      const key = e.key.toLowerCase();
 
-      if (meta && e.key === "k") {
+      if (meta && key === "k") {
         e.preventDefault();
         handlers.onOpenCommandPalette?.();
         return;
       }
 
-      if (meta && e.key === "b") {
+      if (meta && key === "b") {
         e.preventDefault();
         handlers.onToggleSessions?.();
         return;
       }
 
-      if (meta && e.key === "n") {
+      if (meta && key === "n") {
         e.preventDefault();
         handlers.onNewChat?.();
+        return;
+      }
+
+      if (meta && key === "c") {
+        e.preventDefault();
+        handlers.onOpenChat?.();
+        return;
+      }
+
+      if (meta && key === "d") {
+        e.preventDefault();
+        handlers.onOpenDevices?.();
+        return;
+      }
+
+      if (meta && key === "m") {
+        e.preventDefault();
+        handlers.onOpenMemory?.();
+        return;
+      }
+
+      if (meta && key === "p") {
+        e.preventDefault();
+        handlers.onOpenIntegrations?.();
+        return;
+      }
+
+      if (meta && key === "i") {
+        e.preventDefault();
+        handlers.onOpenSkills?.();
+        return;
+      }
+
+      if (meta && key === "s") {
+        e.preventDefault();
+        handlers.onOpenAccount?.();
         return;
       }
 
@@ -66,46 +106,14 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
         return;
       }
 
-      if (e.key === "g" && !pendingG.current) {
-        pendingG.current = true;
-        clearTimeout(gTimer.current);
-        gTimer.current = setTimeout(() => {
-          pendingG.current = false;
-        }, 800);
-        return;
-      }
-
-      if (pendingG.current) {
-        pendingG.current = false;
-        clearTimeout(gTimer.current);
-        switch (e.key) {
-          case "c":
-            navigate({ to: "/chat" });
-            break;
-          case "s":
-            navigate({ to: "/account" });
-            break;
-          case "p":
-            navigate({ to: "/integrations" });
-            break;
-          case "d":
-            navigate({ to: "/devices" });
-            break;
-          case "m":
-            navigate({ to: "/memory" });
-            break;
-        }
-        return;
-      }
     },
-    [handlers, navigate, pathname]
+    [handlers, pathname]
   );
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      clearTimeout(gTimer.current);
     };
   }, [handleKeyDown]);
 }

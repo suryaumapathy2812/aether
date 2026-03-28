@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "@tanstack/react-router";
 import { useTheme } from "#/components/ThemeProvider";
 import { cn } from "#/lib/utils";
 import { useSession } from "#/lib/auth-client";
+import { useShortcutsContext } from "#/components/KeyboardShortcutsProvider";
 import {
   Tooltip,
   TooltipContent,
@@ -30,12 +31,14 @@ const NAV_ITEMS = [
 
 const HIDE_TOOLBAR = ["/"];
 const HEADER_SHORTCUTS = {
-  chat: ["G", "C"],
-  sessions: ["Cmd", "B"],
-  devices: ["G", "D"],
-  memory: ["G", "M"],
-  integrations: ["G", "P"],
-  account: ["G", "S"],
+  chat: ["C"],
+  command: ["K"],
+  sessions: ["B"],
+  devices: ["D"],
+  memory: ["M"],
+  integrations: ["P"],
+  skills: ["I"],
+  account: ["S"],
 } as const;
 
 function NavIcon({ href, active }: { href: string; active: boolean }) {
@@ -92,6 +95,7 @@ function FloatingToolbarInner() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { data: session, isPending } = useSession();
+  const { openCommandPalette } = useShortcutsContext();
   const { resolvedTheme, setTheme } = useTheme();
   const [showCommandHints, setShowCommandHints] = useState(false);
 
@@ -176,6 +180,28 @@ function FloatingToolbarInner() {
 
       {/* Right — nav icons + account */}
       <div className="flex items-center gap-1 pointer-events-auto">
+        <div className="relative mr-2">
+          <button
+            onClick={openCommandPalette}
+            className="flex h-9 min-w-28 items-center justify-between rounded-lg border border-border/70 bg-background/80 px-3 text-sm text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-accent/60"
+            aria-label="Open command menu"
+          >
+            <span>Command</span>
+            <span className="ml-3 inline-flex items-center gap-1">
+              <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[10px] font-medium text-foreground/80">
+                ⌘
+              </kbd>
+              <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/70 px-1 text-[10px] font-medium text-foreground/80">
+                K
+              </kbd>
+            </span>
+          </button>
+          <ShortcutBadge
+            keys={HEADER_SHORTCUTS.command}
+            visible={showCommandHints}
+          />
+        </div>
+
         <div className="relative">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -213,7 +239,9 @@ function FloatingToolbarInner() {
                 ? HEADER_SHORTCUTS.memory
                 : item.href === "/integrations"
                   ? HEADER_SHORTCUTS.integrations
-                  : null;
+                  : item.href === "/skills"
+                    ? HEADER_SHORTCUTS.skills
+                    : null;
           return (
             <div key={item.href} className="relative">
               <Tooltip>

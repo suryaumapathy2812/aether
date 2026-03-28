@@ -14,6 +14,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandShortcut,
   CommandSeparator,
 } from "#/components/ui/command";
 import {
@@ -28,6 +29,7 @@ import {
   IconSun,
   IconMoon,
   IconSearch,
+  IconSparkles,
 } from "@tabler/icons-react";
 
 interface CommandPaletteProps {
@@ -121,16 +123,14 @@ export default function CommandPalette({
               <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             )}
             {isChatRoute ? "New Chat" : "Return to Chat"}
-            <span className="ml-auto text-sm text-muted-foreground/60">
-              {isChatRoute ? "⌘N" : "G C"}
-            </span>
+            <CommandShortcut>{isChatRoute ? "⌘N" : "⌘C"}</CommandShortcut>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onToggleSessions?.())}
           >
             <IconMessage className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Sessions
-            <span className="ml-auto text-sm text-muted-foreground/60">⌘B</span>
+            <CommandShortcut>⌘B</CommandShortcut>
           </CommandItem>
           <CommandItem
             onSelect={() => runAction(() => onOpenShortcutsHelp?.())}
@@ -161,27 +161,32 @@ export default function CommandPalette({
           <CommandItem onSelect={() => runAction(openRecentChat)}>
             <IconMessageCircle className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Chat
-            <span className="ml-auto text-sm text-muted-foreground/60">G C</span>
+            <CommandShortcut>⌘C</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/integrations" }))}>
             <IconPlugConnected className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Connections
-            <span className="ml-auto text-sm text-muted-foreground/60">G P</span>
+            <CommandShortcut>⌘P</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/devices" }))}>
             <IconDeviceMobile className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Devices
-            <span className="ml-auto text-sm text-muted-foreground/60">G D</span>
+            <CommandShortcut>⌘D</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/memory" }))}>
             <IconBrain className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Memory
-            <span className="ml-auto text-sm text-muted-foreground/60">G M</span>
+            <CommandShortcut>⌘M</CommandShortcut>
+          </CommandItem>
+          <CommandItem onSelect={() => runAction(() => navigate({ to: "/skills" }))}>
+            <IconSparkles className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
+            Skills
+            <CommandShortcut>⌘I</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => runAction(() => navigate({ to: "/account" }))}>
             <IconSettings className="size-4 mr-2 text-muted-foreground" strokeWidth={1.5} />
             Settings
-            <span className="ml-auto text-sm text-muted-foreground/60">G S</span>
+            <CommandShortcut>⌘S</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 

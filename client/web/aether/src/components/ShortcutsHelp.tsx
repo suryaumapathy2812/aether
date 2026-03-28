@@ -26,11 +26,12 @@ const sections = [
   {
     title: "Navigation",
     shortcuts: [
-      { keys: "G → C", label: "Go to Chat" },
-      { keys: "G → S", label: "Go to Settings" },
-      { keys: "G → P", label: "Go to Plugins" },
-      { keys: "G → D", label: "Go to Devices" },
-      { keys: "G → M", label: "Go to Memory" },
+      { keys: `${mod} C`, label: "Go to Chat" },
+      { keys: `${mod} D`, label: "Go to Devices" },
+      { keys: `${mod} M`, label: "Go to Memory" },
+      { keys: `${mod} P`, label: "Go to Connections" },
+      { keys: `${mod} I`, label: "Go to Skills" },
+      { keys: `${mod} S`, label: "Go to Settings" },
     ],
   },
   {
