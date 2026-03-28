@@ -14,13 +14,35 @@ function normalizeModuleSource(source: string): string {
 function looksLikeArrowModule(source: string): boolean {
   const normalized = source.trim();
   if (!normalized) return false;
+
+  // Must import from @arrow-js/core
   if (!normalized.includes("@arrow-js/core")) return false;
-  return (
+
+  // Must use at least one Arrow API
+  const usesArrowAPI =
     normalized.includes("html`") ||
     normalized.includes("component(") ||
-    normalized.includes("reactive(") ||
-    normalized.includes("export default")
-  );
+    normalized.includes("reactive(");
+  if (!usesArrowAPI) return false;
+
+  // Reject React/JSX code that also mentions arrow
+  if (/\bimport\s+React\b/.test(normalized)) return false;
+  if (/\bfrom\s+['"]react['"]/.test(normalized)) return false;
+  if (/\bJSX\.Element\b/.test(normalized)) return false;
+  // Reject JSX syntax: self-closing <Component /> or <Component prop="...">
+  if (/<[A-Z][A-Za-z]*\s[^`]*\/>/.test(normalized)) return false;
+
+  // Must have an export default (the sandbox entry point)
+  if (!normalized.includes("export default")) return false;
+
+  // Reject if template literals are obviously unterminated:
+  // count opening html` vs closing ` (rough heuristic)
+  const htmlTagCount = (normalized.match(/html`/g) || []).length;
+  const backtickCount = (normalized.match(/`/g) || []).length;
+  // Each html` needs at least one closing `, so total backticks must be even
+  if (backtickCount % 2 !== 0) return false;
+
+  return true;
 }
 
 function fencedBlocks(value: string): string[] {
