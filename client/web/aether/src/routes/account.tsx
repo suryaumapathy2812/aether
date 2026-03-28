@@ -107,7 +107,9 @@ function AccountPage() {
         <Card>
           <CardHeader>
             <CardTitle>Model</CardTitle>
-            <CardDescription>Override the default model for AI tasks</CardDescription>
+            <CardDescription>
+              Override the default model for AI tasks using the bundled OpenRouter multimodal catalog
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <ModelPreference />

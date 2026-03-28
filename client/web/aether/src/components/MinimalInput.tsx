@@ -24,7 +24,7 @@ export default function MinimalInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder || label.toLowerCase()}
-        className="bg-accent/50 border border-border rounded-full shadow-none px-4 py-2.5 text-base font-medium tracking-[0.01em] focus-visible:ring-0 focus-visible:border-ring focus-visible:bg-accent/80 transition-colors duration-300 h-auto"
+        className="bg-accent/50 border border-border rounded shadow-none px-4 py-2.5 text-base font-medium tracking-[0.01em] focus-visible:ring-0 focus-visible:border-ring focus-visible:bg-accent/80 transition-colors duration-300 h-auto"
       />
     </div>
   );

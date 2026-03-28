@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Suspense, useEffect, useRef, useState, Fragment } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useSession } from "#/lib/auth-client";
 import {
@@ -9,6 +9,7 @@ import {
   type QuestionReplyPayload,
 } from "#/lib/api";
 import { chatRuntime, useChatSessionRuntime } from "#/lib/chat-runtime";
+import { Alert, AlertDescription } from "#/components/ui/alert";
 import {
   Conversation,
   ConversationContent,
@@ -49,17 +50,28 @@ import {
   IconX,
   IconPlayerPause,
   IconPaperclip,
+  IconInfoCircle,
 } from "@tabler/icons-react";
 import { AudioLines } from "lucide-react";
 import { z } from "zod";
 import { setRecentChatSessionId } from "#/lib/recent-chat";
+import { getUserPreference } from "#/lib/preferences";
+import {
+  fetchLLMCatalog,
+  findCatalogModel,
+  modelSupports,
+  type LLMCatalog,
+} from "#/lib/llm-catalog";
 
-const SUPPORTED_UPLOAD_TYPES = [
+const SUPPORTED_IMAGE_TYPES = [
   "image/png",
   "image/jpeg",
   "image/jpg",
   "image/webp",
   "image/gif",
+];
+
+const SUPPORTED_AUDIO_TYPES = [
   "audio/wav",
   "audio/x-wav",
   "audio/mpeg",
@@ -72,7 +84,7 @@ const SUPPORTED_UPLOAD_TYPES = [
   "audio/mp4",
   "audio/m4a",
   "audio/webm",
-].join(",");
+];
 
 const chatSearchSchema = z.object({
   s: z.string().optional().catch(undefined),
@@ -82,8 +94,6 @@ export const Route = createFileRoute("/chat")({
   validateSearch: chatSearchSchema,
   component: ChatPage,
 });
-
-type ChatSearch = z.infer<typeof chatSearchSchema>;
 
 function ChatPage() {
   return (
@@ -124,6 +134,9 @@ function ChatPromptInput({
   setInput,
   isStreaming,
   sessionId,
+  uploadAccept,
+  canUpload,
+  canUseVoice,
   setInputMode,
   onSubmit,
 }: {
@@ -131,6 +144,9 @@ function ChatPromptInput({
   setInput: (v: string) => void;
   isStreaming: boolean;
   sessionId: string;
+  uploadAccept: string;
+  canUpload: boolean;
+  canUseVoice: boolean;
   setInputMode: (mode: "text" | "voice") => void;
   onSubmit: (message: PromptInputMessage) => Promise<void>;
 }) {
@@ -138,7 +154,7 @@ function ChatPromptInput({
 
   return (
     <PromptInput
-      accept={SUPPORTED_UPLOAD_TYPES}
+      accept={uploadAccept}
       globalDrop
       multiple
       onSubmit={onSubmit}
@@ -170,17 +186,22 @@ function ChatPromptInput({
       </PromptInputBody>
       <PromptInputFooter>
         <PromptInputTools>
-          <PromptInputButton
-            onClick={() => attachments.openFileDialog()}
-            tooltip="Add photos or files"
-            size="icon-sm"
-            variant="ghost"
-            className="rounded-full"
-          >
-            <IconPaperclip className="size-4" />
-          </PromptInputButton>
+          {canUpload && (
+            <PromptInputButton
+              onClick={() => attachments.openFileDialog()}
+              tooltip="Add supported files"
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full"
+            >
+              <IconPaperclip className="size-4" />
+            </PromptInputButton>
+          )}
         </PromptInputTools>
-        {!input.trim() && !isStreaming && attachments.files.length === 0 ? (
+        {!input.trim() &&
+        !isStreaming &&
+        attachments.files.length === 0 &&
+        canUseVoice ? (
           <PromptInputButton
             onClick={() => setInputMode("voice")}
             tooltip="Voice mode"
@@ -222,6 +243,8 @@ function ChatView({
   const [inputMode, setInputMode] = useState<"text" | "voice">("text");
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [modelPreference, setModelPreference] = useState<string>("");
+  const [catalog, setCatalog] = useState<LLMCatalog | null>(null);
   const creatingSessionRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -238,6 +261,53 @@ function ChatView({
     void chatRuntime.bootstrapForUser(userId);
     void chatRuntime.loadHistory(sessionId);
   }, [sessionId, userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getUserPreference(userId, "model").then((value) => {
+      if (cancelled) return;
+      setModelPreference(value || "");
+    });
+
+    void fetchLLMCatalog()
+      .then((data) => {
+        if (cancelled) return;
+        setCatalog(data);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCatalog(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const selectedModel = useMemo(
+    () => findCatalogModel(catalog, modelPreference),
+    [catalog, modelPreference],
+  );
+
+  const canUploadImages = selectedModel ? modelSupports(selectedModel, "image") : true;
+  const canUploadAudio = selectedModel ? modelSupports(selectedModel, "audio") : true;
+  const canUseVoice = canUploadAudio;
+  const canUpload = canUploadImages || canUploadAudio;
+  const uploadAccept = useMemo(() => {
+    const patterns = [
+      ...(canUploadImages ? SUPPORTED_IMAGE_TYPES : []),
+      ...(canUploadAudio ? SUPPORTED_AUDIO_TYPES : []),
+    ];
+    return patterns.length > 0 ? patterns.join(",") : ".__unsupported__";
+  }, [canUploadAudio, canUploadImages]);
+  const selectedModelKnown = Boolean(selectedModel);
+
+  useEffect(() => {
+    if (!canUseVoice && inputMode === "voice") {
+      setInputMode("text");
+    }
+  }, [canUseVoice, inputMode]);
 
   useEffect(() => {
     return () => {
@@ -327,6 +397,7 @@ function ChatView({
 
   async function startVoiceRecording(): Promise<void> {
     if (isStreaming || isRecordingVoice) return;
+    if (!canUseVoice) return;
     const activeSessionId = await ensureSessionForVoice();
     const turn = await chatRuntime.startVoiceTurn({
       sessionId: activeSessionId,
@@ -667,6 +738,17 @@ function ChatView({
           </div>
         )}
 
+        {selectedModelKnown && !canUpload && (
+          <div className="max-w-180 mx-auto w-full px-6 py-1">
+            <Alert>
+              <IconInfoCircle />
+              <AlertDescription>
+                {selectedModel?.name} does not support image or audio input, so uploads and voice input are disabled.
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
+
         <div className="max-w-180 mx-auto w-full px-6 pb-5 pt-2">
           {questionRequest && !hasInlineQuestion ? (
             <QuestionDock
@@ -685,6 +767,9 @@ function ChatView({
                 setInput={setInput}
                 isStreaming={isStreaming}
                 sessionId={sessionId}
+                uploadAccept={uploadAccept}
+                canUpload={canUpload}
+                canUseVoice={canUseVoice}
                 setInputMode={setInputMode}
                 onSubmit={handleSubmit}
               />
