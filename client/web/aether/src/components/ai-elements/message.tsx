@@ -406,6 +406,49 @@ function handleArrowMessageAction(payload: unknown) {
   }
 }
 
+function ArrowMessageWithFallback({
+  className,
+  sandbox,
+  content,
+  streamdownProps,
+}: {
+  className?: string;
+  sandbox: NonNullable<ReturnType<typeof extractArrowSandboxSource>>;
+  content: string;
+  streamdownProps: MessageResponseProps;
+}) {
+  const [sandboxFailed, setSandboxFailed] = useState(false);
+
+  const handleOutput = useCallback((payload: unknown) => {
+    handleArrowMessageAction(payload);
+  }, []);
+
+  if (sandboxFailed) {
+    // Fall back to rendering as markdown (shows the code in a fenced block)
+    return (
+      <Streamdown
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className,
+        )}
+        components={streamdownComponents}
+        plugins={streamdownPlugins}
+        {...streamdownProps}
+      />
+    );
+  }
+
+  return (
+    <div className={cn("size-full", className)}>
+      <ToolSandbox
+        sandbox={sandbox}
+        onOutput={handleOutput}
+        onError={() => setSandboxFailed(true)}
+      />
+    </div>
+  );
+}
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => {
     const content = typeof props.children === "string" ? props.children : "";
@@ -413,9 +456,12 @@ export const MessageResponse = memo(
 
     if (arrowSandbox) {
       return (
-        <div className={cn("size-full", className)}>
-          <ToolSandbox sandbox={arrowSandbox} onOutput={handleArrowMessageAction} />
-        </div>
+        <ArrowMessageWithFallback
+          className={className}
+          sandbox={arrowSandbox}
+          content={content}
+          streamdownProps={{ className, ...props }}
+        />
       );
     }
 

@@ -25,6 +25,8 @@ export type ToolSandboxProps = {
   errorText?: string;
   /** Called when the sandbox emits output (user interaction). */
   onOutput?: (payload: unknown) => void;
+  /** Called when the sandbox fails to compile or render. */
+  onError?: (error: string) => void;
   /** Optional className for the wrapper. */
   className?: string;
 };
@@ -86,6 +88,7 @@ export function ToolSandbox({
   state,
   errorText,
   onOutput,
+  onError,
   className,
 }: ToolSandboxProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -120,7 +123,9 @@ export function ToolSandbox({
               debug: false,
               onError: (err: Error | string) => {
                 if (!cancelled) {
-                  setError(typeof err === "string" ? err : err.message);
+                  const msg = typeof err === "string" ? err : err.message;
+                  setError(msg);
+                  onError?.(msg);
                 }
               },
             },
@@ -132,7 +137,9 @@ export function ToolSandbox({
         setMounted(true);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Sandbox render failed");
+          const msg = err instanceof Error ? err.message : "Sandbox render failed";
+          setError(msg);
+          onError?.(msg);
         }
       }
     }
@@ -142,7 +149,7 @@ export function ToolSandbox({
     return () => {
       cancelled = true;
     };
-  }, [shouldRenderSandbox, sandbox, onOutput, isRunning]);
+  }, [shouldRenderSandbox, sandbox, onOutput, onError, isRunning]);
 
   // ── Render states ────────────────────────────────────────────────────
 
