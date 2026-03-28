@@ -33,10 +33,9 @@ import {
   CodeBlockActions,
 } from "./code-block";
 import {
-  JSXPreview,
-  JSXPreviewContent,
-  JSXPreviewError,
-} from "./jsx-preview";
+  extractArrowSandboxSource,
+} from "./arrow-generated";
+import { ToolSandbox } from "./tool-sandbox";
 import type { BundledLanguage } from "shiki";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -375,29 +374,47 @@ const streamdownComponents = {
   code: MarkdownCode,
 };
 
-const JSX_LIKE_START = /^\s*<([A-Za-z][\w-]*)(\s|>|\/>)/;
+function handleArrowMessageAction(payload: unknown) {
+  if (typeof window !== "undefined" && payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    const action =
+      typeof record.type === "string"
+        ? record.type
+        : typeof record.action === "string"
+          ? record.action
+          : "";
 
-function looksLikeRenderableJsx(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("```") || trimmed.startsWith("export default")) {
-    return false;
+    if (action === "open-url" && typeof record.url === "string") {
+      window.open(record.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (
+      action === "copy" &&
+      typeof record.text === "string" &&
+      typeof navigator !== "undefined"
+    ) {
+      void navigator.clipboard?.writeText(record.text);
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent("aether:arrow-output", {
+        detail: payload,
+      }),
+    );
   }
-  return JSX_LIKE_START.test(trimmed);
 }
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => {
     const content = typeof props.children === "string" ? props.children : "";
+    const arrowSandbox = extractArrowSandboxSource(content);
 
-    if (looksLikeRenderableJsx(content)) {
+    if (arrowSandbox) {
       return (
         <div className={cn("size-full", className)}>
-          <JSXPreview className="rounded-2xl border bg-card p-4" jsx={content}>
-            <JSXPreviewContent />
-            <JSXPreviewError className="mt-3" />
-          </JSXPreview>
+          <ToolSandbox sandbox={arrowSandbox} onOutput={handleArrowMessageAction} />
         </div>
       );
     }

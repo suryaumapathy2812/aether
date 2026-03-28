@@ -329,10 +329,9 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 			// Emit results and append to messages.
 			iterationRecoverableToolError := false
 			iterationBlocked := false
+			sawSuccessfulToolResult := false
+			sawStructuredToolResult := false
 			for _, tr := range results {
-				// Wrap tool output with Arrow sandbox template if one exists.
-				tr.result = tools.WrapWithSandbox(tr.tc.Name, tr.result)
-
 				toolText := tr.result.Output
 				if len(toolText) > 12000 {
 					toolText = toolText[:12000] + "\n...truncated"
@@ -352,6 +351,10 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 					seq++
 					out <- NewEvent(env.RequestID, env.JobID, EventType("tool-output-error"), seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "errorText": toolText, "class": string(classification), "metadata": metadata, "error": true})
 				} else {
+					sawSuccessfulToolResult = true
+					if toolOutputIsStructured(tr.result.Output) {
+						sawStructuredToolResult = true
+					}
 					seq++
 					out <- NewEvent(env.RequestID, env.JobID, EventToolOutputAvailable, seq, map[string]any{"toolCallId": tr.tc.ID, "toolName": tr.tc.Name, "output": toolText, "metadata": metadata, "error": false})
 				}
@@ -359,7 +362,13 @@ func (c *Core) GenerateWithTools(ctx context.Context, envelope LLMRequestEnvelop
 				env.Messages = append(env.Messages, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.tc.ID,
-					"content":      tr.result.Output,
+					"content":      formatToolResultForModel(tr.tc.Name, tr.result),
+				})
+			}
+			if sawSuccessfulToolResult {
+				env.Messages = append(env.Messages, map[string]any{
+					"role":    "system",
+					"content": toolResultsFollowupInstruction(sawStructuredToolResult),
 				})
 			}
 			pendingRecovery = iterationRecoverableToolError
@@ -444,6 +453,98 @@ func assistantMessage(content string, toolCalls []providers.LLMToolCall) map[str
 	}
 	out["tool_calls"] = tc
 	return out
+}
+
+func formatToolResultForModel(toolName string, result tools.Result) string {
+	payload := map[string]any{
+		"tool_name": strings.TrimSpace(toolName),
+		"status":    map[bool]string{true: "error", false: "success"}[result.Error],
+	}
+
+	output := strings.TrimSpace(result.Output)
+	if parsed, ok := parseStructuredToolOutput(output); ok {
+		payload["output"] = parsed
+		payload["output_kind"] = "structured"
+	} else if output != "" {
+		payload["output_text"] = output
+		payload["output_kind"] = "text"
+	}
+
+	if len(result.Metadata) > 0 {
+		payload["metadata"] = result.Metadata
+	}
+
+	if hint := inferToolPresentationHint(payload); hint != "" {
+		payload["presentation_hint"] = hint
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return output
+	}
+	return string(b)
+}
+
+func parseStructuredToolOutput(raw string) (any, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, false
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, false
+	}
+	switch parsed.(type) {
+	case map[string]any, []any:
+		return parsed, true
+	default:
+		return nil, false
+	}
+}
+
+func toolOutputIsStructured(raw string) bool {
+	_, ok := parseStructuredToolOutput(raw)
+	return ok
+}
+
+func inferToolPresentationHint(payload map[string]any) string {
+	if output, ok := payload["output"].([]any); ok {
+		if len(output) == 0 {
+			return "empty"
+		}
+		return "collection"
+	}
+
+	if output, ok := payload["output"].(map[string]any); ok {
+		for _, key := range []string{"items", "results", "events", "files", "emails", "messages", "contacts"} {
+			if values, exists := output[key].([]any); exists {
+				if len(values) == 0 {
+					return "empty"
+				}
+				return "collection"
+			}
+		}
+		return "detail"
+	}
+
+	if text, ok := payload["output_text"].(string); ok {
+		switch {
+		case text == "":
+			return "empty"
+		case strings.Count(text, "\n") >= 6:
+			return "document"
+		default:
+			return "summary"
+		}
+	}
+
+	return ""
+}
+
+func toolResultsFollowupInstruction(hasStructuredData bool) string {
+	if hasStructuredData {
+		return "Latest tool results include structured data. Finish the user's request from those results. If the result is better as an interactive list, table, detail card, dashboard, or visual summary, respond with a single self-contained Arrow module. Otherwise answer in concise text. Do not call more tools unless more work is still required."
+	}
+	return "Latest tool results are available. Finish the user's request using those results. If a compact interactive presentation would materially help, respond with a single self-contained Arrow module; otherwise answer in concise text. Do not call more tools unless more work is still required."
 }
 
 func toolCallsSignature(calls []providers.LLMToolCall) string {

@@ -20,7 +20,7 @@ export type ToolSandboxProps = {
   /** The sandbox source definition from tool metadata. */
   sandbox: ToolSandboxSource;
   /** Current tool state. */
-  state: string;
+  state?: string;
   /** Error text if the tool failed. */
   errorText?: string;
   /** Called when the sandbox emits output (user interaction). */
@@ -93,11 +93,14 @@ export function ToolSandbox({
   const [mounted, setMounted] = useState(false);
 
   // Running state
-  const isRunning = state === "input-streaming" || state === "input-available";
+  const isRunning =
+    state === "input-streaming" || state === "input-available";
+  const shouldRenderSandbox =
+    !state || state === "output-available";
 
   // Render sandbox when output is available
   useEffect(() => {
-    if (isRunning || state !== "output-available" || !containerRef.current) return;
+    if (isRunning || !shouldRenderSandbox || !containerRef.current) return;
 
     let cancelled = false;
 
@@ -139,7 +142,7 @@ export function ToolSandbox({
     return () => {
       cancelled = true;
     };
-  }, [state, sandbox, onOutput, isRunning]);
+  }, [shouldRenderSandbox, sandbox, onOutput, isRunning]);
 
   // ── Render states ────────────────────────────────────────────────────
 

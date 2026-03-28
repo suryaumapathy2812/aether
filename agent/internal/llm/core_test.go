@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -12,6 +14,7 @@ import (
 type scriptedProvider struct {
 	steps [][]providers.LLMStreamEvent
 	idx   int
+	opts  []providers.GenerateOptions
 }
 
 func (p *scriptedProvider) Name() string { return "scripted" }
@@ -22,7 +25,7 @@ func (p *scriptedProvider) Capabilities() providers.ProviderCapabilities {
 
 func (p *scriptedProvider) StreamWithTools(ctx context.Context, opts providers.GenerateOptions) (<-chan providers.LLMStreamEvent, error) {
 	_ = ctx
-	_ = opts
+	p.opts = append(p.opts, opts)
 	out := make(chan providers.LLMStreamEvent, 8)
 	i := p.idx
 	p.idx++
@@ -37,6 +40,8 @@ func (p *scriptedProvider) StreamWithTools(ctx context.Context, opts providers.G
 
 type echoTool struct{}
 
+type jsonEchoTool struct{}
+
 func (t *echoTool) Definition() tools.Definition {
 	return tools.Definition{Name: "echo", Parameters: []tools.Param{{Name: "text", Type: "string", Required: true}}}
 }
@@ -45,6 +50,16 @@ func (t *echoTool) Execute(ctx context.Context, call tools.Call) tools.Result {
 	_ = ctx
 	v, _ := call.Args["text"].(string)
 	return tools.Success("tool:"+v, nil)
+}
+
+func (t *jsonEchoTool) Definition() tools.Definition {
+	return tools.Definition{Name: "json_echo", Parameters: []tools.Param{{Name: "query", Type: "string", Required: true}}}
+}
+
+func (t *jsonEchoTool) Execute(ctx context.Context, call tools.Call) tools.Result {
+	_ = ctx
+	v, _ := call.Args["query"].(string)
+	return tools.Success(`{"items":[{"title":"`+v+`","url":"https://example.com"}]}`, map[string]any{"source": "test"})
 }
 
 type failingTool struct{}
@@ -340,5 +355,64 @@ func TestGenerateWithTools_DoesNotRetryToolWhenRetryPolicyIsZero(t *testing.T) {
 	}
 	if !seenToolError {
 		t.Fatalf("expected tool-output-error when retries are disabled")
+	}
+}
+
+func TestGenerateWithTools_ShapesToolResultsForModel(t *testing.T) {
+	p := &scriptedProvider{steps: [][]providers.LLMStreamEvent{
+		{{Type: providers.EventToolCalls, ToolCalls: []providers.LLMToolCall{{ID: "c-json", Name: "json_echo", Arguments: map[string]any{"query": "Inbox"}}}}, {Type: providers.EventDone, FinishReason: "tool_calls"}},
+		{{Type: providers.EventToken, Content: "rendered"}, {Type: providers.EventDone, FinishReason: "stop"}},
+	}}
+	r := tools.NewRegistry()
+	if err := r.Register(&jsonEchoTool{}, ""); err != nil {
+		t.Fatalf("register json tool: %v", err)
+	}
+	o := tools.NewOrchestrator(r, tools.ExecContext{})
+	core := NewCore(p, o)
+
+	env := NewBasicEnvelope([]map[string]any{{"role": "user", "content": "show inbox"}}, r.OpenAISchemas()).Normalize()
+	for range core.GenerateWithTools(context.Background(), env) {
+	}
+
+	if len(p.opts) < 2 {
+		t.Fatalf("expected second provider call with looped-back tool output")
+	}
+
+	var toolMessage map[string]any
+	var followup string
+	for _, msg := range p.opts[1].Messages {
+		role, _ := msg["role"].(string)
+		if role == "tool" && msg["tool_call_id"] == "c-json" {
+			toolMessage = msg
+		}
+		if role == "system" {
+			if content, _ := msg["content"].(string); strings.Contains(content, "Latest tool results include structured data") {
+				followup = content
+			}
+		}
+	}
+	if toolMessage == nil {
+		t.Fatalf("expected tool message in second provider call")
+	}
+
+	content, _ := toolMessage["content"].(string)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("expected structured json tool message, got %q: %v", content, err)
+	}
+	if parsed["tool_name"] != "json_echo" {
+		t.Fatalf("expected tool_name json_echo, got %v", parsed["tool_name"])
+	}
+	if parsed["output_kind"] != "structured" {
+		t.Fatalf("expected structured output kind, got %v", parsed["output_kind"])
+	}
+	if parsed["presentation_hint"] != "collection" {
+		t.Fatalf("expected collection presentation hint, got %v", parsed["presentation_hint"])
+	}
+	if _, ok := parsed["metadata"].(map[string]any); !ok {
+		t.Fatalf("expected metadata to be preserved, got %T", parsed["metadata"])
+	}
+	if followup == "" {
+		t.Fatalf("expected follow-up instruction steering model toward final UI/text answer")
 	}
 }
