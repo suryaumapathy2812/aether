@@ -409,32 +409,45 @@ function handleArrowMessageAction(payload: unknown) {
 function ArrowMessageWithFallback({
   className,
   sandbox,
-  content,
   streamdownProps,
 }: {
   className?: string;
   sandbox: NonNullable<ReturnType<typeof extractArrowSandboxSource>>;
-  content: string;
   streamdownProps: MessageResponseProps;
 }) {
   const [sandboxFailed, setSandboxFailed] = useState(false);
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
 
   const handleOutput = useCallback((payload: unknown) => {
     handleArrowMessageAction(payload);
   }, []);
 
+  const handleError = useCallback((error: string) => {
+    setSandboxError(error);
+    setSandboxFailed(true);
+    if (typeof console !== "undefined") {
+      console.error("Arrow sandbox render failed:", error);
+    }
+  }, []);
+
   if (sandboxFailed) {
-    // Fall back to rendering as markdown (shows the code in a fenced block)
     return (
-      <Streamdown
-        className={cn(
-          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-          className,
-        )}
-        components={streamdownComponents}
-        plugins={streamdownPlugins}
-        {...streamdownProps}
-      />
+      <div className={cn("size-full space-y-3", className)}>
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 text-xs text-amber-100/85">
+          <div className="font-medium text-amber-200">Arrow preview failed</div>
+          {sandboxError ? (
+            <div className="mt-1 whitespace-pre-wrap break-words text-amber-100/75">
+              {sandboxError}
+            </div>
+          ) : null}
+        </div>
+        <Streamdown
+          className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+          components={streamdownComponents}
+          plugins={streamdownPlugins}
+          {...streamdownProps}
+        />
+      </div>
     );
   }
 
@@ -443,7 +456,7 @@ function ArrowMessageWithFallback({
       <ToolSandbox
         sandbox={sandbox}
         onOutput={handleOutput}
-        onError={() => setSandboxFailed(true)}
+        onError={handleError}
       />
     </div>
   );
@@ -459,7 +472,6 @@ export const MessageResponse = memo(
         <ArrowMessageWithFallback
           className={className}
           sandbox={arrowSandbox}
-          content={content}
           streamdownProps={{ className, ...props }}
         />
       );
