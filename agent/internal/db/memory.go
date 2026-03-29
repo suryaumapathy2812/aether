@@ -48,7 +48,9 @@ type MemoryNotification struct {
 }
 
 type MemorySearchResult struct {
+	ID         int64
 	Type       string
+	Scope      string
 	Similarity float64
 	Timestamp  time.Time
 

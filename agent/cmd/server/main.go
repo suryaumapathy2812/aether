@@ -228,6 +228,13 @@ func main() {
 		IntervalSecs: memory.DefaultDedupIntervalSecs, // 12 hours
 	})
 	memory.RegisterDedupCronHandlers(scheduler, dedupEngine)
+	consolidationEngine := memory.NewConsolidationEngine(memory.ConsolidationOptions{
+		Store:    store,
+		Core:     llmCore,
+		Embedder: embeddingProvider,
+		Dedup:    dedupEngine,
+	})
+	memory.RegisterConsolidationCronHandlers(scheduler, consolidationEngine)
 
 	// ── HTTP handlers ───────────────────────────────────────────────
 	conversationRuntime := conversation.NewRuntime(conversation.RuntimeOptions{Core: llmCore})
@@ -265,6 +272,9 @@ func main() {
 	}
 	if err := dedupEngine.EnsureCronJobs(context.Background()); err != nil {
 		log.Printf("memory dedup cron schedule warning: %v", err)
+	}
+	if err := consolidationEngine.EnsureCronJobs(context.Background()); err != nil {
+		log.Printf("memory consolidation cron schedule warning: %v", err)
 	}
 
 	up := updater.New(updater.Config{

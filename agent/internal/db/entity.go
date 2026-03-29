@@ -22,6 +22,8 @@ type EntityRecord struct {
 	FirstSeenAt      time.Time
 	LastSeenAt       time.Time
 	InteractionCount int
+	Archived         bool
+	LastSummaryAt    *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -155,19 +157,29 @@ func (s *Store) GetEntity(ctx context.Context, entityID string) (*EntityRecord, 
 	var rec EntityRecord
 	var aliasesJSON, propsJSON string
 	var firstSeen, lastSeen, created, updated string
+	var archived int
+	var lastSummaryAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, user_id, entity_type, name, aliases, summary, properties,
-			first_seen_at, last_seen_at, interaction_count, created_at, updated_at
+			first_seen_at, last_seen_at, interaction_count, archived, last_summary_at, created_at, updated_at
 		FROM entities WHERE id = ?
 	`, entityID).Scan(
 		&rec.ID, &rec.UserID, &rec.EntityType, &rec.Name, &aliasesJSON, &rec.Summary, &propsJSON,
-		&firstSeen, &lastSeen, &rec.InteractionCount, &created, &updated,
+		&firstSeen, &lastSeen, &rec.InteractionCount, &archived, &lastSummaryAt, &created, &updated,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	rec.Archived = archived != 0
+	if lastSummaryAt.Valid && strings.TrimSpace(lastSummaryAt.String) != "" {
+		ts, err := parseTS(lastSummaryAt.String)
+		if err != nil {
+			return nil, err
+		}
+		rec.LastSummaryAt = &ts
 	}
 	if err := hydrateEntityRecord(&rec, aliasesJSON, propsJSON, firstSeen, lastSeen, created, updated); err != nil {
 		return nil, err
@@ -191,21 +203,31 @@ func (s *Store) FindEntityByAlias(ctx context.Context, userID, alias string) (*E
 	var rec EntityRecord
 	var aliasesJSON, propsJSON string
 	var firstSeen, lastSeen, created, updated string
+	var archived int
+	var lastSummaryAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, user_id, entity_type, name, aliases, summary, properties,
-			first_seen_at, last_seen_at, interaction_count, created_at, updated_at
+			first_seen_at, last_seen_at, interaction_count, archived, last_summary_at, created_at, updated_at
 		FROM entities
 		WHERE user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(aliases) LIKE '%' || LOWER(?) || '%')
 		LIMIT 1
 	`, userID, alias, alias).Scan(
 		&rec.ID, &rec.UserID, &rec.EntityType, &rec.Name, &aliasesJSON, &rec.Summary, &propsJSON,
-		&firstSeen, &lastSeen, &rec.InteractionCount, &created, &updated,
+		&firstSeen, &lastSeen, &rec.InteractionCount, &archived, &lastSummaryAt, &created, &updated,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	rec.Archived = archived != 0
+	if lastSummaryAt.Valid && strings.TrimSpace(lastSummaryAt.String) != "" {
+		ts, err := parseTS(lastSummaryAt.String)
+		if err != nil {
+			return nil, err
+		}
+		rec.LastSummaryAt = &ts
 	}
 	if err := hydrateEntityRecord(&rec, aliasesJSON, propsJSON, firstSeen, lastSeen, created, updated); err != nil {
 		return nil, err
@@ -227,7 +249,7 @@ func (s *Store) ListEntities(ctx context.Context, userID, entityType string, lim
 	}
 	query := `
 		SELECT id, user_id, entity_type, name, aliases, summary, properties,
-			first_seen_at, last_seen_at, interaction_count, created_at, updated_at
+			first_seen_at, last_seen_at, interaction_count, archived, last_summary_at, created_at, updated_at
 		FROM entities
 		WHERE user_id = ?
 	`
@@ -236,6 +258,7 @@ func (s *Store) ListEntities(ctx context.Context, userID, entityType string, lim
 		query += ` AND entity_type = ?`
 		args = append(args, entityType)
 	}
+	query += ` AND archived = 0`
 	query += ` ORDER BY last_seen_at DESC LIMIT ?`
 	args = append(args, limit)
 
@@ -249,11 +272,21 @@ func (s *Store) ListEntities(ctx context.Context, userID, entityType string, lim
 		var rec EntityRecord
 		var aliasesJSON, propsJSON string
 		var firstSeen, lastSeen, created, updated string
+		var archived int
+		var lastSummaryAt sql.NullString
 		if err := rows.Scan(
 			&rec.ID, &rec.UserID, &rec.EntityType, &rec.Name, &aliasesJSON, &rec.Summary, &propsJSON,
-			&firstSeen, &lastSeen, &rec.InteractionCount, &created, &updated,
+			&firstSeen, &lastSeen, &rec.InteractionCount, &archived, &lastSummaryAt, &created, &updated,
 		); err != nil {
 			return nil, err
+		}
+		rec.Archived = archived != 0
+		if lastSummaryAt.Valid && strings.TrimSpace(lastSummaryAt.String) != "" {
+			ts, err := parseTS(lastSummaryAt.String)
+			if err != nil {
+				return nil, err
+			}
+			rec.LastSummaryAt = &ts
 		}
 		if err := hydrateEntityRecord(&rec, aliasesJSON, propsJSON, firstSeen, lastSeen, created, updated); err != nil {
 			return nil, err
@@ -324,7 +357,8 @@ func (s *Store) UpdateEntitySummary(ctx context.Context, entityID, summary strin
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE entities
-		SET summary = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		SET summary = ?, last_summary_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = ?
 	`, summary, entityID)
 	if err != nil {
@@ -638,6 +672,73 @@ func hydrateEntityRecord(rec *EntityRecord, aliasesJSON, propsJSON, firstSeen, l
 	rec.CreatedAt = createdTS
 	rec.UpdatedAt = updatedTS
 	return nil
+}
+
+func (s *Store) ListActiveEntities(ctx context.Context, userID string, limit int) ([]EntityRecord, error) {
+	return s.ListEntities(ctx, userID, "", limit)
+}
+
+func (s *Store) ArchiveEntity(ctx context.Context, entityID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store unavailable")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE entities
+		SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?
+	`, entityID)
+	return err
+}
+
+func (s *Store) ListEntitiesNeedingSummaryRefresh(ctx context.Context, userID string, olderThan time.Time, limit int) ([]EntityRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store unavailable")
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_id, entity_type, name, aliases, summary, properties,
+			first_seen_at, last_seen_at, interaction_count, archived, last_summary_at, created_at, updated_at
+		FROM entities
+		WHERE user_id = ? AND archived = 0 AND (last_summary_at IS NULL OR trim(last_summary_at) = '' OR last_summary_at < ?)
+		ORDER BY COALESCE(last_summary_at, first_seen_at) ASC
+		LIMIT ?
+	`, userID, formatTS(olderThan.UTC()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]EntityRecord, 0)
+	for rows.Next() {
+		var rec EntityRecord
+		var aliasesJSON, propsJSON string
+		var firstSeen, lastSeen, created, updated string
+		var archived int
+		var lastSummaryAt sql.NullString
+		if err := rows.Scan(
+			&rec.ID, &rec.UserID, &rec.EntityType, &rec.Name, &aliasesJSON, &rec.Summary, &propsJSON,
+			&firstSeen, &lastSeen, &rec.InteractionCount, &archived, &lastSummaryAt, &created, &updated,
+		); err != nil {
+			return nil, err
+		}
+		rec.Archived = archived != 0
+		if lastSummaryAt.Valid && strings.TrimSpace(lastSummaryAt.String) != "" {
+			ts, err := parseTS(lastSummaryAt.String)
+			if err != nil {
+				return nil, err
+			}
+			rec.LastSummaryAt = &ts
+		}
+		if err := hydrateEntityRecord(&rec, aliasesJSON, propsJSON, firstSeen, lastSeen, created, updated); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 // mergeStringSlice merges two string slices, de-duplicating case-insensitively.

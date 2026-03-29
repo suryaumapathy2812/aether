@@ -787,7 +787,8 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		}
 		// Also load messages for this session.
 		msgs, _ := h.store.ListChatMessages(r.Context(), sess.UserID, sessionID, 500)
-		httputil.WriteJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs})
+		summaries, _ := h.store.ListSessionSummaries(r.Context(), sessionID, 100)
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs, "summaries": summaries})
 
 	case http.MethodPatch:
 		var req struct {

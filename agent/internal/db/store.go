@@ -265,10 +265,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			user_id TEXT NOT NULL DEFAULT 'default',
 			title TEXT NOT NULL DEFAULT '',
 			archived INTEGER NOT NULL DEFAULT 0,
+			last_activity_at TEXT,
+			latest_summary_id INTEGER,
+			summary_preview TEXT NOT NULL DEFAULT '',
+			summary_count INTEGER NOT NULL DEFAULT 0,
+			title_source TEXT NOT NULL DEFAULT 'seed',
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_sessions_idle ON chat_sessions(user_id, last_activity_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS chat_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -320,6 +326,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			source_id TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
 			metadata_json TEXT NOT NULL DEFAULT '{}',
+			scope TEXT NOT NULL DEFAULT 'contextual',
+			recall_count INTEGER NOT NULL DEFAULT 0,
+			last_recalled_at TEXT,
 			embedding F32_BLOB(` + fmt.Sprintf("%d", defaultMemoryEmbeddingDimensions) + `),
 			UNIQUE(user_id, kind, normalized_key)
 		);`,
@@ -395,6 +404,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			interaction_count INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			last_summary_at TEXT,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);`,
@@ -481,6 +492,30 @@ func (s *Store) migrate(ctx context.Context) error {
 			content,
 			tokenize='porter unicode61'
 		);`,
+		// --- Session summary revision history ---
+		`CREATE TABLE IF NOT EXISTS chat_session_summaries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			revision INTEGER NOT NULL DEFAULT 1,
+			summary_text TEXT NOT NULL DEFAULT '',
+			title_suggestion TEXT NOT NULL DEFAULT '',
+			message_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(session_id, revision)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_css_session ON chat_session_summaries(session_id, revision DESC);`,
+		// --- Memory item session linkage (for promotion tracking) ---
+		`CREATE TABLE IF NOT EXISTS memory_item_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			memory_item_id INTEGER NOT NULL,
+			session_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			reinforced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(memory_item_id, session_id),
+			FOREIGN KEY(memory_item_id) REFERENCES memory_items(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_mis_item ON memory_item_sessions(memory_item_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -495,7 +530,47 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "conversations", "user_content_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// --- Memory lifecycle columns ---
+	if err := s.ensureColumn(ctx, "memory_items", "scope", "TEXT NOT NULL DEFAULT 'contextual'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "memory_items", "recall_count", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "memory_items", "last_recalled_at", "TEXT"); err != nil {
+		return err
+	}
+	// --- Chat session summary metadata columns ---
+	if err := s.ensureColumn(ctx, "chat_sessions", "last_activity_at", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "chat_sessions", "latest_summary_id", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "chat_sessions", "summary_preview", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "chat_sessions", "summary_count", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "chat_sessions", "title_source", "TEXT NOT NULL DEFAULT 'seed'"); err != nil {
+		return err
+	}
+	// --- Entity lifecycle columns ---
+	if err := s.ensureColumn(ctx, "entities", "archived", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "entities", "last_summary_at", "TEXT"); err != nil {
+		return err
+	}
+	// --- Backfill scope for existing memory items ---
+	if err := s.backfillMemoryScopes(ctx); err != nil {
+		return err
+	}
 	if err := s.backfillLegacyMemoryItems(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillMemoryItemSessions(ctx); err != nil {
 		return err
 	}
 	if err := s.rebuildMemoryItemsFTS(ctx); err != nil {
@@ -519,6 +594,92 @@ func (s *Store) rebuildMemoryItemsFTS(ctx context.Context) error {
 		SELECT user_id, id, kind, category, content
 		FROM memory_items
 		WHERE status = 'active'
+	`)
+	return err
+}
+
+func (s *Store) backfillMemoryScopes(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, kind, category, content, scope, evidence_count, last_seen_at
+		FROM memory_items
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type scopeUpdate struct {
+		id    int64
+		scope string
+	}
+	updates := make([]scopeUpdate, 0)
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+
+	for rows.Next() {
+		var (
+			id            int64
+			kind          string
+			category      string
+			content       string
+			scope         string
+			evidenceCount int
+			lastSeenRaw   string
+		)
+		if err := rows.Scan(&id, &kind, &category, &content, &scope, &evidenceCount, &lastSeenRaw); err != nil {
+			return err
+		}
+
+		nextScope := string(InferMemoryScope(kind, category, content))
+		if evidenceCount >= 3 && (strings.EqualFold(kind, "decision") || strings.EqualFold(kind, "fact")) {
+			nextScope = string(ScopeGlobal)
+		}
+		if evidenceCount <= 1 {
+			if lastSeen, err := parseTS(lastSeenRaw); err == nil && lastSeen.Before(cutoff) && nextScope == string(ScopeContextual) {
+				nextScope = string(ScopeVolatile)
+			}
+		}
+		if strings.TrimSpace(scope) == strings.TrimSpace(nextScope) {
+			continue
+		}
+		updates = append(updates, scopeUpdate{id: id, scope: nextScope})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, item := range updates {
+		if _, err := s.db.ExecContext(ctx, `UPDATE memory_items SET scope = ? WHERE id = ?`, item.scope, item.id); err != nil {
+			return err
+		}
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE chat_sessions
+		SET last_activity_at = COALESCE((
+			SELECT MAX(created_at) FROM chat_messages
+			WHERE chat_messages.session_id = chat_sessions.id
+		), updated_at)
+		WHERE last_activity_at IS NULL OR trim(last_activity_at) = ''
+	`); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) backfillMemoryItemSessions(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_item_sessions(memory_item_id, session_id, user_id, reinforced_at)
+		SELECT id, session_id, user_id, COALESCE(last_seen_at, created_at)
+		FROM memory_items
+		WHERE trim(session_id) <> ''
 	`)
 	return err
 }

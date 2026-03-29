@@ -169,7 +169,6 @@ function SessionsContent() {
             <SessionGroup
               label="Today"
               sessions={todaySessions}
-              activeSessionId={activeSessionId}
               editingId={editingId}
               editTitle={editTitle}
               editInputRef={editInputRef}
@@ -187,7 +186,6 @@ function SessionsContent() {
             <SessionGroup
               label="Yesterday"
               sessions={yesterdaySessions}
-              activeSessionId={activeSessionId}
               editingId={editingId}
               editTitle={editTitle}
               editInputRef={editInputRef}
@@ -205,7 +203,6 @@ function SessionsContent() {
             <SessionGroup
               label="Previous"
               sessions={olderSessions}
-              activeSessionId={activeSessionId}
               editingId={editingId}
               editTitle={editTitle}
               editInputRef={editInputRef}
@@ -228,7 +225,6 @@ function SessionsContent() {
 function SessionGroup({
   label,
   sessions,
-  activeSessionId,
   editingId,
   editTitle,
   editInputRef,
@@ -243,7 +239,6 @@ function SessionGroup({
 }: {
   label: string;
   sessions: ChatSession[];
-  activeSessionId: string;
   editingId: string | null;
   editTitle: string;
   editInputRef: React.RefObject<HTMLInputElement | null>;
@@ -263,7 +258,6 @@ function SessionGroup({
       </p>
       <div className="space-y-2">
         {sessions.map((s) => {
-          const isActive = s.id === activeSessionId;
           const isEditing = s.id === editingId;
           const isRunning = statusMap[s.id] === "streaming";
 
@@ -291,11 +285,18 @@ function SessionGroup({
                     onDoubleClick={() => onRename(s)}
                     className="min-w-0 flex-1 text-left cursor-pointer"
                   >
-                    <span className="text-sm font-medium text-foreground flex items-center gap-2">
-                      {s.title || "New chat"}
-                      {isRunning && (
-                        <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-                      )}
+                    <span className="block min-w-0">
+                      <span className="text-sm font-medium text-foreground flex items-center gap-2">
+                        {s.title || "New chat"}
+                        {isRunning && (
+                          <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+                        )}
+                      </span>
+                      {s.summary_preview ? (
+                        <span className="mt-0.5 block truncate text-xs text-muted-foreground/70">
+                          {s.summary_preview}
+                        </span>
+                      ) : null}
                     </span>
                   </button>
 

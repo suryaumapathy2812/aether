@@ -422,10 +422,15 @@ export interface MemoryItemRow {
   source_id: string;
   session_id: string;
   metadata_json: string;
+  scope?: string;
+  recall_count?: number;
+  last_recalled_at?: string | null;
 }
 
 export interface MemorySearchResult {
+  id?: number;
   type: string;
+  scope?: string;
   similarity: number;
   timestamp: string | number;
   fact?: string;
@@ -442,11 +447,14 @@ export interface MemorySearchResult {
 export async function getMemoryItems(
   userId: string,
   limit = 200,
-  options?: { kind?: string[]; category?: string; status?: string },
+  options?: { kind?: string[]; scope?: string[]; category?: string; status?: string },
 ) {
   const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
   if (options?.kind?.length) {
     params.set("kind", options.kind.join(","));
+  }
+  if (options?.scope?.length) {
+    params.set("scope", options.scope.join(","));
   }
   if (options?.category?.trim()) {
     params.set("category", options.category.trim());
@@ -476,6 +484,9 @@ export async function getMemoryItems(
         SourceID?: string;
         SessionID?: string;
         MetadataJSON?: string;
+        Scope?: string;
+        RecallCount?: number;
+        LastRecalledAt?: string | null;
       }
     >;
   }>(`${agentPath("/memory/items")}?${params.toString()}`);
@@ -500,6 +511,9 @@ export async function getMemoryItems(
       source_id: item.source_id || item.SourceID || "",
       session_id: item.session_id || item.SessionID || "",
       metadata_json: item.metadata_json || item.MetadataJSON || "{}",
+      scope: item.scope || item.Scope || "",
+      recall_count: item.recall_count ?? item.RecallCount ?? 0,
+      last_recalled_at: item.last_recalled_at ?? item.LastRecalledAt ?? null,
     })),
   };
 }
@@ -907,8 +921,25 @@ export interface ChatSession {
   id: string;
   user_id: string;
   title: string;
+  archived?: boolean;
+  last_activity_at?: string | null;
+  latest_summary_id?: number | null;
+  summary_preview?: string;
+  summary_count?: number;
+  title_source?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ChatSessionSummary {
+  id: number;
+  session_id: string;
+  user_id: string;
+  revision: number;
+  summary_text: string;
+  title_suggestion: string;
+  message_count: number;
+  created_at: string;
 }
 
 export async function listChatSessions(userId: string, limit = 50) {
@@ -934,6 +965,7 @@ export async function getChatSession(sessionId: string) {
   return api<{
     session: ChatSession;
     messages: Array<{ id: number; role?: string; content: unknown; created_at?: string }>;
+    summaries: ChatSessionSummary[];
   }>(`${agentPath("/sessions")}/${encodeURIComponent(sessionId)}`);
 }
 

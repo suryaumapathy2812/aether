@@ -57,6 +57,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	for _, path := range []string{"/agent/v1/memory/sessions", "/api/memory/sessions"} {
 		mux.HandleFunc(path, h.handleMemorySessions)
 	}
+	for _, path := range []string{"/agent/v1/memory/sessions/", "/api/memory/sessions/"} {
+		mux.HandleFunc(path, h.handleMemorySessionByID)
+	}
 	for _, path := range []string{"/agent/v1/memory/conversations", "/api/memory/conversations"} {
 		mux.HandleFunc(path, h.handleMemoryConversations)
 	}
@@ -130,6 +133,10 @@ func parseKinds(raw string) []string {
 	return out
 }
 
+func parseScopes(raw string) []string {
+	return parseKinds(raw)
+}
+
 func (h *Handler) handleMemoryItems(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -149,6 +156,7 @@ func (h *Handler) handleMemoryItems(w http.ResponseWriter, r *http.Request) {
 	items, err := h.store.ListMemoryItems(r.Context(), db.MemoryListQuery{
 		UserID:   userID,
 		Kinds:    parseKinds(r.URL.Query().Get("kind")),
+		Scopes:   parseScopes(r.URL.Query().Get("scope")),
 		Category: strings.TrimSpace(r.URL.Query().Get("category")),
 		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
 		Limit:    limit,
@@ -189,6 +197,7 @@ func (h *Handler) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
 		UserID:         userID,
 		Text:           q,
 		Kinds:          parseKinds(r.URL.Query().Get("kind")),
+		Scopes:         parseScopes(r.URL.Query().Get("scope")),
 		Category:       strings.TrimSpace(r.URL.Query().Get("category")),
 		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
 		Limit:          limit,
@@ -223,6 +232,45 @@ func (h *Handler) handleMemorySessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func (h *Handler) handleMemorySessionByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := trimDataAPIPathPrefix(r.URL.Path, "/agent/v1/memory/sessions/", "/api/memory/sessions/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "session id required")
+		return
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "summaries" {
+		httputil.WriteError(w, http.StatusNotFound, "not found")
+		return
+	}
+	sessionID := strings.TrimSpace(parts[0])
+	if sessionID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "session id required")
+		return
+	}
+	userID, err := h.memoryUserID(r)
+	if err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session, err := h.store.GetChatSession(r.Context(), sessionID)
+	if err != nil || session.UserID != userID {
+		httputil.WriteError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	summaries, err := h.store.ListSessionSummaries(r.Context(), sessionID, 100)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"summaries": summaries})
 }
 
 func (h *Handler) handleMemoryConversations(w http.ResponseWriter, r *http.Request) {

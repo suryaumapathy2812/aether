@@ -11,26 +11,38 @@ import (
 	"time"
 )
 
+type MemoryScope string
+
+const (
+	ScopeGlobal     MemoryScope = "global"
+	ScopeContextual MemoryScope = "contextual"
+	ScopeEpisodic   MemoryScope = "episodic"
+	ScopeVolatile   MemoryScope = "volatile"
+)
+
 type MemoryItemRecord struct {
-	ID            int64      `json:"id"`
-	UserID        string     `json:"user_id"`
-	Kind          string     `json:"kind"`
-	Category      string     `json:"category"`
-	Content       string     `json:"content"`
-	NormalizedKey string     `json:"normalized_key"`
-	Status        string     `json:"status"`
-	Confidence    float64    `json:"confidence"`
-	Importance    float64    `json:"importance"`
-	EvidenceCount int        `json:"evidence_count"`
-	FirstSeenAt   time.Time  `json:"first_seen_at"`
-	LastSeenAt    time.Time  `json:"last_seen_at"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	SourceType    string     `json:"source_type"`
-	SourceID      string     `json:"source_id"`
-	SessionID     string     `json:"session_id"`
-	MetadataJSON  string     `json:"metadata_json"`
+	ID             int64      `json:"id"`
+	UserID         string     `json:"user_id"`
+	Kind           string     `json:"kind"`
+	Category       string     `json:"category"`
+	Content        string     `json:"content"`
+	NormalizedKey  string     `json:"normalized_key"`
+	Status         string     `json:"status"`
+	Confidence     float64    `json:"confidence"`
+	Importance     float64    `json:"importance"`
+	EvidenceCount  int        `json:"evidence_count"`
+	FirstSeenAt    time.Time  `json:"first_seen_at"`
+	LastSeenAt     time.Time  `json:"last_seen_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	SourceType     string     `json:"source_type"`
+	SourceID       string     `json:"source_id"`
+	SessionID      string     `json:"session_id"`
+	MetadataJSON   string     `json:"metadata_json"`
+	Scope          string     `json:"scope"`
+	RecallCount    int        `json:"recall_count"`
+	LastRecalledAt *time.Time `json:"last_recalled_at,omitempty"`
 }
 
 type AddMemoryInput struct {
@@ -46,6 +58,7 @@ type AddMemoryInput struct {
 	SourceID   string
 	SessionID  string
 	Metadata   map[string]any
+	Scope      string
 	Embedding  []float32
 	ObservedAt time.Time
 }
@@ -53,6 +66,7 @@ type AddMemoryInput struct {
 type MemoryListQuery struct {
 	UserID   string
 	Kinds    []string
+	Scopes   []string
 	Category string
 	Status   string
 	Limit    int
@@ -62,6 +76,7 @@ type MemorySearchQuery struct {
 	UserID         string
 	Text           string
 	Kinds          []string
+	Scopes         []string
 	Category       string
 	Status         string
 	Limit          int
@@ -93,6 +108,10 @@ func (s *Store) AddMemory(ctx context.Context, input AddMemoryInput) (int64, err
 	importance := input.Importance
 	if importance <= 0 {
 		importance = defaultImportanceForKind(kind)
+	}
+	scope := normalizeMemoryScope(input.Scope)
+	if scope == "" {
+		scope = string(InferMemoryScope(kind, category, content))
 	}
 	now := input.ObservedAt.UTC()
 	if now.IsZero() {
@@ -140,6 +159,7 @@ func (s *Store) AddMemory(ctx context.Context, input AddMemoryInput) (int64, err
 		if input.SessionID == "" {
 			input.SessionID = existing.SessionID
 		}
+		scope = preferDurableScope(existing.Scope, scope)
 		if confidence < existing.Confidence {
 			confidence = existing.Confidence
 		}
@@ -150,8 +170,8 @@ func (s *Store) AddMemory(ctx context.Context, input AddMemoryInput) (int64, err
 			UPDATE memory_items
 			SET category = ?, content = ?, status = ?, confidence = ?, importance = ?,
 				evidence_count = evidence_count + 1, last_seen_at = ?, updated_at = ?,
-				expires_at = ?, source_type = ?, source_id = ?, session_id = ?, metadata_json = ?`
-		args := []any{category, content, status, confidence, importance, formatTS(now), formatTS(now), nullableTS(input.ExpiresAt), strings.TrimSpace(input.SourceType), strings.TrimSpace(input.SourceID), strings.TrimSpace(input.SessionID), metadataJSON}
+				expires_at = ?, source_type = ?, source_id = ?, session_id = ?, metadata_json = ?, scope = ?`
+		args := []any{category, content, status, confidence, importance, formatTS(now), formatTS(now), nullableTS(input.ExpiresAt), strings.TrimSpace(input.SourceType), strings.TrimSpace(input.SourceID), strings.TrimSpace(input.SessionID), metadataJSON, scope}
 		if hasEmbedding {
 			query += `, embedding = vector32(?)`
 			args = append(args, vectorJSON)
@@ -171,12 +191,12 @@ func (s *Store) AddMemory(ctx context.Context, input AddMemoryInput) (int64, err
 		INSERT INTO memory_items(
 			user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
-			source_type, source_id, session_id, metadata_json`
-	args := []any{userID, kind, category, content, normalizedKey, status, confidence, importance, 1, formatTS(now), formatTS(now), formatTS(now), formatTS(now), nullableTS(input.ExpiresAt), strings.TrimSpace(input.SourceType), strings.TrimSpace(input.SourceID), strings.TrimSpace(input.SessionID), metadataJSON}
+			source_type, source_id, session_id, metadata_json, scope`
+	args := []any{userID, kind, category, content, normalizedKey, status, confidence, importance, 1, formatTS(now), formatTS(now), formatTS(now), formatTS(now), nullableTS(input.ExpiresAt), strings.TrimSpace(input.SourceType), strings.TrimSpace(input.SourceID), strings.TrimSpace(input.SessionID), metadataJSON, scope}
 	if hasEmbedding {
 		query += `, embedding`
 	}
-	query += `) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+	query += `) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 	if hasEmbedding {
 		query += `, vector32(?)`
 		args = append(args, vectorJSON)
@@ -239,7 +259,7 @@ func (s *Store) SearchMemory(ctx context.Context, query MemorySearchQuery) ([]Me
 }
 
 func (s *Store) ListMemoryItems(ctx context.Context, query MemoryListQuery) ([]MemoryItemRecord, error) {
-	items, err := s.listMemoryItemsByKind(ctx, query.UserID, normalizeKinds(query.Kinds), query.Category, false, query.Limit)
+	items, err := s.listMemoryItemsFiltered(ctx, query.UserID, normalizeKinds(query.Kinds), normalizeScopes(query.Scopes), query.Category, false, query.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +274,59 @@ func (s *Store) ListMemoryItems(ctx context.Context, query MemoryListQuery) ([]M
 		}
 	}
 	return filtered, nil
+}
+
+func (s *Store) ListMemoryItemsByScope(ctx context.Context, userID string, kinds, scopes []string, status string, limit int) ([]MemoryItemRecord, error) {
+	items, err := s.listMemoryItemsFiltered(ctx, userID, normalizeKinds(kinds), normalizeScopes(scopes), "", false, limit)
+	if err != nil {
+		return nil, err
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" || status == "all" {
+		return items, nil
+	}
+	filtered := make([]MemoryItemRecord, 0, len(items))
+	for _, item := range items {
+		if strings.EqualFold(item.Status, status) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Store) ListMemoryItemsBySession(ctx context.Context, userID, sessionID string, limit int) ([]MemoryItemRecord, error) {
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return []MemoryItemRecord{}, nil
+	}
+	if limit <= 0 || limit > 10000 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_id, kind, category, content, normalized_key, status, confidence, importance,
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
+			source_type, source_id, session_id, metadata_json, scope, recall_count, last_recalled_at
+		FROM memory_items
+		WHERE user_id = ? AND session_id = ?
+		ORDER BY updated_at DESC
+		LIMIT ?
+	`, userID, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]MemoryItemRecord, 0)
+	for rows.Next() {
+		rec, err := scanMemoryItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *rec)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) DeleteMemoryItem(ctx context.Context, id int64) error {
@@ -279,7 +352,7 @@ func (s *Store) searchMemoryItemsFTS(ctx context.Context, userID, query string, 
 	sort.Strings(parts)
 	ftsQuery := strings.Join(parts, " OR ")
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mi.kind, mi.category, mi.content, mi.confidence, mi.importance, mi.updated_at
+		SELECT mi.id, mi.kind, mi.category, mi.content, mi.confidence, mi.importance, mi.updated_at, mi.scope
 		FROM memory_items_fts mf
 		JOIN memory_items mi ON mi.id = mf.item_id
 		WHERE mf.user_id = ? AND memory_items_fts MATCH ? AND mi.status = 'active'
@@ -291,16 +364,17 @@ func (s *Store) searchMemoryItemsFTS(ctx context.Context, userID, query string, 
 	defer rows.Close()
 	results := make([]MemorySearchResult, 0)
 	for rows.Next() {
-		var kind, category, content, updatedAt string
+		var id int64
+		var kind, category, content, updatedAt, scope string
 		var confidence, importance float64
-		if err := rows.Scan(&kind, &category, &content, &confidence, &importance, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &kind, &category, &content, &confidence, &importance, &updatedAt, &scope); err != nil {
 			return nil, err
 		}
 		ts, err := parseTS(updatedAt)
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, toMemorySearchResult(kind, category, content, 0.5+importance*0.2, confidence, ts))
+		results = append(results, toMemorySearchResult(id, kind, category, scope, content, 0.5+importance*0.2, confidence, ts))
 	}
 	return results, rows.Err()
 }
@@ -318,7 +392,7 @@ func (s *Store) searchMemoryItemsVector(ctx context.Context, userID string, quer
 		overfetch = 20
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mi.kind, mi.category, mi.content, mi.confidence, mi.importance, mi.updated_at,
+		SELECT mi.id, mi.kind, mi.category, mi.content, mi.confidence, mi.importance, mi.updated_at, mi.scope,
 			vector_distance_cos(mi.embedding, vector32(?)) AS distance
 		FROM vector_top_k('idx_memory_items_vec', vector32(?), ?)
 		JOIN memory_items mi ON mi.id = id
@@ -331,9 +405,10 @@ func (s *Store) searchMemoryItemsVector(ctx context.Context, userID string, quer
 	defer rows.Close()
 	results := make([]MemorySearchResult, 0)
 	for rows.Next() {
-		var kind, category, content, updatedAt string
+		var id int64
+		var kind, category, content, updatedAt, scope string
 		var confidence, importance, distance float64
-		if err := rows.Scan(&kind, &category, &content, &confidence, &importance, &updatedAt, &distance); err != nil {
+		if err := rows.Scan(&id, &kind, &category, &content, &confidence, &importance, &updatedAt, &scope, &distance); err != nil {
 			return nil, err
 		}
 		ts, err := parseTS(updatedAt)
@@ -341,7 +416,7 @@ func (s *Store) searchMemoryItemsVector(ctx context.Context, userID string, quer
 			return nil, err
 		}
 		similarity := math.Max(0, 1.15-distance) + importance*0.15
-		results = append(results, toMemorySearchResult(kind, category, content, similarity, confidence, ts))
+		results = append(results, toMemorySearchResult(id, kind, category, scope, content, similarity, confidence, ts))
 	}
 	return results, rows.Err()
 }
@@ -350,7 +425,7 @@ func (s *Store) findMemoryItemMergeCandidate(ctx context.Context, userID, kind, 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope, recall_count, last_recalled_at
 		FROM memory_items
 		WHERE user_id = ? AND kind = ? AND status = 'active'
 		ORDER BY updated_at DESC
@@ -395,7 +470,7 @@ func (s *Store) getMemoryItemByKey(ctx context.Context, userID, kind, normalized
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope, recall_count, last_recalled_at
 		FROM memory_items
 		WHERE user_id = ? AND kind = ? AND normalized_key = ?
 	`, userID, kind, normalizedKey)
@@ -406,7 +481,8 @@ func scanMemoryItem(scanner interface{ Scan(dest ...any) error }) (*MemoryItemRe
 	var rec MemoryItemRecord
 	var firstSeenAt, lastSeenAt, createdAt, updatedAt string
 	var expiresAt sql.NullString
-	if err := scanner.Scan(&rec.ID, &rec.UserID, &rec.Kind, &rec.Category, &rec.Content, &rec.NormalizedKey, &rec.Status, &rec.Confidence, &rec.Importance, &rec.EvidenceCount, &firstSeenAt, &lastSeenAt, &createdAt, &updatedAt, &expiresAt, &rec.SourceType, &rec.SourceID, &rec.SessionID, &rec.MetadataJSON); err != nil {
+	var lastRecalledAt sql.NullString
+	if err := scanner.Scan(&rec.ID, &rec.UserID, &rec.Kind, &rec.Category, &rec.Content, &rec.NormalizedKey, &rec.Status, &rec.Confidence, &rec.Importance, &rec.EvidenceCount, &firstSeenAt, &lastSeenAt, &createdAt, &updatedAt, &expiresAt, &rec.SourceType, &rec.SourceID, &rec.SessionID, &rec.MetadataJSON, &rec.Scope, &rec.RecallCount, &lastRecalledAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -431,6 +507,13 @@ func scanMemoryItem(scanner interface{ Scan(dest ...any) error }) (*MemoryItemRe
 			return nil, err
 		}
 		rec.ExpiresAt = &ts
+	}
+	if lastRecalledAt.Valid && strings.TrimSpace(lastRecalledAt.String) != "" {
+		ts, err := parseTS(lastRecalledAt.String)
+		if err != nil {
+			return nil, err
+		}
+		rec.LastRecalledAt = &ts
 	}
 	return &rec, nil
 }
@@ -535,6 +618,29 @@ func normalizeKinds(kinds []string) []string {
 	return out
 }
 
+func normalizeScopes(scopes []string) []string {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(scopes))
+	out := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		scope = normalizeMemoryScope(scope)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func filterMemorySearchResults(results []MemorySearchResult, query MemorySearchQuery) []MemorySearchResult {
 	if len(results) == 0 {
 		return results
@@ -546,6 +652,11 @@ func filterMemorySearchResults(results []MemorySearchResult, query MemorySearchQ
 	}
 	category := strings.TrimSpace(strings.ToLower(query.Category))
 	status := strings.TrimSpace(strings.ToLower(query.Status))
+	scopes := normalizeScopes(query.Scopes)
+	scopeSet := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scopeSet[scope] = struct{}{}
+	}
 	out := make([]MemorySearchResult, 0, len(results))
 	for _, item := range results {
 		if len(kindSet) > 0 {
@@ -556,6 +667,11 @@ func filterMemorySearchResults(results []MemorySearchResult, query MemorySearchQ
 		if category != "" && !strings.EqualFold(item.Category, category) {
 			continue
 		}
+		if len(scopeSet) > 0 {
+			if _, ok := scopeSet[strings.ToLower(strings.TrimSpace(item.Scope))]; !ok {
+				continue
+			}
+		}
 		if status != "" && status != "all" && !strings.EqualFold(status, "active") {
 			continue
 		}
@@ -564,8 +680,8 @@ func filterMemorySearchResults(results []MemorySearchResult, query MemorySearchQ
 	return out
 }
 
-func toMemorySearchResult(kind, category, content string, similarity, confidence float64, ts time.Time) MemorySearchResult {
-	item := MemorySearchResult{Type: kind, Category: category, Similarity: similarity, Confidence: confidence, Timestamp: ts}
+func toMemorySearchResult(id int64, kind, category, scope, content string, similarity, confidence float64, ts time.Time) MemorySearchResult {
+	item := MemorySearchResult{ID: id, Type: kind, Category: category, Scope: scope, Similarity: similarity, Confidence: confidence, Timestamp: ts}
 	switch kind {
 	case "fact":
 		item.Fact = content
@@ -645,7 +761,128 @@ func (s *Store) ArchiveStaleMemoryItems(ctx context.Context, userID string, befo
 	return count, nil
 }
 
+func (s *Store) ArchiveMemoryItemsByScope(ctx context.Context, userID, scope string, before time.Time) (int64, error) {
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	scope = normalizeMemoryScope(scope)
+	if scope == "" {
+		return 0, nil
+	}
+	if scope == string(ScopeGlobal) {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE memory_items
+		SET status = 'archived', updated_at = ?
+		WHERE user_id = ? AND scope = ? AND status = 'active' AND last_seen_at < ?
+		  AND evidence_count <= 1 AND recall_count = 0
+		  AND COALESCE((
+			SELECT COUNT(DISTINCT mis.session_id)
+			FROM memory_item_sessions mis
+			WHERE mis.memory_item_id = memory_items.id
+		  ), 0) <= 1
+	`, formatTS(time.Now().UTC()), userID, scope, formatTS(before.UTC()))
+	if err != nil {
+		return 0, err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if count > 0 {
+		if err := s.rebuildMemoryItemsFTS(ctx); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+func (s *Store) UpdateMemoryItemScope(ctx context.Context, id int64, scope string) error {
+	scope = normalizeMemoryScope(scope)
+	if id == 0 || scope == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE memory_items
+		SET scope = ?, updated_at = ?
+		WHERE id = ?
+	`, scope, formatTS(time.Now().UTC()), id)
+	return err
+}
+
+func (s *Store) IncrementRecallCount(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[int64]struct{}{}
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+2)
+	now := formatTS(time.Now().UTC())
+	args = append(args, now)
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	if len(placeholders) == 0 {
+		return nil
+	}
+	query := `
+		UPDATE memory_items
+		SET recall_count = recall_count + 1, last_recalled_at = ?, updated_at = ?
+		WHERE id IN (` + strings.Join(placeholders, ",") + `)
+	`
+	args = append([]any{now, now}, args[1:]...)
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (s *Store) RecordMemoryItemSession(ctx context.Context, memItemID int64, sessionID, userID string) error {
+	if memItemID == 0 || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(userID) == "" {
+		userID = "default"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memory_item_sessions(memory_item_id, session_id, user_id, reinforced_at)
+		VALUES(?, ?, ?, ?)
+	`, memItemID, strings.TrimSpace(sessionID), userID, formatTS(time.Now().UTC()))
+	return err
+}
+
+func (s *Store) CountDistinctSessions(ctx context.Context, memItemID int64) (int, error) {
+	if memItemID == 0 {
+		return 0, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT session_id)
+		FROM memory_item_sessions
+		WHERE memory_item_id = ?
+	`, memItemID)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) ListMemoryItemsForReconsolidation(ctx context.Context, userID string, limit int) ([]MemoryItemRecord, error) {
+	return s.listMemoryItemsFiltered(ctx, userID, nil, nil, "", true, limit)
+}
+
 func (s *Store) listMemoryItemsByKind(ctx context.Context, userID string, kinds []string, category string, activeOnly bool, limit int) ([]MemoryItemRecord, error) {
+	return s.listMemoryItemsFiltered(ctx, userID, kinds, nil, category, activeOnly, limit)
+}
+
+func (s *Store) listMemoryItemsFiltered(ctx context.Context, userID string, kinds, scopes []string, category string, activeOnly bool, limit int) ([]MemoryItemRecord, error) {
 	if strings.TrimSpace(userID) == "" {
 		userID = "default"
 	}
@@ -655,7 +892,7 @@ func (s *Store) listMemoryItemsByKind(ctx context.Context, userID string, kinds 
 	query := `
 		SELECT id, user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope, recall_count, last_recalled_at
 		FROM memory_items
 		WHERE user_id = ?
 	`
@@ -665,6 +902,13 @@ func (s *Store) listMemoryItemsByKind(ctx context.Context, userID string, kinds 
 		query += ` AND kind IN (` + placeholders + `)`
 		for _, kind := range kinds {
 			args = append(args, kind)
+		}
+	}
+	if len(scopes) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(scopes)), ",")
+		query += ` AND scope IN (` + placeholders + `)`
+		for _, scope := range scopes {
+			args = append(args, scope)
 		}
 	}
 	if activeOnly {
@@ -690,6 +934,103 @@ func (s *Store) listMemoryItemsByKind(ctx context.Context, userID string, kinds 
 		items = append(items, *rec)
 	}
 	return items, rows.Err()
+}
+
+func InferMemoryScope(kind, category, content string) MemoryScope {
+	kind = strings.TrimSpace(strings.ToLower(kind))
+	category = strings.TrimSpace(strings.ToLower(category))
+	content = strings.TrimSpace(strings.ToLower(content))
+
+	switch kind {
+	case "summary", "memory":
+		return ScopeEpisodic
+	case "entity_observation":
+		return ScopeContextual
+	case "decision":
+		if looksTaskSpecificConstraint(content) || category == "workflow" {
+			return ScopeContextual
+		}
+		return ScopeGlobal
+	case "fact":
+		if looksTransientObservation(content) {
+			return ScopeVolatile
+		}
+		return ScopeContextual
+	default:
+		return ScopeContextual
+	}
+}
+
+func normalizeMemoryScope(scope string) string {
+	switch strings.TrimSpace(strings.ToLower(scope)) {
+	case string(ScopeGlobal):
+		return string(ScopeGlobal)
+	case string(ScopeContextual):
+		return string(ScopeContextual)
+	case string(ScopeEpisodic):
+		return string(ScopeEpisodic)
+	case string(ScopeVolatile):
+		return string(ScopeVolatile)
+	default:
+		return ""
+	}
+}
+
+func preferDurableScope(existing, incoming string) string {
+	existing = normalizeMemoryScope(existing)
+	incoming = normalizeMemoryScope(incoming)
+	switch {
+	case existing == "":
+		return incoming
+	case incoming == "":
+		return existing
+	case scopeRank(existing) >= scopeRank(incoming):
+		return existing
+	default:
+		return incoming
+	}
+}
+
+func scopeRank(scope string) int {
+	switch normalizeMemoryScope(scope) {
+	case string(ScopeGlobal):
+		return 4
+	case string(ScopeContextual):
+		return 3
+	case string(ScopeEpisodic):
+		return 2
+	case string(ScopeVolatile):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func looksTaskSpecificConstraint(content string) bool {
+	hints := []string{
+		"react", "jsx", "markdown", "tailwind", "css", "hooks", "hook", "export ",
+		"import ", "component", "preview", "style tag", "<style", "@keyframes",
+		"animation", "commentary", "code fences", "inline styles",
+	}
+	for _, hint := range hints {
+		if strings.Contains(content, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksTransientObservation(content string) bool {
+	hints := []string{
+		"missing padding", "email header", "div elements", "recently installed",
+		"working properly", "was dissatisfied", "newly installed", "logo and username",
+	}
+	for _, hint := range hints {
+		if strings.Contains(content, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) backfillLegacyMemoryItems(ctx context.Context) error {
@@ -737,11 +1078,11 @@ func (s *Store) backfillFacts(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO memory_items(
 			user_id, kind, category, content, normalized_key, status, confidence, importance,
-			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, source_type, source_id, session_id, metadata_json
+			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, source_type, source_id, session_id, metadata_json, scope
 		)
 		SELECT user_id, 'fact', 'profile', fact, fact_key, 'active', 1.0, 0.85,
 			1, created_at, updated_at, created_at, updated_at,
-			'legacy_fact', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+			'legacy_fact', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}', 'contextual'
 		FROM facts
 	`)
 	return err
@@ -752,11 +1093,11 @@ func (s *Store) backfillMemories(ctx context.Context) error {
 		INSERT OR IGNORE INTO memory_items(
 			user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at, expires_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope
 		)
 		SELECT user_id, 'memory', category, memory, memory_key, 'active', confidence, 0.65,
 			1, created_at, created_at, created_at, created_at, expires_at,
-			'legacy_memory', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+			'legacy_memory', COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}', 'episodic'
 		FROM memories
 	`)
 	return err
@@ -767,12 +1108,12 @@ func (s *Store) backfillDecisions(ctx context.Context) error {
 		INSERT OR IGNORE INTO memory_items(
 			user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope
 		)
 		SELECT user_id, 'decision', category, decision, decision_key,
 			CASE WHEN active = 1 THEN 'active' ELSE 'superseded' END,
 			confidence, 0.95, 1, created_at, updated_at, created_at, updated_at,
-			source, COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}'
+			source, COALESCE(CAST(source_conversation_id AS TEXT), ''), '', '{}', 'global'
 		FROM decisions
 	`)
 	return err
@@ -783,11 +1124,11 @@ func (s *Store) backfillSessionSummaries(ctx context.Context) error {
 		INSERT OR IGNORE INTO memory_items(
 			user_id, kind, category, content, normalized_key, status, confidence, importance,
 			evidence_count, first_seen_at, last_seen_at, created_at, updated_at,
-			source_type, source_id, session_id, metadata_json
+			source_type, source_id, session_id, metadata_json, scope
 		)
 		SELECT user_id, 'summary', 'session', summary, 'session:' || session_id || ':' || started_at,
 			'active', 0.9, 0.8, 1, started_at, ended_at, started_at, ended_at,
-			'session', session_id, session_id, json_object('turns', turns, 'tools_used', tools_used)
+			'session', session_id, session_id, json_object('turns', turns, 'tools_used', tools_used), 'episodic'
 		FROM sessions
 		WHERE trim(summary) <> ''
 	`)

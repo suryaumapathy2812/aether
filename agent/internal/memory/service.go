@@ -31,6 +31,7 @@ type embedder interface {
 
 type extractionJob struct {
 	UserID           string
+	SessionID        string
 	ConversationID   int64
 	UserMessage      string
 	AssistantMessage string
@@ -85,6 +86,9 @@ func (s *Service) RecordConversation(ctx context.Context, userID, sessionID, use
 	if s == nil || s.store == nil {
 		return
 	}
+	if strings.TrimSpace(sessionID) != "" {
+		_ = s.store.TouchChatSessionActivity(ctx, sessionID)
+	}
 	if strings.TrimSpace(userMessage) == "" || strings.TrimSpace(assistantMessage) == "" {
 		return
 	}
@@ -93,7 +97,7 @@ func (s *Service) RecordConversation(ctx context.Context, userID, sessionID, use
 		log.Printf("memory conversation write failed: %v", err)
 		return
 	}
-	job := extractionJob{UserID: defaultUser(userID), ConversationID: convID, UserMessage: userMessage, AssistantMessage: assistantMessage}
+	job := extractionJob{UserID: defaultUser(userID), SessionID: strings.TrimSpace(sessionID), ConversationID: convID, UserMessage: userMessage, AssistantMessage: assistantMessage}
 	select {
 	case s.queue <- job:
 	default:
@@ -122,7 +126,7 @@ func (s *Service) RecordSessionSummary(ctx context.Context, userID, sessionID, s
 	if s.embedder != nil {
 		embedding, _ = s.embedder.EmbedSingle(ctx, summary)
 	}
-	_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+	itemID, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 		UserID:     userID,
 		Kind:       "summary",
 		Category:   "session",
@@ -136,6 +140,9 @@ func (s *Service) RecordSessionSummary(ctx context.Context, userID, sessionID, s
 		Embedding:  embedding,
 		ObservedAt: endedAt,
 	})
+	if strings.TrimSpace(sessionID) != "" {
+		_ = s.store.RecordMemoryItemSession(ctx, itemID, sessionID, userID)
+	}
 }
 
 func (s *Service) worker(ctx context.Context) {
@@ -231,7 +238,7 @@ Assistant: ` + job.AssistantMessage
 	// Ensure the self entity exists before processing user-facts.
 	selfEntityID := s.EnsureSelfEntity(ctx, job.UserID)
 	for idx, fact := range parsed.Facts {
-		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+		id, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "fact",
 			Category:   "profile",
@@ -240,12 +247,14 @@ Assistant: ` + job.AssistantMessage
 			Importance: 0.85,
 			SourceType: "conversation",
 			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			SessionID:  job.SessionID,
 			Embedding:  embeddingAt(factEmbeddings, idx),
 		})
+		s.linkMemoryToSession(ctx, id, job)
 		// Link user-facts as observations on the self entity.
 		if selfEntityID != "" && isUserFact(fact) {
 			_ = s.store.AddEntityObservation(ctx, selfEntityID, job.UserID, fact, "trait", "extracted")
-			_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+			id, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 				UserID:     job.UserID,
 				Kind:       "entity_observation",
 				Category:   "self",
@@ -254,12 +263,14 @@ Assistant: ` + job.AssistantMessage
 				Importance: 0.85,
 				SourceType: "conversation",
 				SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+				SessionID:  job.SessionID,
 			})
+			s.linkMemoryToSession(ctx, id, job)
 		}
 	}
 	memoryEmbeddings := s.embedTexts(ctx, parsed.Memories)
 	for idx, memory := range parsed.Memories {
-		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+		id, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "memory",
 			Category:   "episodic",
@@ -268,12 +279,14 @@ Assistant: ` + job.AssistantMessage
 			Importance: 0.65,
 			SourceType: "conversation",
 			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			SessionID:  job.SessionID,
 			Embedding:  embeddingAt(memoryEmbeddings, idx),
 		})
+		s.linkMemoryToSession(ctx, id, job)
 	}
 	decisionEmbeddings := s.embedTexts(ctx, parsed.Decisions)
 	for idx, decision := range parsed.Decisions {
-		_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+		id, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 			UserID:     job.UserID,
 			Kind:       "decision",
 			Category:   "preference",
@@ -282,8 +295,10 @@ Assistant: ` + job.AssistantMessage
 			Importance: 0.95,
 			SourceType: "conversation",
 			SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+			SessionID:  job.SessionID,
 			Embedding:  embeddingAt(decisionEmbeddings, idx),
 		})
+		s.linkMemoryToSession(ctx, id, job)
 	}
 	// Store extracted entities with dedup: serialize entity resolution across
 	// workers via mutex to prevent race conditions where two workers both
@@ -305,7 +320,7 @@ Assistant: ` + job.AssistantMessage
 				continue
 			}
 			_ = s.store.AddEntityObservation(ctx, entityID, job.UserID, obs, "trait", "extracted")
-			_, _ = s.store.AddMemory(ctx, db.AddMemoryInput{
+			id, _ := s.store.AddMemory(ctx, db.AddMemoryInput{
 				UserID:     job.UserID,
 				Kind:       "entity_observation",
 				Category:   entity.Type,
@@ -314,10 +329,21 @@ Assistant: ` + job.AssistantMessage
 				Importance: 0.7,
 				SourceType: "conversation",
 				SourceID:   fmt.Sprintf("conversation:%d", job.ConversationID),
+				SessionID:  job.SessionID,
 			})
+			s.linkMemoryToSession(ctx, id, job)
 		}
 	}
 	s.entityMu.Unlock()
+}
+
+func (s *Service) linkMemoryToSession(ctx context.Context, memoryID int64, job extractionJob) {
+	if s == nil || s.store == nil || memoryID == 0 || strings.TrimSpace(job.SessionID) == "" {
+		return
+	}
+	if err := s.store.RecordMemoryItemSession(ctx, memoryID, job.SessionID, job.UserID); err != nil {
+		log.Printf("memory extraction: failed to link memory item %d to session %s: %v", memoryID, job.SessionID, err)
+	}
 }
 
 func (s *Service) embedTexts(ctx context.Context, texts []string) [][]float32 {
