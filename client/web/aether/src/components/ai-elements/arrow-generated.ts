@@ -11,6 +11,25 @@ function normalizeModuleSource(source: string): string {
   return source.replace(/\r\n/g, "\n").trim();
 }
 
+function wrapDefaultComponentModule(source: string): string {
+  const normalized = normalizeModuleSource(source);
+  if (!normalized) return normalized;
+
+  const defaultComponentPrefix = "export default component(";
+  const idx = normalized.indexOf(defaultComponentPrefix);
+  if (idx < 0) return normalized;
+
+  const rewritten =
+    normalized.slice(0, idx) +
+    "const __AETHER_DEFAULT_COMPONENT = component(" +
+    normalized.slice(idx + defaultComponentPrefix.length);
+
+  return (
+    rewritten +
+    "\n\nexport default html`${__AETHER_DEFAULT_COMPONENT()}`"
+  );
+}
+
 function looksLikeArrowModule(source: string): boolean {
   const normalized = source.trim();
   if (!normalized) return false;
@@ -86,7 +105,7 @@ export function extractArrowSandboxSource(input: unknown): ToolSandboxSource | n
   if (looksLikeArrowModule(normalized)) {
     return {
       source: {
-        "main.ts": normalized,
+        "main.ts": wrapDefaultComponentModule(normalized),
       },
     };
   }
@@ -95,7 +114,7 @@ export function extractArrowSandboxSource(input: unknown): ToolSandboxSource | n
     if (looksLikeArrowModule(block)) {
       return {
         source: {
-          "main.ts": block,
+          "main.ts": wrapDefaultComponentModule(block),
         },
       };
     }
