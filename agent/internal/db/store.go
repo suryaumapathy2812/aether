@@ -274,7 +274,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`,
-		`CREATE INDEX IF NOT EXISTS idx_chat_sessions_idle ON chat_sessions(user_id, last_activity_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS chat_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL DEFAULT 'default',
@@ -554,6 +553,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "chat_sessions", "title_source", "TEXT NOT NULL DEFAULT 'seed'"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chat_sessions_idle ON chat_sessions(user_id, last_activity_at DESC);`); err != nil {
 		return err
 	}
 	// --- Entity lifecycle columns ---
