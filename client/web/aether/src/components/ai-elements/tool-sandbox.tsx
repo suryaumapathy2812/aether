@@ -45,7 +45,7 @@ function normalizeEventName(name: string) {
   return name.toLowerCase();
 }
 
-function normalizeSandboxFileSource(source: string) {
+export function normalizeSandboxFileSource(source: string) {
   return source
     .replace(/\bclassName\s*=/g, "class=")
     .replace(/\bhtmlFor\s*=/g, "for=")
@@ -72,7 +72,7 @@ async function loadArrow() {
   if (arrowModules) return arrowModules;
   const [core, sb] = await Promise.all([
     import("@arrow-js/core"),
-    import("@arrow-js/sandbox"),
+    import("#/lib/arrow-sandbox-runtime.js"),
   ]);
   arrowModules = {
     html: core.html,

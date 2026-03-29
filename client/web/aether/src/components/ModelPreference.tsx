@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "#/lib/auth-client";
 import { Button } from "#/components/ui/button";
-import { Input } from "#/components/ui/input";
 import { Badge } from "#/components/ui/badge";
 import {
   Select,
@@ -21,8 +20,6 @@ import {
   fetchLLMCatalog,
   findCatalogModel,
   isChatCapableModel,
-  modelOutputs,
-  modelSupports,
   PROVIDER_LABELS,
   type LLMCatalog,
   type ProviderName,
@@ -49,11 +46,20 @@ export default function ModelPreference({
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!userId) return;
-    getUserPreference(userId, prefKey).then((value) => {
+    let cancelled = false;
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+    void getUserPreference(userId, prefKey).then((value) => {
+      if (cancelled) return;
       setModel(value || "");
       setLoading(false);
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [userId, prefKey]);
 
   useEffect(() => {
@@ -90,44 +96,43 @@ export default function ModelPreference({
     })).filter((group) => group.models.length > 0);
   }, [catalog]);
 
-  async function handleSave() {
+  async function persistModel(nextModel: string) {
     if (!userId) return;
     setSaving(true);
-    const trimmed = model.trim();
-    const success = await setUserPreference(userId, prefKey, trimmed);
+    const trimmed = nextModel.trim();
+    const success = trimmed
+      ? await setUserPreference(userId, prefKey, trimmed)
+      : await deleteUserPreference(userId, prefKey);
     if (success) {
-      toast.success("Model saved");
+      toast.success(trimmed ? "Model saved" : "Reset to default");
+      setModel(trimmed);
     } else {
-      toast.error("Failed to save");
-    }
-    setSaving(false);
-  }
-
-  async function handleReset() {
-    if (!userId) return;
-    setSaving(true);
-    const success = await deleteUserPreference(userId, prefKey);
-    if (success) {
-      setModel("");
-      toast.success("Reset to default");
-    } else {
-      toast.error("Failed to reset");
+      toast.error(trimmed ? "Failed to save" : "Failed to reset");
     }
     setSaving(false);
   }
 
   if (loading) return null;
 
+  const hasOverride = model.trim().length > 0;
+  const selectedValue = selectedModel?.id || model;
+
   return (
     <div className="space-y-4">
+      {catalogError && (
+        <p className="text-sm text-destructive">{catalogError}</p>
+      )}
       {catalog && groupedModels && (
         <div className="space-y-2">
           <Select
-            value={selectedModel?.id}
-            onValueChange={(value) => setModel(value)}
+            disabled={saving}
+            value={selectedValue}
+            onValueChange={(value) => {
+              void persistModel(value);
+            }}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Choose a model from the catalog" />
+              <SelectValue placeholder={placeholder} />
             </SelectTrigger>
             <SelectContent>
               {groupedModels.map((group) => (
@@ -144,6 +149,40 @@ export default function ModelPreference({
           </Select>
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {selectedModel ? (
+          <Badge variant="secondary">
+            {PROVIDER_LABELS[selectedModel.provider]}
+          </Badge>
+        ) : hasOverride ? (
+          <Badge variant="secondary">Custom override</Badge>
+        ) : (
+          <Badge variant="outline">Default model</Badge>
+        )}
+
+        <span className="text-sm text-muted-foreground">
+          {saving
+            ? "Saving model preference..."
+            : hasOverride
+              ? model
+              : `Using default: ${placeholder}`}
+        </span>
+      </div>
+
+      <div>
+        <Button
+          disabled={!hasOverride || saving}
+          onClick={() => {
+            void persistModel("");
+          }}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          Reset to default
+        </Button>
+      </div>
     </div>
   );
 }

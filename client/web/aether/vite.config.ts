@@ -13,7 +13,7 @@ const config = defineConfig({
   plugins: [
     nitro({ rollupConfig: { external: [/^@sentry\//] } }),
     tailwindcss(),
-    tanstackStart({ ssr: false }),
+    tanstackStart({ spa: { enabled: true } }),
     viteReact({
       babel: {
         plugins: ["babel-plugin-react-compiler"],

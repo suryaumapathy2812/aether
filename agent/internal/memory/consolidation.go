@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/suryaumapathy2812/core-ai/agent/internal/cron"
 	"github.com/suryaumapathy2812/core-ai/agent/internal/db"
@@ -575,12 +576,31 @@ func normalizeSummarySections(summary string) string {
 		if re.MatchString(line) {
 			parts := re.FindStringSubmatch(line)
 			label := strings.TrimSpace(parts[1])
-			out = append(out, strings.Title(strings.ToLower(label))+":")
+			out = append(out, titleCase(label)+":")
 			continue
 		}
 		out = append(out, line)
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func titleCase(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	capNext := true
+	for i, r := range runes {
+		if capNext && unicode.IsLetter(r) {
+			runes[i] = unicode.ToUpper(r)
+			capNext = false
+		}
+		if unicode.IsSpace(r) {
+			capNext = true
+		}
+	}
+	return string(runes)
 }
 
 func normalizeSummaryTitle(title string) string {

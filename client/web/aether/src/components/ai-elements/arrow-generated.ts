@@ -1,4 +1,5 @@
 import type { ToolSandboxSource } from "./tool-sandbox";
+import { normalizeSandboxFileSource } from "./tool-sandbox";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -9,6 +10,83 @@ const FENCED_BLOCK =
 
 function normalizeModuleSource(source: string): string {
   return source.replace(/\r\n/g, "\n").trim();
+}
+
+function ensureArrowNamedImports(source: string, required: string[]): string {
+  const importPattern =
+    /import\s*\{([^}]*)\}\s*from\s*['"]@arrow-js\/core['"]/;
+  const match = source.match(importPattern);
+  if (!match) return source;
+
+  const existing = match[1]
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const merged = Array.from(new Set([...existing, ...required])).sort();
+  const replacement = `import { ${merged.join(", ")} } from '@arrow-js/core'`;
+  return source.replace(importPattern, replacement);
+}
+
+function insertHelpersAfterImports(source: string, helpers: string[]): string {
+  if (helpers.length === 0) return source;
+  const importBlockMatch = source.match(
+    /^(?:import[^\n]*\n(?:[ \t]*\n)?)*/u,
+  );
+  const insertionIndex = importBlockMatch?.[0]?.length ?? 0;
+  const prefix = source.slice(0, insertionIndex);
+  const suffix = source.slice(insertionIndex);
+  const helperBlock = `${helpers.join("\n\n")}\n\n`;
+  return `${prefix}${helperBlock}${suffix}`;
+}
+
+function rewriteInlineMappedHtmlTemplates(source: string): string {
+  const helpers: string[] = [];
+  let helperIndex = 0;
+
+  const directReturnPattern =
+    /\.map\(\s*(\(?\s*([A-Za-z_$][\w$]*)\s*(?::[^)=]+)?\s*\)?)\s*=>\s*html`([\s\S]*?)`\s*\)/g;
+  const blockReturnPattern =
+    /\.map\(\s*(\(?\s*([A-Za-z_$][\w$]*)\s*(?::[^)=]+)?\s*\)?)\s*=>\s*\{\s*return\s+html`([\s\S]*?)`\s*;?\s*\}\s*\)/g;
+  const destructuredDirectPattern =
+    /\.map\(\s*(\(\s*\{[^}]*\}\s*(?::[^)]+)?\))\s*=>\s*html`([\s\S]*?)`\s*\)/g;
+  const destructuredBlockPattern =
+    /\.map\(\s*(\(\s*\{[^}]*\}\s*(?::[^)]+)?\))\s*=>\s*\{\s*return\s+html`([\s\S]*?)`\s*;?\s*\}\s*\)/g;
+
+  const buildReplacement = (
+    _whole: string,
+    params: string,
+    valueName: string,
+    templateBody: string,
+  ) => {
+    const helperName = `__AETHER_MAP_COMPONENT_${helperIndex++}`;
+    const normalizedParams = params.trim();
+    helpers.push(
+      `const ${helperName} = component(${normalizedParams} => html\`${templateBody}\`)`,
+    );
+    return `.map(${normalizedParams} => ${helperName}(${valueName}))`;
+  };
+
+  const buildDestructuredReplacement = (
+    _whole: string,
+    params: string,
+    templateBody: string,
+  ) => {
+    const helperName = `__AETHER_MAP_COMPONENT_${helperIndex++}`;
+    const normalizedParams = params.trim();
+    helpers.push(
+      `const ${helperName} = component(${normalizedParams} => html\`${templateBody}\`)`,
+    );
+    return `.map(__item => ${helperName}(__item))`;
+  };
+
+  let rewritten = source.replace(directReturnPattern, buildReplacement);
+  rewritten = rewritten.replace(blockReturnPattern, buildReplacement);
+  rewritten = rewritten.replace(destructuredDirectPattern, buildDestructuredReplacement);
+  rewritten = rewritten.replace(destructuredBlockPattern, buildDestructuredReplacement);
+
+  if (helpers.length === 0) return source;
+  rewritten = ensureArrowNamedImports(rewritten, ["component"]);
+  return insertHelpersAfterImports(rewritten, helpers);
 }
 
 function wrapDefaultComponentModule(source: string): string {
@@ -24,10 +102,25 @@ function wrapDefaultComponentModule(source: string): string {
     "const __AETHER_DEFAULT_COMPONENT = component(" +
     normalized.slice(idx + defaultComponentPrefix.length);
 
-  return (
+  const result =
     rewritten +
-    "\n\nexport default html`${__AETHER_DEFAULT_COMPONENT()}`"
-  );
+    "\n\nexport default html`${__AETHER_DEFAULT_COMPONENT()}`";
+
+  return ensureArrowNamedImports(result, ["html"]);
+}
+
+function normalizeArrowModuleSource(source: string): string {
+  let normalized = normalizeModuleSource(source);
+  if (!normalized) return normalized;
+  normalized = rewriteInlineMappedHtmlTemplates(normalized);
+  normalized = wrapDefaultComponentModule(normalized);
+  return normalized;
+}
+
+function normalizeSandboxSourceFile(source: string): string {
+  const normalized = normalizeSandboxFileSource(source);
+  if (!looksLikeArrowModule(normalized)) return normalized;
+  return normalizeArrowModuleSource(normalized);
 }
 
 function looksLikeArrowModule(source: string): boolean {
@@ -59,7 +152,6 @@ function looksLikeArrowModule(source: string): boolean {
 
   // Reject if template literals are obviously unterminated:
   // count opening html` vs closing ` (rough heuristic)
-  const htmlTagCount = (normalized.match(/html`/g) || []).length;
   const backtickCount = (normalized.match(/`/g) || []).length;
   // Each html` needs at least one closing `, so total backticks must be even
   if (backtickCount % 2 !== 0) return false;
@@ -84,7 +176,7 @@ export function extractArrowSandboxSource(input: unknown): ToolSandboxSource | n
       const source: Record<string, string> = {};
       for (const [key, value] of Object.entries(sourceValue)) {
         if (typeof value === "string") {
-          source[key] = value;
+          source[key] = normalizeSandboxSourceFile(value);
         }
       }
       if ("main.ts" in source || "main.js" in source) {
@@ -105,7 +197,7 @@ export function extractArrowSandboxSource(input: unknown): ToolSandboxSource | n
   if (looksLikeArrowModule(normalized)) {
     return {
       source: {
-        "main.ts": wrapDefaultComponentModule(normalized),
+        "main.ts": normalizeArrowModuleSource(normalized),
       },
     };
   }
@@ -114,7 +206,7 @@ export function extractArrowSandboxSource(input: unknown): ToolSandboxSource | n
     if (looksLikeArrowModule(block)) {
       return {
         source: {
-          "main.ts": wrapDefaultComponentModule(block),
+          "main.ts": normalizeArrowModuleSource(block),
         },
       };
     }

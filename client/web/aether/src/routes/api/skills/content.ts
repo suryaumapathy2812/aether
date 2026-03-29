@@ -23,7 +23,7 @@ export const Route = createFileRoute("/api/skills/content")({
 
         try {
           const res = await fetch(url, {
-            next: { revalidate: 3600 },
+            cache: "force-cache",
           });
 
           if (!res.ok) {
