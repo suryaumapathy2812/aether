@@ -95,6 +95,29 @@ export const Route = createFileRoute("/chat")({
   component: ChatPage,
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function formatArrowSubmissionText(payload: unknown): string {
+  if (!isRecord(payload)) return "";
+  const text =
+    typeof payload.text === "string"
+      ? payload.text.trim()
+      : typeof payload.message === "string"
+        ? payload.message.trim()
+        : "";
+  const data = payload.data;
+  if (text && data === undefined) return text;
+  if (text && data !== undefined) {
+    return `${text}\n\nSubmitted data:\n${JSON.stringify(data, null, 2)}`;
+  }
+  if (data !== undefined) {
+    return `Submitted data:\n${JSON.stringify(data, null, 2)}`;
+  }
+  return "";
+}
+
 function ChatPage() {
   return (
     <Suspense>
@@ -324,18 +347,16 @@ function ChatView({
     };
   }, []);
 
-  async function handleSubmit(message: PromptInputMessage) {
-    const text = message.text?.trim();
-    const files = message.files;
-    if (!text && (!files || files.length === 0)) return;
-    setInput("");
+  async function submitTurn(text: string, files?: PromptInputMessage["files"]) {
+    const trimmed = text.trim();
+    if (!trimmed && (!files || files.length === 0)) return;
 
     if (!sessionId) {
       if (creatingSessionRef.current) return;
       creatingSessionRef.current = true;
       try {
         const title =
-          text.slice(0, 60) ||
+          trimmed.slice(0, 60) ||
           (files && files.length > 0 ? "Media message" : "");
         const newSess = await createChatSession(userId, title);
         setSessionId(newSess.id);
@@ -343,25 +364,51 @@ function ChatView({
         await chatRuntime.sendMessage({
           sessionId: newSess.id,
           userId,
-          text: text || "",
+          text: trimmed,
           files,
         });
-        return;
-      } catch {
-        setInput(text || "");
         return;
       } finally {
         creatingSessionRef.current = false;
       }
     }
 
-    try {
-      await chatRuntime.sendMessage({
-        sessionId,
-        userId,
-        text: text || "",
-        files,
+    await chatRuntime.sendMessage({
+      sessionId,
+      userId,
+      text: trimmed,
+      files,
+    });
+  }
+
+  useEffect(() => {
+    function handleArrowOutput(event: Event) {
+      if (!(event instanceof CustomEvent)) return;
+      const payload = event.detail;
+      if (!isRecord(payload) || payload.type !== "chat.submit") return;
+      const text = formatArrowSubmissionText(payload);
+      if (!text) return;
+      void submitTurn(text).catch((error) => {
+        if (typeof console !== "undefined") {
+          console.error("Arrow chat submission failed:", error);
+        }
       });
+    }
+
+    window.addEventListener("aether:arrow-output", handleArrowOutput as EventListener);
+    return () => {
+      window.removeEventListener("aether:arrow-output", handleArrowOutput as EventListener);
+    };
+  }, [sessionId, userId, navigate]);
+
+  async function handleSubmit(message: PromptInputMessage) {
+    const text = message.text?.trim();
+    const files = message.files;
+    if (!text && (!files || files.length === 0)) return;
+    setInput("");
+
+    try {
+      await submitTurn(text || "", files);
     } catch {
       setInput(text || "");
     }

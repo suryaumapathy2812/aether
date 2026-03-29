@@ -95,10 +95,12 @@ or, when local component lifecycle/state is needed:
 ```ts
 import { html, reactive, component } from '@arrow-js/core'
 
-export default component(() => {
+const App = component(() => {
   const state = reactive({ ... })
   return html`...`
 })
+
+export default html`${App()}`
 ```
 
 ### Authoring rules
@@ -108,10 +110,14 @@ export default component(() => {
 - Use Arrow event bindings like `@click=${() => { ... }}`.
 - Use DOM events like `@input=${event => { ... }}` for form state updates.
 - Use reactive expressions like `${() => state.value}` for dynamic content.
+- The module root must export a renderable value. Prefer `export default html\`...\``. If using `component()`, define the component first and export `html\`${ComponentName()}\`` as the root.
+- Do not export `component(...)` directly as the default export.
 - Keep styling self-contained with inline `style=""` attributes.
 - Do not rely on app-global CSS classes or external stylesheets.
 - Do not import anything except `@arrow-js/core` unless the prompt explicitly documents a host bridge.
 - Do not assume `fetch`, routing helpers, local storage helpers, or tool APIs exist inside the sandbox unless explicitly documented.
+- Do not create inline templates inside loops or callbacks like `items.map(item => html\`...\`)`. Instead, define a `component((props) => html\`...\`)` once and render with `items.map(item => Row(item))`.
+- For repeated rows, options, cards, or form fields, always prefer a reusable Arrow component over nested `html` template creation.
 
 ### Host actions
 
@@ -121,6 +127,7 @@ Supported payloads:
 
 - `output({ type: 'open-url', url: 'https://example.com' })`
 - `output({ type: 'copy', text: 'value to copy' })`
+- `output({ type: 'chat.submit', text: '...', data: { ... } })`
 
 Do not invent custom host action types unless explicitly instructed.
 
@@ -142,7 +149,7 @@ Interactive module:
 ```ts
 import { html, reactive, component } from '@arrow-js/core'
 
-export default component(() => {
+const Counter = component(() => {
   const state = reactive({ count: 0 })
 
   return html`<div style="display:grid;gap:12px;padding:16px;border:1px solid rgba(255,255,255,0.12);border-radius:16px">
@@ -156,6 +163,103 @@ export default component(() => {
     </button>
   </div>`
 })
+
+export default html`${Counter()}`
+```
+
+Interactive form module:
+
+```ts
+import { html, reactive, component } from '@arrow-js/core'
+
+const ExampleForm = component(() => {
+  const state = reactive({
+    name: '',
+    role: 'designer',
+    subscribe: true,
+  })
+
+  const submit = () => {
+    output({
+      type: 'chat.submit',
+      text: `Form submitted for ${state.name || 'unknown user'}`,
+      data: {
+        name: state.name,
+        role: state.role,
+        subscribe: state.subscribe,
+      },
+    })
+  }
+
+  return html`<div style="display:grid;gap:12px;padding:16px;border:1px solid rgba(255,255,255,0.12);border-radius:16px">
+    <label style="display:grid;gap:6px">
+      <span style="font-size:13px;color:rgba(255,255,255,0.72)">Name</span>
+      <input
+        value="${() => state.name}"
+        style="height:40px;padding:0 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#111;color:#fff"
+        @input=${(event) => { state.name = event.target?.value ?? '' }}
+      />
+    </label>
+
+    <label style="display:grid;gap:6px">
+      <span style="font-size:13px;color:rgba(255,255,255,0.72)">Role</span>
+      <select
+        value="${() => state.role}"
+        style="height:40px;padding:0 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#111;color:#fff"
+        @change=${(event) => { state.role = event.target?.value ?? 'designer' }}
+      >
+        <option value="designer">Designer</option>
+        <option value="engineer">Engineer</option>
+        <option value="founder">Founder</option>
+      </select>
+    </label>
+
+    <label style="display:flex;align-items:center;gap:8px">
+      <input
+        type="checkbox"
+        checked="${() => state.subscribe}"
+        @change=${(event) => { state.subscribe = !!event.target?.checked }}
+      />
+      <span style="font-size:13px;color:rgba(255,255,255,0.72)">Subscribe to updates</span>
+    </label>
+
+    <button
+      style="height:40px;border:none;border-radius:10px;background:#ffffff;color:#111111;font-weight:600;cursor:pointer"
+      @click=${submit}
+    >
+      Submit
+    </button>
+  </div>`
+})
+
+export default html`${ExampleForm()}`
+```
+
+Interactive list module:
+
+```ts
+import { html, reactive, component } from '@arrow-js/core'
+
+const state = reactive({
+  selectedId: '1',
+})
+
+const EventRow = component((props) => html`
+  <button
+    style="display:flex;justify-content:space-between;align-items:center;width:100%;padding:12px;border:none;border-radius:10px;cursor:pointer;background:${() => state.selectedId === props.id ? '#ffffff' : 'rgba(255,255,255,0.06)'};color:${() => state.selectedId === props.id ? '#111111' : '#ffffff'}"
+    @click=${() => { state.selectedId = props.id }}
+  >
+    <span>${props.summary}</span>
+    <span>${props.start}</span>
+  </button>
+`)
+
+export default html`<div style="display:grid;gap:8px">
+  ${[
+    { id: '1', summary: 'Design Review', start: '2026-03-30' },
+    { id: '2', summary: 'Weekly Demo', start: '2026-04-03' },
+  ].map((event) => EventRow(event))}
+</div>`
 ```
 
 ### Bad outputs
@@ -165,6 +269,8 @@ export default component(() => {
 - `import React from 'react'`
 - A normal prose answer followed by a code block
 - A fake approval UI for actions that should use `ask_user`
+- `export default component(() => { ... })`
+- `items.map(item => html\`...\`)`
 
 ### Important limits
 
